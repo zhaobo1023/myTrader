@@ -147,4 +147,59 @@ ONLINE_DB_NAME=trade
 
 ## 参考项目
 
-参考 `/Users/zhaobo/data0/person/quant` 项目实现，数据拉取相关代码已复用。
+参考 `/Users/wenwen/data0/person/quant` 项目实现，数据拉取相关代码已复用。
+
+---
+
+## 数据拉取管理
+
+### 数据源
+- **QMT Fetcher**: 全量A股日线数据（需 Windows 服务器）
+- **Tushare Fetcher**: 使用 Tushare API 拉取数据（需要 Token）
+- **AKShare Fetcher**: 免费数据源，无需 Token
+
+### 数据拉取管理服务
+统一管理各数据源的拉取：
+
+```python
+from data_analyst.fetchers.data_fetch_manager import DataFetchManager, DataFetchResult
+
+manager = DataFetchManager()
+
+# 从 AKShare 拉取日线数据
+result = manager.fetch_daily_data(DataFetcherType.AKSHARE)
+```
+
+### 数据监控服务
+每天 18:00 自动检查数据完整性：
+
+```python
+from data_analyst.services.data_monitor import DataMonitor
+from data_analyst.services.alert_service import AlertService
+from data_analyst.services.scheduler_service import SchedulerService
+
+# 检查数据
+monitor = DataMonitor()
+result = monitor.check_daily_data()
+
+if result['is_ok']:
+    print("数据正常，触发因子计算...")
+else:
+    print("数据异常，发送报警...")
+```
+
+### 定时任务
+- **18:00**: 数据完整性检查，数据正常则触发因子计算
+- 可自定义添加其他定时任务
+
+```bash
+# 启动定时任务调度器
+python -m data_analyst.services.scheduler_service
+```
+
+### 报警通知
+支持飞书 Webhook 推送，配置 `.env`:
+
+```bash
+FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/xxx
+```

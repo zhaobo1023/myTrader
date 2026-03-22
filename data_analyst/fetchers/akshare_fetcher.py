@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Tushare 数据拉取器
+AKShare 数据拉取器
 
 功能：
-  1. 使用 Tushare Pro API 获取 A 股日线数据
+  1. 使用 AKShare 获取 A 股日线数据（免费、无需 Token）
   2. 支持单只股票和批量拉取
   3. 自动保存到 MySQL
 
-运行：python data_analyst/fetchers/tushare_fetcher.py
-环境：需要设置 TUSHARE_TOKEN 环境变量
+数据来源：东方财富
+
+运行：python data_analyst/fetchers/akshare_fetcher.py
+环境：pip install akshare
 """
 import sys
 import os
@@ -21,70 +23,32 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from config.db import get_connection, execute_query
-from config.settings import settings
 
-# 尝试导入 tushare
+# 尝试导入 akshare
 try:
-    import tushare as ts
-    HAS_TUSHARE = True
+    import akshare as ak
+    HAS_AKSHARE = True
 except ImportError:
-    HAS_TUSHARE = False
-    print("警告: Tushare 未安装，请运行 pip install tushare")
-
-    if not settings.TUSHARE_TOKEN:
-        print("警告: TUSHARE_TOKEN 未配置， Tushare 功能将不可用")
-
+    HAS_AKSHARE = False
+    print("警告: AKShare 未安装，请运行 pip install akshare")
 
 # ============================================================
 # 配置
 # ============================================================
 TEST_MODE = False
-TEST_STOCK = '600519.SH'
+TEST_STOCK = '600519'  # 贵州茅台
 
-NUM_WORKERS = 3  # Tushare API 限制并发
+NUM_WORKERS = 3  # AKShare 限制并发，不宜太高
 DATA_START = '20230101'
-REQUEST_DELAY = 0.3  # 请求间隔（秒），避免被限流
+REQUEST_DELAY = 0.5  # 请求间隔（秒），避免被限流
 
 
 # ============================================================
-# Tushare API
+# 数据库辅助
 # ============================================================
-
-_pro = None
-
-
-def get_pro():
-    """获取 Tushare Pro 实例"""
-    global _pro
-    if _pro is not None:
-        return _pro
-
-    token = settings.TUSHARE_TOKEN
-    if not token:
-        raise RuntimeError("未配置 TUSHARE_TOKEN")
-    ts.set_token(token)
-    _pro = ts.pro_api()
-    return _pro
-
-
-def get_all_stock_codes() -> List[str]:
-    """获取全部 A 股代码列表（通过 Tushare）"""
-    if not HAS_TUSHARE:
-        print("错误: Tushare 未安装")
-        return []
-
-    try:
-        pro = get_pro()
-        # 获取沪深A股列表
-        df = pro.stock_basic(exchange='', list_status='L', fields='ts_code')
-        return df['ts_code'].tolist()
-    except Exception as e:
-        print(f"获取股票列表失败: {e}")
-        return []
-
 
 def get_existing_latest_dates() -> Dict[str, str]:
-    """查询所有股票在 DB 中的最新交易日"""
+    """一次性查询所有股票在 DB 中的最新交易日，返回 {stock_code: 'YYYYMMDD'}"""
     rows = execute_query(
         "SELECT stock_code, MAX(trade_date) AS max_date FROM trade_stock_daily GROUP BY stock_code"
     )
@@ -95,8 +59,25 @@ def get_existing_latest_dates() -> Dict[str, str]:
     return result
 
 
+def get_all_stock_codes() -> List[str]:
+    """获取全部 A 股代码列表（通过 AKShare）"""
+    if not HAS_AKSHARE:
+        print("错误: AKShare 未安装")
+        return []
+
+    try:
+        # 获取 A 股列表
+        df = ak.stock_zh_a_spot_em()
+        # 返回代码列表，格式如 '600519'
+        codes = df['代码'].tolist()
+        return codes
+    except Exception as e:
+        print(f"获取股票列表失败: {e}")
+        return []
+
+
 # ============================================================
-# 数据拉取和保存
+# 核心逻辑
 # ============================================================
 
 INSERT_SQL = """
@@ -111,68 +92,132 @@ INSERT_SQL = """
 """
 
 
-def fetch_and_save(stock_code: str, start_date: str) -> tuple:
-    """拉取单只股票数据并保存"""
-    if not HAS_TUSHARE:
-        return stock_code, 0, "Tushare 未安装"
+def fetch_single_stock(stock_code: str, days: int = 30) -> pd.DataFrame:
+    """
+    获取单只股票近 N 天的数据
+
+    Args:
+        stock_code: 股票代码（如 '600519'）
+        days: 天数
+    """
+    if not HAS_AKSHARE:
+        raise RuntimeError("AKShare 未安装")
+
+    end_date = date.today().strftime('%Y%m%d')
+    start_date = (date.today() - timedelta(days=days + 10)).strftime('%Y%m%d')
+
+    df = ak.stock_zh_a_hist(
+        symbol=stock_code,
+        period="daily",
+        start_date=start_date,
+        end_date=end_date,
+        adjust="qfq"
+    )
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # 重命名列
+    df = df.rename(columns={
+        '日期': 'trade_date',
+        '开盘': 'open',
+        '收盘': 'close',
+        '最高': 'high',
+        '最低': 'low',
+        '成交量': 'volume',
+        '成交额': 'amount',
+        '换手率': 'turnover_rate'
+    })
+
+    return df
+
+
+def download_and_save(stock_code: str, start_date: str) -> tuple:
+    """增量下载单只股票的日线数据并写入 MySQL"""
+    if not HAS_AKSHARE:
+        return stock_code, 0, "AKShare 未安装"
 
     try:
-        pro = get_pro()
-        time.sleep(REQUEST_DELAY)
-        # 获取日线数据
-        df = ts.pro_bar(
-            ts_code=stock_code,
+        time.sleep(REQUEST_DELAY)  # 限流
+
+        end_date = date.today().strftime('%Y%m%d')
+
+        df = ak.stock_zh_a_hist(
+            symbol=stock_code,
+            period="daily",
             start_date=start_date,
-            end_date=date.today().strftime('%Y%m%d'),
-            adj='qfq',
+            end_date=end_date,
+            adjust="qfq"
         )
 
         if df is None or df.empty:
-            return stock_code, 0, "无数据"
-        # 夌理数据
-        records = []
+            return stock_code, 0, None
+
+        # 重命名列
+        df = df.rename(columns={
+            '日期': 'trade_date',
+            '开盘': 'open',
+            '收盘': 'close',
+            '最高': 'high',
+            '最低': 'low',
+            '成交量': 'volume',
+            '成交额': 'amount',
+            '换手率': 'turnover_rate'
+        })
+
+        # 转换日期格式
+        df['trade_date'] = pd.to_datetime(df['trade_date'])
+
+        # 过滤起始日期之后的数据
+        start_dt = pd.to_datetime(start_date)
+        df = df[df['trade_date'] >= start_dt]
+
+        if df.empty:
+            return stock_code, 0, None
+
+        rows = []
         for _, row in df.iterrows():
-            trade_date = pd.to_datetime(row['trade_date']).strftime('%Y-%m-%d')
-            # 转换股票代码格式: 600519.SH -> 600519
-            full_code = row['ts_code']
-            if not full_code.endswith('.SH') and not full_code.endswith('.SZ'):
-                full_code = f"{full_code}.SH" if full_code.startswith('6') else f"{full_code}.SZ"
-            records.append((
+            trade_date = row['trade_date'].strftime('%Y-%m-%d')
+            # 转换股票代码格式： 600519 -> 600519.SH
+            full_code = f"{stock_code}.SH" if stock_code.startswith('6') else f"{stock_code}.SZ"
+            rows.append((
                 full_code, trade_date,
-                float(row['open']) if row['open'] else None,
-                float(row['high']) if row['high'] else None
-                float(row['low']) if row['low'] else None
-                float(row['close']) if row['close'] else None,
-                float(row['vol']) if row['vol'] else None,
-                float(row['amount']) if row['amount'] else None,
-                float(row.get('turnover_rate')) if pd.notna(row.get('turnover_rate')) else None,
+                float(row['open']) if pd.notna(row.get('open')) else None,
+                float(row['high']) if pd.notna(row.get('high')) else None,
+                float(row['low']) if pd.notna(row.get('low')) else None,
+                float(row['close']) if pd.notna(row.get('close')) else None,
+                int(row['volume']) if pd.notna(row.get('volume')) else None,
+                float(row['amount']) if pd.notna(row.get('amount')) else None,
+                float(row['turnover_rate']) if pd.notna(row.get('turnover_rate')) else None,
             ))
-        # 保存到数据库
-        if records:
+
+        if rows:
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.executemany(INSERT_SQL, records)
+            cursor.executemany(INSERT_SQL, rows)
             conn.commit()
             cursor.close()
             conn.close()
-        return stock_code, len(records)
+
+        return stock_code, len(rows), None
+
     except Exception as e:
         return stock_code, 0, str(e)
 
 
 def main():
-    """主函数 - 批量拉取 A 股日线数据"""
     print("=" * 60)
-    print("行情数据采集 (Tushare -> MySQL)")
+    print("行情数据采集 (AKShare -> MySQL)")
     if TEST_MODE:
         print("[测试模式] 只采集贵州茅台")
     else:
         print(f"[全量模式] {NUM_WORKERS} 线程并行")
     print("=" * 60)
 
-    if not HAS_TUSHARE or not settings.TUSHARE_TOKEN:
-        print("\n错误: Tushare 未安装或 TUSHARE_TOKEN 未配置")
+    if not HAS_AKSHARE:
+        print("\n错误: AKShare 未安装，请运行 pip install akshare")
         return
+
     # 获取股票列表
     if TEST_MODE:
         all_codes = [TEST_STOCK]
@@ -181,58 +226,62 @@ def main():
         print(f"\n获取 A 股股票列表...")
         all_codes = get_all_stock_codes()
         print(f"  共 {len(all_codes)} 只股票")
-    # 获取已有数据的最新日期
+
+    # 批量查询 DB 中已有的最新日期
     print("查询数据库已有数据...")
     existing = get_existing_latest_dates()
-    today = date.today().strftime('%Y%m%d')
-    # 准备任务
+    recent_cutoff = date.today().strftime('%Y%m%d')
+
     tasks = []
     skip_count = 0
     for code in all_codes:
-        latest = existing.get(code)
-        if latest and latest >= today:
+        latest = existing.get(code) or existing.get(f"{code}.SH") or existing.get(f"{code}.SZ")
+        if latest and latest >= recent_cutoff:
             skip_count += 1
             continue
         start = latest if latest else DATA_START
         tasks.append((code, start))
+
     print(f"  需更新: {len(tasks)} 只, 跳过(今日已有数据): {skip_count} 只")
+
     if not tasks:
         print("\n全部已是最新，无需更新")
         _print_summary()
         return
-    # 执行拉取
+
     total = len(tasks)
     total_rows = 0
     success_count = 0
     fail_list = []
     start_time = time.time()
+
     if total <= 5:
-        # 串行执行
         for i, (code, start) in enumerate(tasks, 1):
             print(f"\n[{i}/{total}] {code} (从 {start} 开始)")
-            _, count = fetch_and_save(code, start)
-            if count > 0:
+            _, count, err = download_and_save(code, start)
+            if count >= 0:
                 print(f"  写入 {count} 条")
                 success_count += 1
                 total_rows += count
             else:
-                print(f"  {'无数据' if count == 0 else '失败'}")
-                if count == 0:
-                    fail_list.append(code)
+                print(f"  失败: {err}")
+                fail_list.append(code)
     else:
-        # 并行执行
-        print(f"\n并行下载（ {NUM_WORKERS} 线程)...")
+        print(f"\n并行下载（{NUM_WORKERS} 线程)...")
+
         with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
-            futures = {executor.submit(fetch_and_save, code, start): code for code, start in tasks}
+            futures = {executor.submit(download_and_save, t): t[0] for t in tasks}
             done = 0
             for future in as_completed(futures):
-                code, count = future.result()
+                code, count, err = future.result()
                 done += 1
-                if count > 0:
+
+                if count >= 0:
                     success_count += 1
                     total_rows += count
                 else:
                     fail_list.append(code)
+
                 elapsed = time.time() - start_time
                 speed = done / elapsed if elapsed > 0 else 0
                 eta = (total - done) / speed if speed > 0 else 0
@@ -242,19 +291,22 @@ def main():
                     f"成功 {success_count} 失败 {len(fail_list)}    "
                 )
                 sys.stdout.flush()
+
         print()
+
     elapsed = time.time() - start_time
     print("\n" + "=" * 60)
     print(f"采集完成! 耗时 {elapsed:.1f} 秒")
     print(f"  成功: {success_count}/{total} 只股票")
     print(f"  总写入: {total_rows:,} 条记录")
+
     if fail_list:
         print(f"  失败 {len(fail_list)} 只: {fail_list[:20]}{'...' if len(fail_list) > 20 else ''}")
+
     _print_summary()
 
 
 def _print_summary():
-    """打印数据库概况"""
     summary = execute_query("""
         SELECT COUNT(DISTINCT stock_code) as stock_cnt,
                COUNT(*) as row_cnt,
