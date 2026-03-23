@@ -1,0 +1,303 @@
+# -*- coding: utf-8 -*-
+"""
+因子回填脚本 - 优化版
+
+按股票分批处理，避免一次性加载所有数据到内存
+
+运行: python data_analyst/factors/backfill_factors.py
+"""
+import sys
+import os
+import pandas as pd
+import numpy as np
+from datetime import date
+from time import time
+import logging
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from config.db import execute_query, get_connection
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+# 配置
+BATCH_SIZE = 500  # 每批处理的股票数量
+START_DATE = '2024-01-01'
+END_DATE = date.today().strftime('%Y-%m-%d')
+DATA_START_DATE = '2023-01-01'  # 需要更早的数据来计算因子
+
+
+def get_all_stock_codes():
+    """获取所有股票代码"""
+    sql = "SELECT DISTINCT stock_code FROM trade_stock_daily ORDER BY stock_code"
+    rows = execute_query(sql)
+    return [r['stock_code'] for r in rows]
+
+
+def load_stock_data(stock_codes, start_date, end_date):
+    """批量加载指定股票的K线数据"""
+    if not stock_codes:
+        return {}
+
+    placeholders = ', '.join(['%s'] * len(stock_codes))
+    sql = f"""
+        SELECT stock_code, trade_date, open_price, high_price, low_price,
+               close_price, volume, amount, turnover_rate
+        FROM trade_stock_daily
+        WHERE stock_code IN ({placeholders})
+          AND trade_date >= %s AND trade_date <= %s
+        ORDER BY stock_code, trade_date ASC
+    """
+    params = stock_codes + [start_date, end_date]
+    rows = execute_query(sql, params)
+
+    if not rows:
+        return {}
+
+    df_all = pd.DataFrame(rows)
+    df_all['trade_date'] = pd.to_datetime(df_all['trade_date'])
+
+    for col in ['open_price', 'high_price', 'low_price', 'close_price', 'volume', 'amount', 'turnover_rate']:
+        if col in df_all.columns:
+            df_all[col] = pd.to_numeric(df_all[col], errors='coerce')
+
+    result = {}
+    for code in stock_codes:
+        group = df_all[df_all['stock_code'] == code]
+        if len(group) > 0:
+            sub = group.set_index('trade_date').sort_index()
+            result[code] = sub
+
+    return result
+
+
+def calc_factors_for_stock(df):
+    """计算单只股票所有日期的因子"""
+    if len(df) < 60:
+        return None
+
+    close = df['close_price']
+    volume = df['volume']
+    turnover = df['turnover_rate'] if 'turnover_rate' in df.columns else pd.Series(index=df.index)
+
+    result = pd.DataFrame(index=df.index)
+
+    # 动量因子
+    result['mom_20'] = close.pct_change(20)
+    result['mom_60'] = close.pct_change(60)
+    result['reversal_5'] = -close.pct_change(5)
+
+    # 量价因子
+    result['turnover'] = turnover
+    vol_ma_5 = volume.rolling(5).mean()
+    result['vol_ratio'] = volume / vol_ma_5.replace(0, np.nan)
+
+    price_change = close.pct_change()
+    vol_change = volume.pct_change()
+    result['price_vol_diverge'] = price_change / (vol_change + 1e-10)
+
+    # 波动率因子
+    result['volatility_20'] = close.pct_change().rolling(20).std()
+
+    # 收盘价
+    result['close'] = close
+
+    # 只保留有足够历史数据的日期
+    result = result.iloc[60:]
+
+    return result
+
+
+def save_factors_batch(factors_data):
+    """批量保存因子到数据库"""
+    if not factors_data:
+        return 0
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    sql = """
+        REPLACE INTO trade_stock_basic_factor
+        (stock_code, calc_date, mom_20, mom_60, reversal_5,
+         turnover, vol_ratio, price_vol_diverge, volatility_20, close)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+
+    records = []
+    for code, factors_df in factors_data.items():
+        for trade_date, row in factors_df.iterrows():
+            records.append((
+                code,
+                trade_date.strftime('%Y-%m-%d'),
+                float(row['mom_20']) if pd.notna(row['mom_20']) else None,
+                float(row['mom_60']) if pd.notna(row['mom_60']) else None,
+                float(row['reversal_5']) if pd.notna(row['reversal_5']) else None,
+                float(row['turnover']) if pd.notna(row['turnover']) else None,
+                float(row['vol_ratio']) if pd.notna(row['vol_ratio']) else None,
+                float(row['price_vol_diverge']) if pd.notna(row['price_vol_diverge']) else None,
+                float(row['volatility_20']) if pd.notna(row['volatility_20']) else None,
+                float(row['close']) if pd.notna(row['close']) else None,
+            ))
+
+    if not records:
+        cursor.close()
+        conn.close()
+        return 0
+
+    # 分批插入
+    batch_insert_size = 1000
+    total_saved = 0
+    for i in range(0, len(records), batch_insert_size):
+        batch = records[i:i+batch_insert_size]
+        try:
+            cursor.executemany(sql, batch)
+            conn.commit()
+            total_saved += len(batch)
+        except Exception as e:
+            logger.error(f"保存失败: {e}")
+
+    cursor.close()
+    conn.close()
+
+    return len(records)
+
+
+def create_factor_table():
+    """创建因子表"""
+    sql = """
+    CREATE TABLE IF NOT EXISTS trade_stock_basic_factor (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        stock_code VARCHAR(20) NOT NULL COMMENT '股票代码',
+        calc_date DATE NOT NULL COMMENT '计算日期',
+        mom_20 DOUBLE COMMENT '20日收益率',
+        mom_60 DOUBLE COMMENT '60日收益率',
+        reversal_5 DOUBLE COMMENT '5日反转因子',
+        turnover DOUBLE COMMENT '换手率(%)',
+        vol_ratio DOUBLE COMMENT '量比',
+        price_vol_diverge DOUBLE COMMENT '价量背离',
+        volatility_20 DOUBLE COMMENT '20日历史波动率',
+        close DOUBLE COMMENT '收盘价',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_code_date (calc_date, stock_code),
+        KEY idx_calc_date (calc_date),
+        KEY idx_stock_code (stock_code)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='股票基础因子表';
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(sql)
+    conn.commit()
+    cursor.close()
+    conn.close()
+    logger.info("✅ 因子表创建成功")
+
+
+def main():
+    """主函数 - 按股票分批回填"""
+    logger.info("=" * 60)
+    logger.info("因子回填程序 (优化版)")
+    logger.info(f"回填范围: {START_DATE} ~ {END_DATE}")
+    logger.info(f"数据加载范围: {DATA_START_DATE} ~ {END_DATE}")
+    logger.info("=" * 60)
+
+    # 1. 创建表
+    logger.info(f"\n[1] 初始化因子表...")
+    create_factor_table()
+
+    # 2. 获取所有股票代码
+    logger.info(f"\n[2] 获取股票列表...")
+    all_codes = get_all_stock_codes()
+    total_stocks = len(all_codes)
+    logger.info(f"  共 {total_stocks} 只股票")
+
+    # 3. 分批处理
+    logger.info(f"\n[3] 开始分批处理 (每批 {BATCH_SIZE} 只股票)...")
+    total_records = 0
+    total_time_start = time()
+
+    for batch_idx in range(0, total_stocks, BATCH_SIZE):
+        batch_codes = all_codes[batch_idx:batch_idx + BATCH_SIZE]
+        batch_num = batch_idx // BATCH_SIZE + 1
+        total_batches = (total_stocks + BATCH_SIZE - 1) // BATCH_SIZE
+
+        logger.info(f"\n--- 批次 {batch_num}/{total_batches} ({len(batch_codes)} 只股票) ---")
+
+        # 加载数据
+        t0 = time()
+        stock_data = load_stock_data(batch_codes, DATA_START_DATE, END_DATE)
+        logger.info(f"  数据加载完成: {len(stock_data)} 只股票, 耗时 {time()-t0:.1f}s")
+
+        if not stock_data:
+            continue
+
+        # 计算因子
+        t0 = time()
+        factors_data = {}
+        for code, df in stock_data.items():
+            try:
+                factors_df = calc_factors_for_stock(df)
+                if factors_df is not None and not factors_df.empty:
+                    # 只保留目标日期范围内的因子
+                    start_dt = pd.to_datetime(START_DATE)
+                    end_dt = pd.to_datetime(END_DATE)
+                    mask = (factors_df.index >= start_dt) & (factors_df.index <= end_dt)
+                    filtered = factors_df[mask]
+                    if not filtered.empty:
+                        factors_data[code] = filtered
+            except Exception as e:
+                logger.debug(f"  {code} 因子计算失败: {e}")
+
+        logger.info(f"  因子计算完成: {len(factors_data)} 只股票有效, 耗时 {time()-t0:.1f}s")
+
+        # 保存到数据库
+        if factors_data:
+            t0 = time()
+            saved = save_factors_batch(factors_data)
+            total_records += saved
+            logger.info(f"  数据保存完成: {saved} 条记录, 耗时 {time()-t0:.1f}s")
+
+        # 显示总进度
+        elapsed = time() - total_time_start
+        processed = min(batch_idx + BATCH_SIZE, total_stocks)
+        speed = processed / elapsed if elapsed > 0 else 0
+        eta = (total_stocks - processed) / speed / 60 if speed > 0 else 0
+
+        logger.info(f"  >>> 总进度: {processed}/{total_stocks} 只股票 ({processed*100/total_stocks:.1f}%)")
+        logger.info(f"  >>> 已保存: {total_records:,} 条记录")
+        logger.info(f"  >>> 预计剩余时间: {eta:.1f} 分钟")
+
+    # 4. 验证结果
+    logger.info(f"\n[4] 验证结果...")
+    sql = "SELECT COUNT(*) as cnt FROM trade_stock_basic_factor"
+    result = execute_query(sql)
+    total = result[0]['cnt'] if result else 0
+    logger.info(f"  因子表总记录数: {total:,}")
+
+    sql = """
+        SELECT calc_date, COUNT(*) as cnt
+        FROM trade_stock_basic_factor
+        GROUP BY calc_date
+        ORDER BY calc_date DESC
+        LIMIT 5
+    """
+    result = execute_query(sql)
+    logger.info(f"  最近5个交易日:")
+    for r in result:
+        logger.info(f"    {r['calc_date']}: {r['cnt']} 只股票")
+
+    total_elapsed = time() - total_time_start
+    logger.info(f"\n" + "=" * 60)
+    logger.info(f"✅ 回填完成!")
+    logger.info(f"  总耗时: {total_elapsed/60:.1f} 分钟")
+    logger.info(f"  总记录数: {total_records:,}")
+    logger.info("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
