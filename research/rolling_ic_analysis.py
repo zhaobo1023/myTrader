@@ -19,14 +19,7 @@ import pandas as pd
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config.db import execute_query, switch_env
-
-# 尝试切换到本地数据库
-try:
-    switch_env('local')
-    print("已切换到本地数据库环境")
-except Exception as e:
-    print(f"切换数据库环境失败: {e}")
+from config.db import execute_query
 
 # 尝试导入可视化库
 try:
@@ -318,10 +311,13 @@ def main():
 
     # 配置
     factor_code = 'oil_mom_20'
-    etf_code = '515220'
-    etf_name = '煤炭ETF'
+    etf_code = '159930'  # 暂用能源化工ETF（数据库中无515220）
+    etf_name = '能源化工ETF'
     window = 60
     split_date = '2022-02-24'  # 俄乌冲突开始
+
+    print(f"\n注意: 数据库中无煤炭ETF(515220)数据，使用能源化工ETF(159930)进行分析")
+    print("      能源化工ETF与原油相关性更高，IC应更显著")
 
     print(f"\n因子: {factor_code}")
     print(f"目标: {etf_name} ({etf_code})")
