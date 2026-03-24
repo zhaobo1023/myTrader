@@ -1,0 +1,29 @@
+{
+    "portfolio_name": "主力持仓组合",
+    "update_date": "2025-03-20",
+    "holdings": [
+        {"code": "300750.SZ", "name": "宁德时代", "weight": 0.1171},
+        {"code": "601899.SH", "name": "紫金矿业", "weight": 0.0850},
+        {"code": "600519.SH", "name": "贵州茅台", "weight": 0.0793},
+        {"code": "002475.SZ", "name": "立讯精密", "weight": 0.0540},
+        {"code": "300059.SZ", "name": "东方财富", "weight": 0.0534},
+        {"code": "300274.SZ", "name": "阳光电源", "weight": 0.0491},
+        {"code": "002594.SZ", "name": "比亚迪", "weight": 0.0459},
+        {"code": "603259.SH", "name": "药明康德", "weight": 0.0446},
+        {"code": "300124.SZ", "name": "汇川技术", "weight": 0.0432},
+        {"code": "002415.SZ", "name": "海康威视", "weight": 0.0419},
+        {"code": "601012.SH", "name": "隆基绿能", "weight": 0.0396},
+        {"code": "300015.SZ", "name": "爱尔眼科", "weight": 0.0378},
+        {"code": "002352.SZ", "name": "顺丰控股", "weight": 0.0352},
+        {"code": "600887.SH", "name": "伊利股份", "weight": 0.0331},
+        {"code": "000858.SZ", "name": "五粮液", "weight": 0.0315},
+        {"code": "002304.SZ", "name": "洋河股份", "weight": 0.0298},
+        {"code": "300014.SZ", "name": "亿纬锂能", "weight": 0.0276},
+        {"code": "002410.SZ", "name": "广联达", "weight": 0.0254},
+        {"code": "300033.SZ", "name": "同花顺", "weight": 0.0231},
+        {"code": "002236.SZ", "name": "大华股份", "weight": 0.0208}
+    ],
+    "cash_weight": 0.0496,
+    "total_weight": 1.0,
+    "notes": "ETF组合持仓，数据来源于持仓截图"
+}
