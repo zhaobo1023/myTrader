@@ -38,13 +38,19 @@ FACTORS = [
     'mom_20', 'mom_60', 'reversal_5', 'turnover', 'vol_ratio', 'price_vol_diverge', 'volatility_20',
     # 扩展因子 (trade_stock_extended_factor)
     'mom_5', 'mom_10', 'reversal_1', 'turnover_20_mean', 'amihud_illiquidity', 'high_low_ratio', 'volume_ratio_20',
-    'roe_ttm', 'gross_margin', 'net_profit_growth', 'revenue_growth'
+    'roe_ttm', 'gross_margin', 'net_profit_growth', 'revenue_growth',
+    # 估值因子 (trade_stock_valuation_factor)
+    'pe_ttm', 'pb', 'ps_ttm',
+    # 质量因子 (trade_stock_quality_factor)
+    'cash_flow_ratio', 'accrual', 'current_ratio', 'roa', 'debt_ratio',
 ]
 
 
-def load_factor_data(start_date='2024-01-01', end_date='2026-03-20'):
+def load_factor_data(start_date='2024-01-01', end_date='2026-03-24'):
     """从数据库加载因子数据"""
     logger.info(f"加载因子数据 ({start_date} ~ {end_date})...")
+
+    all_data = []
 
     # 基础因子
     basic_sql = f"""
@@ -68,23 +74,50 @@ def load_factor_data(start_date='2024-01-01', end_date='2026-03-20'):
     """
     rows_extended = execute_query(extended_sql)
 
-    if not rows_basic and not rows_extended:
+    # 估值因子
+    valuation_sql = f"""
+        SELECT stock_code, calc_date as trade_date,
+               pe_ttm, pb, ps_ttm
+        FROM trade_stock_valuation_factor
+        WHERE calc_date >= '{start_date}' AND calc_date <= '{end_date}'
+        ORDER BY calc_date, stock_code
+    """
+    rows_valuation = execute_query(valuation_sql)
+
+    # 质量因子
+    quality_sql = f"""
+        SELECT stock_code, calc_date as trade_date,
+               cash_flow_ratio, accrual, current_ratio, roa, debt_ratio
+        FROM trade_stock_quality_factor
+        WHERE calc_date >= '{start_date}' AND calc_date <= '{end_date}'
+        ORDER BY calc_date, stock_code
+    """
+    rows_quality = execute_query(quality_sql)
+
+    if not rows_basic and not rows_extended and not rows_valuation and not rows_quality:
         logger.error("未加载到因子数据")
         return None
 
     df_basic = pd.DataFrame(rows_basic) if rows_basic else pd.DataFrame()
     df_extended = pd.DataFrame(rows_extended) if rows_extended else pd.DataFrame()
+    df_valuation = pd.DataFrame(rows_valuation) if rows_valuation else pd.DataFrame()
+    df_quality = pd.DataFrame(rows_quality) if rows_quality else pd.DataFrame()
 
-    # 合并
-    if not df_basic.empty and not df_extended.empty:
-        df_basic['trade_date'] = pd.to_datetime(df_basic['trade_date'])
-        df_extended['trade_date'] = pd.to_datetime(df_extended['trade_date'])
-        df = pd.merge(df_basic, df_extended, on=['trade_date', 'stock_code'], how='outer')
-    elif not df_basic.empty:
-        df = df_basic
-        df['trade_date'] = pd.to_datetime(df['trade_date'])
-    else:
-        df = df_extended
+    # 合并所有因子数据
+    dfs_to_merge = [df for df in [df_basic, df_extended, df_valuation, df_quality] if not df.empty]
+    if not dfs_to_merge:
+        logger.error("未加载到因子数据")
+        return None
+
+    df = dfs_to_merge[0]
+    for other_df in dfs_to_merge[1:]:
+        if 'trade_date' not in df.columns:
+            df['trade_date'] = pd.to_datetime(df['trade_date'])
+        if 'trade_date' not in other_df.columns:
+            other_df['trade_date'] = pd.to_datetime(other_df['trade_date'])
+        df = pd.merge(df, other_df, on=['trade_date', 'stock_code'], how='outer')
+
+    if 'trade_date' not in df.columns:
         df['trade_date'] = pd.to_datetime(df['trade_date'])
 
     df = df.set_index(['trade_date', 'stock_code'])
@@ -92,7 +125,7 @@ def load_factor_data(start_date='2024-01-01', end_date='2026-03-20'):
     return df
 
 
-def load_forward_returns(start_date='2024-01-01', end_date='2026-03-20', periods=[5, 10, 20]):
+def load_forward_returns(start_date='2024-01-01', end_date='2026-03-24', periods=[5, 10, 20]):
     """计算未来收益率"""
     logger.info(f"计算未来收益率 (周期: {periods})...")
 
@@ -145,18 +178,18 @@ def calculate_ic_series(factor_data, forward_returns, factor_name, period=20):
     ic_series = []
     dates = factor_data.index.get_level_values(0).unique().sort_values()
 
-    for date in dates:
+    for trade_date in dates:
         try:
-            if date not in factor_data.index.get_level_values(0):
+            if trade_date not in factor_data.index.get_level_values(0):
                 continue
-            factor_values = factor_data.loc[date, factor_name]
+            factor_values = factor_data.loc[trade_date, factor_name]
 
             return_col = f'forward_{period}d'
             if return_col not in forward_returns.columns:
                 continue
-            if date not in forward_returns.index.get_level_values(0):
+            if trade_date not in forward_returns.index.get_level_values(0):
                 continue
-            return_values = forward_returns.loc[date, return_col]
+            return_values = forward_returns.loc[trade_date, return_col]
 
             common_stocks = factor_values.index.intersection(return_values.index)
             if len(common_stocks) < 30:
@@ -166,7 +199,7 @@ def calculate_ic_series(factor_data, forward_returns, factor_name, period=20):
             return_aligned = return_values[common_stocks]
 
             ic = calculate_ic(factor_aligned, return_aligned)
-            ic_series.append({'date': date, 'ic': ic})
+            ic_series.append({'date': trade_date, 'ic': ic})
         except Exception:
             continue
 
@@ -273,7 +306,7 @@ def save_validation_results(results):
     conn.commit()
     cursor.close()
     conn.close()
-    logger.info(f"✅ 验证结果已保存到数据库")
+    logger.info(f"验证结果已保存到数据库")
 
 
 def main():
@@ -281,10 +314,11 @@ def main():
     logger.info("=" * 60)
     logger.info("因子有效性验证")
     logger.info(f"验证阈值: IC均值 >= {IC_MEAN_THRESHOLD}, ICIR >= {ICIR_THRESHOLD}")
+    logger.info(f"验证因子数: {len(FACTORS)}")
     logger.info("=" * 60)
 
     # 1. 加载因子数据
-    logger.info("\n[1] 加载因子数据...")
+    logger.info(f"\n[1] 加载因子数据...")
     t0 = time()
     factor_data = load_factor_data()
     if factor_data is None:
@@ -292,7 +326,7 @@ def main():
     logger.info(f"  耗时: {time()-t0:.1f}s")
 
     # 2. 计算未来收益率
-    logger.info("\n[2] 计算未来收益率...")
+    logger.info(f"\n[2] 计算未来收益率...")
     t0 = time()
     forward_returns = load_forward_returns()
     if forward_returns is None:
@@ -300,7 +334,7 @@ def main():
     logger.info(f"  耗时: {time()-t0:.1f}s")
 
     # 3. 验证每个因子
-    logger.info("\n[3] 验证因子有效性...")
+    logger.info(f"\n[3] 验证因子有效性...")
     results = []
 
     for factor_name in FACTORS:
@@ -315,7 +349,7 @@ def main():
         result = validate_factor(factor_name, ic_series)
         results.append(result)
 
-        status = "✅ 有效" if result['valid'] else "❌ 无效"
+        status = "有效" if result['valid'] else "无效"
         logger.info(f"  状态: {status}")
         logger.info(f"  IC均值: {result.get('ic_mean', 'N/A')}")
         logger.info(f"  ICIR: {result.get('icir', 'N/A')}")
@@ -334,18 +368,19 @@ def main():
 
     logger.info(f"\n有效因子 ({len(valid_factors)}):")
     for r in valid_factors:
-        logger.info(f"  ✅ {r['factor']}: IC均值={r['ic_mean']:.4f}, ICIR={r['icir']:.4f}")
+        logger.info(f"  {r['factor']}: IC均值={r['ic_mean']:.4f}, ICIR={r['icir']:.4f}")
 
     logger.info(f"\n无效因子 ({len(invalid_factors)}):")
     for r in invalid_factors:
-        logger.info(f"  ❌ {r['factor']}: {r.get('reason', '')}")
+        logger.info(f"  {r['factor']}: {r.get('reason', '')}")
 
     # 5. 保存到数据库
-    logger.info("\n[4] 保存验证结果到数据库...")
+    logger.info(f"\n[4] 保存验证结果到数据库...")
     save_validation_results(results)
 
     logger.info("\n" + "=" * 60)
-    logger.info("✅ 因子有效性验证完成!")
+    logger.info("因子有效性验证完成!")
+    logger.info(f"  有效因子: {len(valid_factors)}/{len(results)}")
     logger.info("=" * 60)
 
     return results
