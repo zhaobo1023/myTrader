@@ -3,7 +3,16 @@
     "allow": [
       "Bash(python -c:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git branch:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(python3 -c:*)",
+      "Bash(python3:*)",
+      "Bash(DB_SKIP_on=1)",
+      "Bash(python research/combination.py --etf 159930 --window 5)"
     ],
     "deny": [],
     "ask": []

@@ -1,0 +1,45 @@
+{
+  "report_date": "2026-03-24",
+  "total_factors": 4,
+  "valid_count": 3,
+  "decaying_count": 1,
+  "invalid_count": 0,
+  "factors": [
+    {
+      "factor_code": "oil_mom_20",
+      "factor_name": "原油20日涨跌幅",
+      "rolling_ic": -0.7307452396875261,
+      "icir": 0.13350444222019095,
+      "status": "valid",
+      "sample_count": 1467,
+      "latest_date": "2026-03-24"
+    },
+    {
+      "factor_code": "gold_mom_20",
+      "factor_name": "黄金20日涨跌幅",
+      "rolling_ic": 0.1882427204502711,
+      "icir": 0.12354878280512527,
+      "status": "valid",
+      "sample_count": 1530,
+      "latest_date": "2026-03-24"
+    },
+    {
+      "factor_code": "vix_ma5",
+      "factor_name": "VIX 5日均值",
+      "rolling_ic": 0.010315170909464159,
+      "icir": 0.23905040971909686,
+      "status": "decaying",
+      "sample_count": 1434,
+      "latest_date": "2026-03-24"
+    },
+    {
+      "factor_code": "north_flow_5d",
+      "factor_name": "北向资金5日累计净流入",
+      "rolling_ic": -0.17748600776906195,
+      "icir": 0.1194443942235789,
+      "status": "valid",
+      "sample_count": 1009,
+      "latest_date": "2024-08-16"
+    }
+  ]
+}

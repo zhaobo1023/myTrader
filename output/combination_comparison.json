@@ -1,0 +1,42 @@
+[
+  {
+    "type": "combined",
+    "method": "equal_weight",
+    "factor_name": "combined_equal_weight",
+    "ic": -0.032998504077481026,
+    "icir": -0.36496380494472086,
+    "sample_count": 1497
+  },
+  {
+    "type": "combined",
+    "method": "ic_weighted",
+    "factor_name": "combined_ic_weighted",
+    "ic": -0.05172943347587848,
+    "icir": -0.19090219559694865,
+    "sample_count": 1465
+  },
+  {
+    "type": "single",
+    "method": "oil_mom_20",
+    "factor_name": "oil_mom_20",
+    "ic": -0.04471002637832417,
+    "icir": -0.6897849693190772,
+    "sample_count": 1473
+  },
+  {
+    "type": "single",
+    "method": "gold_mom_20",
+    "factor_name": "gold_mom_20",
+    "ic": -0.033622519828700986,
+    "icir": -0.2018975203081791,
+    "sample_count": 1476
+  },
+  {
+    "type": "single",
+    "method": "vix_ma5",
+    "factor_name": "vix_ma5",
+    "ic": -0.0031055734064968678,
+    "icir": 0.28633910210725816,
+    "sample_count": 1489
+  }
+]
