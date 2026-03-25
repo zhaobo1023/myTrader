@@ -167,6 +167,177 @@ def detect_signals(weekly_scores: pd.DataFrame,
     return signals
 
 
+def detect_signals_for_week(weekly_scores: pd.DataFrame,
+                            week_idx: int,
+                            rising_window: int = 3,
+                            hot_threshold: float = 85.0,
+                            rising_min_gain: float = 5.0) -> dict:
+    """
+    检测指定周的信号（用于历史回溯）
+    week_idx: 从最新周往前数，0=最新周，1=上周，以此类推
+    """
+    if week_idx >= len(weekly_scores):
+        return {"rising": [], "hot": [], "cooling": []}
+
+    # 截取到目标周的数据
+    scores_up_to_week = weekly_scores.iloc[:len(weekly_scores) - week_idx]
+    if len(scores_up_to_week) < 2:
+        return {"rising": [], "hot": [], "cooling": []}
+
+    current = scores_up_to_week.iloc[-1]
+    signals = {"rising": [], "hot": [], "cooling": []}
+
+    for col in scores_up_to_week.columns:
+        series = scores_up_to_week[col].dropna()
+        if len(series) < rising_window + 1:
+            continue
+
+        recent = series.iloc[-(rising_window):]
+        is_rising = all(recent.iloc[i] < recent.iloc[i+1] for i in range(len(recent)-1))
+        gain = recent.iloc[-1] - recent.iloc[-rising_window]
+
+        if is_rising and gain >= rising_min_gain:
+            signals["rising"].append(col)
+
+        score = current.get(col, np.nan)
+        if pd.notna(score):
+            if score >= hot_threshold:
+                signals["hot"].append(col)
+            elif len(series) >= 2 and series.iloc[-2] >= hot_threshold and score < hot_threshold:
+                signals["cooling"].append(col)
+
+    return signals
+
+
+def get_historical_signals(weekly_scores: pd.DataFrame,
+                           n_weeks: int = 4,
+                           rising_window: int = 3,
+                           hot_threshold: float = 85.0) -> pd.DataFrame:
+    """
+    获取过去N周的信号历史
+    返回：DataFrame，index=行业，columns=各周的信号状态
+    """
+    all_industries = weekly_scores.columns.tolist()
+    history = {ind: [] for ind in all_industries}
+    week_labels = []
+
+    for week_idx in range(n_weeks):
+        if week_idx >= len(weekly_scores):
+            break
+
+        week_date = weekly_scores.index[-(week_idx + 1)].strftime("%m/%d")
+        week_labels.append(week_date)
+
+        signals = detect_signals_for_week(
+            weekly_scores, week_idx,
+            rising_window=rising_window,
+            hot_threshold=hot_threshold
+        )
+
+        for ind in all_industries:
+            if ind in signals["hot"]:
+                history[ind].append("🔥")
+            elif ind in signals["cooling"]:
+                history[ind].append("❄")
+            elif ind in signals["rising"]:
+                history[ind].append("↑")
+            else:
+                history[ind].append("")
+
+    df = pd.DataFrame(history, index=week_labels).T
+    return df
+
+
+def print_signal_history(weekly_scores: pd.DataFrame,
+                         n_weeks: int = 4,
+                         rising_window: int = 3,
+                         hot_threshold: float = 85.0):
+    """
+    打印过去N周的信号变化表格
+    """
+    print(f"\n{'='*80}")
+    print(f"📊 过去 {n_weeks} 周信号变化追踪")
+    print(f"{'='*80}")
+
+    # 获取周度得分
+    week_dates = []
+    for week_idx in range(min(n_weeks, len(weekly_scores))):
+        week_date = weekly_scores.index[-(week_idx + 1)].strftime("%Y-%m-%d")
+        week_dates.append(week_date)
+
+    # 按最新周得分排序
+    sorted_industries = weekly_scores.iloc[-1].sort_values(ascending=False).index.tolist()
+
+    # 打印表头
+    header = f"{'行业':<10}"
+    for i, wd in enumerate(week_dates):
+        if i == 0:
+            header += f" | {wd}(最新)"
+        else:
+            header += f" | {wd}"
+    print(header)
+    print("-" * len(header))
+
+    # 打印每个行业
+    for ind in sorted_industries:
+        row = f"{ind:<10}"
+        for week_idx in range(min(n_weeks, len(weekly_scores))):
+            signals = detect_signals_for_week(
+                weekly_scores, week_idx,
+                rising_window=rising_window,
+                hot_threshold=hot_threshold
+            )
+            score = weekly_scores.iloc[-(week_idx + 1)][ind]
+
+            signal_str = ""
+            if ind in signals["hot"]:
+                signal_str = "🔥"
+            elif ind in signals["cooling"]:
+                signal_str = "❄"
+            elif ind in signals["rising"]:
+                signal_str = "↑"
+
+            row += f" | {score:5.1f}{signal_str}"
+        print(row)
+
+    print("-" * len(header))
+    print("图例: 🔥过热(>85) | ❄降温 | ↑上升中\n")
+
+
+def get_signal_changes(weekly_scores: pd.DataFrame,
+                       n_weeks: int = 4,
+                       hot_threshold: float = 85.0) -> dict:
+    """
+    分析信号变化：新增、消失、持续
+    """
+    changes = {
+        "new_hot": [],       # 新增过热
+        "exit_hot": [],      # 退出过热
+        "sustained_hot": [], # 持续过热
+        "new_rising": [],    # 新增上升
+        "new_cooling": [],   # 新增降温
+    }
+
+    if len(weekly_scores) < 2:
+        return changes
+
+    current_signals = detect_signals_for_week(weekly_scores, 0, hot_threshold=hot_threshold)
+    prev_signals = detect_signals_for_week(weekly_scores, 1, hot_threshold=hot_threshold)
+
+    # 过热变化
+    changes["new_hot"] = list(set(current_signals["hot"]) - set(prev_signals["hot"]))
+    changes["exit_hot"] = list(set(prev_signals["hot"]) - set(current_signals["hot"]))
+    changes["sustained_hot"] = list(set(current_signals["hot"]) & set(prev_signals["hot"]))
+
+    # 上升变化
+    changes["new_rising"] = list(set(current_signals["rising"]) - set(prev_signals["rising"]))
+
+    # 降温信号
+    changes["new_cooling"] = current_signals["cooling"]
+
+    return changes
+
+
 # ══════════════════════════════════════════════════════════════
 # 4. 绘图
 # ══════════════════════════════════════════════════════════════
@@ -356,10 +527,27 @@ def main():
     # 5. 检测信号
     signals = detect_signals(weekly_20, rising_window=RISING_WINDOW, hot_threshold=HOT_THRESHOLD)
 
-    print("\n══ 信号汇总 ══")
+    print("\n══ 当前信号汇总 ══")
     print(f"🔥 过热预警（250日分位 > {HOT_THRESHOLD}）: {signals['hot'] if signals['hot'] else '无'}")
     print(f"↑  连续上升（近{RISING_WINDOW}周）: {signals['rising'] if signals['rising'] else '无'}")
     print(f"❄  高位降温: {signals['cooling'] if signals['cooling'] else '无'}")
+
+    # 5.5 打印历史信号变化
+    print_signal_history(weekly_20, n_weeks=4, rising_window=RISING_WINDOW, hot_threshold=HOT_THRESHOLD)
+
+    # 分析信号变化
+    changes = get_signal_changes(weekly_20, n_weeks=4, hot_threshold=HOT_THRESHOLD)
+    print("📈 信号变化分析:")
+    if changes["new_hot"]:
+        print(f"  🆕 新增过热: {changes['new_hot']}")
+    if changes["exit_hot"]:
+        print(f"  📉 退出过热: {changes['exit_hot']}")
+    if changes["sustained_hot"]:
+        print(f"  ⚠️  持续过热: {changes['sustained_hot']}")
+    if changes["new_rising"]:
+        print(f"  🆕 新增上升: {changes['new_rising']}")
+    if changes["new_cooling"]:
+        print(f"  🧊 新增降温: {changes['new_cooling']}")
 
     # 6. 绘图
     print("\n绘制热力图...")
@@ -372,6 +560,14 @@ def main():
 
     # 7. 输出CSV方便自己二次分析
     today = datetime.today().strftime("%Y-%m-%d")
+
+    # 获取过去4周的得分
+    weekly_scores_history = []
+    for week_idx in range(min(4, len(weekly_20))):
+        week_date = weekly_20.index[-(week_idx + 1)].strftime("%Y-%m-%d")
+        week_scores = weekly_20.iloc[-(week_idx + 1)]
+        weekly_scores_history.append((week_date, week_scores))
+
     out = pd.DataFrame({
         "行业": common,
         "20日分位得分": current_20[common].values,
@@ -379,7 +575,14 @@ def main():
         "过热": [1 if c in signals["hot"] else 0 for c in common],
         "连续上升": [1 if c in signals["rising"] else 0 for c in common],
         "高位降温": [1 if c in signals["cooling"] else 0 for c in common],
-    }).sort_values("250日分位得分", ascending=False)
+    })
+
+    # 添加过去4周的得分
+    for week_date, week_scores in weekly_scores_history:
+        col_name = f"得分_{week_date}"
+        out[col_name] = [week_scores.get(c, np.nan) for c in out["行业"]]
+
+    out = out.sort_values("250日分位得分", ascending=False)
     csv_name = os.path.join(OUTPUT_DIR, f"sw_scores_{today}.csv")
     out.to_csv(csv_name, index=False, encoding="utf-8-sig")
     print(f"\n得分数据已导出：{csv_name}")
