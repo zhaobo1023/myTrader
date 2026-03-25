@@ -84,8 +84,8 @@ def load_etf_data(etf_code: str,
     """
     sql = """
         SELECT trade_date, close_price
-        FROM etf_daily
-        WHERE etf_code = %s
+        FROM trade_etf_daily
+        WHERE fund_code = %s
     """
     params = [etf_code]
 

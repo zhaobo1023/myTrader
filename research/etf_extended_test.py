@@ -45,16 +45,31 @@ except ImportError:
 # 配置
 # ============================================================
 
-# 扩展 ETF 列表
+# 扩展 ETF 列表 (使用完整代码格式: 代码.交易所)
 EXTENDED_ETFS = {
-    '159930': '能源化工ETF',
-    '515220': '煤炭ETF',
-    '518880': '黄金ETF',
-    '513130': '恒生科技ETF',
-    '159611': '电力ETF',
-    '159755': '电池ETF',
-    '159865': '畜牧ETF',
-    '159929': '农产品ETF',
+    # 能源相关
+    '159930.SZ': '能源化工ETF',
+    '515220.SH': '煤炭ETF',
+    '159825.SZ': '有色金属ETF',
+    # 新能源相关
+    '159871.SZ': '新能源ETF',
+    '515030.SH': '新能源ETF',
+    '515160.SH': '新能源ETF',
+    '159806.SZ': '新能源车ETF',
+    '516110.SH': '汽车ETF',
+    # 电力相关
+    '159611.SZ': '电力ETF',
+    '516850.SH': '储能ETF',
+    # 光伏/电池相关
+    '159755.SZ': '电池ETF',
+    '159766.SZ': '光伏ETF',
+    '516790.SH': '光伏ETF',
+    # 其他
+    '518880.SH': '黄金ETF',
+    '513130.SH': '恒生科技ETF',
+    '159929.SZ': '农产品ETF',
+    '159865.SZ': '畜牧ETF',
+    '515180.SH': '银行ETF',
 }
 
 # 默认测试因子
@@ -85,8 +100,8 @@ def load_etf_data(etf_code: str, start_date: str = None, end_date: str = None) -
     """
     sql = """
         SELECT trade_date, close_price
-        FROM etf_daily
-        WHERE etf_code = %s
+        FROM trade_etf_daily
+        WHERE fund_code = %s
     """
     params = [etf_code]
 
