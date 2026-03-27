@@ -72,7 +72,7 @@ class IndicatorCalculator:
         for window in windows:
             col_name = f'ma{window}'
             result[col_name] = result.groupby('stock_code')['close'].transform(
-                lambda x: x.rolling(window=window, min_periods=1).mean()
+                lambda x: x.rolling(window=window, min_periods=window).mean()
             )
 
         print(f"  MA 计算完成")

@@ -14,6 +14,8 @@ from strategist.backtest import BacktestEngine, BacktestConfig, ReportGenerator
 from strategist.doctor_tao.data_fetcher import DoctorTaoDataFetcher
 from strategist.doctor_tao.indicators import IndicatorCalculator
 from strategist.doctor_tao.signal_screener import SignalScreener
+import pandas as pd
+import glob
 
 
 def main():
@@ -50,10 +52,14 @@ def main():
     start_date = '2024-09-24'
     end_date = '2026-03-25'
     
-    import pandas as pd
-
-    # 从CSV读取18只陶博士选出的股票
-    signal_file = os.path.join(os.path.dirname(__file__), 'output', 'signals_20260325_152820.csv')
+    # 从CSV读取陶博士选出的股票（自动查找最新的信号文件）
+    output_dir = os.path.join(os.path.dirname(__file__), 'output')
+    signal_files = glob.glob(os.path.join(output_dir, 'signals_*.csv'))
+    if not signal_files:
+        print("错误：未找到信号文件，请先运行 signal_screener.py 生成信号")
+        return
+    signal_file = max(signal_files, key=os.path.getmtime)  # 使用最新的文件
+    print(f"  使用信号文件: {os.path.basename(signal_file)}")
     signals_raw = pd.read_csv(signal_file)
     test_stocks = signals_raw['stock_code'].unique().tolist()
     print(f"  陶博士选股数: {len(test_stocks)}")
@@ -77,7 +83,6 @@ def main():
         print("无有效价格数据")
         return
     
-    import pandas as pd
     price_df = pd.concat(price_list, ignore_index=True)
     indicators_df = IndicatorCalculator.calc_all_indicators(price_df)
     print(f"  计算完成，共 {len(indicators_df)} 条记录")

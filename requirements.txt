@@ -17,6 +17,11 @@ akshare>=1.12.0
 # 技术分析 (可选，推荐安装)
 # TA-Lib  # 需要先安装系统依赖
 
+# 机器学习
+xgboost>=2.0.0
+scipy>=1.11.0
+scikit-learn>=1.3.0
+
 # 回测框架
 backtrader>=1.9.78
 

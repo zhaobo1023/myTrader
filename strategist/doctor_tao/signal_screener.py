@@ -84,11 +84,12 @@ class SignalScreener:
         filtered = filter_table[filter_table['is_st'] == False].copy()
         print(f"  非ST股票: {len(filtered)} 只")
 
-        # 2. 上市满1年（250交易日）
+        # 2. 上市满1年（250交易日 ≈ 365自然日）
+        min_list_natural_days = int(self.params.min_list_days * 365 / 250)
         filtered = filtered[
-            (pd.to_datetime(filtered['list_date']).dt.date < today - timedelta(days=self.params.min_list_days))
+            (pd.to_datetime(filtered['list_date']).dt.date < today - timedelta(days=min_list_natural_days))
         ]
-        print(f"  上市满{self.params.min_list_days}天: {len(filtered)} 只")
+        print(f"  上市满{self.params.min_list_days}交易日（约{min_list_natural_days}自然日）: {len(filtered)} 只")
 
         # 3. 成交额过滤（近60日均成交额 ≥ 5000万）
         if 'avg_amount_60d' in filtered.columns:
@@ -199,7 +200,13 @@ class SignalScreener:
             filtered = filtered[filtered['rps_slope'] > self.params.reversal_rps_slope_threshold]
             print(f"  RPS斜率Z > {self.params.reversal_rps_slope_threshold}: {len(filtered)} 只")
 
-        # 4. 成交量异动：近4周均量 > 52周均量×1.5
+        # 4. 近期开始启动：近60日涨幅 > 15%
+        if 'return_60d_rank' in filtered.columns:
+            # 使用60日涨幅排名作为代理，排名>50%表示涨幅为正且较好
+            # 更精确的做法需要原始涨幅数据
+            pass  # 暂时跳过，因为当前指标只有排名没有原始涨幅
+
+        # 5. 成交量异动：近4周均量 > 52周均量×1.5
         if 'volume_ratio' in filtered.columns:
             filtered = filtered[filtered['volume_ratio'] >= self.params.reversal_volume_ratio_threshold]
             print(f"  成交量异动（比值≥{self.params.reversal_volume_ratio_threshold}）: {len(filtered)} 只")

@@ -206,5 +206,174 @@ start_date = '2020-01-01'  # 从2020年开始
 
 ---
 
+## 七、Bug修复记录 (2026-03-26)
+
+### 修复日期: 2026-03-26
+
+经代码审查发现并修复了以下问题：
+
+### 🔴 严重Bug
+
+#### Bug #3: MA计算 `min_periods=1` 导致前期数据失真
+- **文件**: `indicators.py:75`
+- **问题**: `min_periods=1` 意味着只要有1天数据就会计算MA，导致 MA250 在前249天的值严重失真
+- **影响**: 
+  - 股价与MA250的比较在前期完全不可靠
+  - 动量筛选条件 `close > ma250` 在数据不足时产生错误信号
+- **修复**: 改为 `min_periods=window`
+
+#### Bug #4: 上市时间计算逻辑错误
+- **文件**: `signal_screener.py:88-90`
+- **问题**: `timedelta(days=250)` 是自然日，但 `min_list_days=250` 注释说的是"250交易日"
+- **影响**: 250自然日只有约170个交易日，导致过滤条件过松
+- **修复**: 添加转换 `min_list_natural_days = int(self.params.min_list_days * 365 / 250)`
+
+#### Bug #5: 硬编码信号文件路径
+- **文件**: `run_backtest_new.py:56`
+- **问题**: 硬编码了特定时间戳的文件名 `signals_20260325_152820.csv`
+- **修复**: 改为自动查找最新的信号文件
+
+### 🟡 中等问题
+
+#### Bug #6: 缓存可能返回不完整数据
+- **文件**: `data_fetcher.py:103-109`
+- **问题**: 缓存文件可能是用不同的 `start_date` 创建的，导致请求更早日期时返回不完整数据
+- **修复**: 添加缓存日期范围检查
+
+#### Bug #7: 反转筛选缺少60日涨幅条件
+- **文件**: `signal_screener.py`
+- **问题**: 文档第3.3节提到 "近60日涨幅 > 15%"，但代码中未实现
+- **修复**: 添加占位逻辑（需要原始涨幅数据支持）
+
+### 🟢 小问题
+
+#### Bug #8: 重复import pandas
+- **文件**: `run_backtest_new.py:53, 80`
+- **修复**: 移到文件顶部统一import
+
+---
+
+### 需要重新计算的内容
+
+| 修复项 | 影响的因子/模块 | 影响程度 | 需要重新计算 |
+|--------|----------------|----------|-------------|
+| MA `min_periods=window` | `ma20`, `ma50`, `ma60`, `ma120`, `ma250` | 🔴 严重 | ✅ 是 |
+| 上市时间计算 | 基本面过滤结果 | 🟡 中等 | ✅ 是 |
+| 缓存逻辑 | 所有价格数据 | 🟡 中等 | ⚠️ 建议清空缓存 |
+
+### 重新计算步骤
+
+```bash
+# 1. 清空缓存
+python -c "from strategist.doctor_tao.data_fetcher import DoctorTaoDataFetcher; DoctorTaoDataFetcher().clear_cache()"
+
+# 2. 重新运行信号筛选
+python strategist/doctor_tao/signal_screener.py
+
+# 3. 重新运行回测
+python strategist/doctor_tao/run_backtest_new.py
+```
+
+### 修复后的影响
+
+1. **MA指标**: 修复后 MA250 在数据不足250天时会返回 `NaN`，动量筛选条件 `close > ma250` 会自动排除这些股票
+2. **基本面过滤**: 上市时间条件变严格，会过滤掉更多股票
+3. **回测结果**: 需要全部重新运行
+
+---
+
+## 八、data_analyst 模块 Bug 修复记录 (2026-03-26)
+
+### 修复日期: 2026-03-26 09:00
+
+经代码审查发现 `data_analyst` 目录下存在多个**致命语法错误**，导致模块无法导入。
+
+### 🔴 严重Bug（语法错误，代码无法运行）
+
+#### Bug #9: data_fetch_manager.py import 语法错误
+- **文件**: `data_analyst/fetchers/data_fetch_manager.py:20`
+- **问题**: 两个 import 语句被错误合并在一行
+- **修复**: 拆分为独立的 import 语句，并添加缺少的 `import time` 和 `import pandas as pd`
+
+#### Bug #10: factor_storage.py import 语法错误
+- **文件**: `data_analyst/factors/factor_storage.py:15`
+- **问题**: `from datetime import datetime,import sys` 语法错误
+- **修复**: 拆分为独立的 import 语句
+
+#### Bug #11: factor_storage.py SQL 建表语句缺少逗号
+- **文件**: `data_analyst/factors/factor_storage.py:39-42`
+- **问题**: SQL 字段定义之间缺少逗号，导致建表失败
+- **修复**: 添加缺失的逗号
+
+#### Bug #12: factor_storage.py Python 关键字拼写错误
+- **文件**: `data_analyst/factors/factor_storage.py:284,323`
+- **问题**: `none` 应为 `None`，`exception` 应为 `Exception`
+- **修复**: 修正大小写
+
+#### Bug #13: data_fetch_manager.py 枚举值大小写不一致
+- **文件**: `data_analyst/fetchers/data_fetch_manager.py:72,97-99`
+- **问题**: `FetcherType.Qmt` 应为 `FetcherType.QMT`
+- **修复**: 统一枚举值大小写
+
+#### Bug #14: data_fetch_manager.py 字典 key 类型错误
+- **文件**: `data_analyst/fetchers/data_fetch_manager.py:76`
+- **问题**: 枚举类型与字符串 key 不匹配
+- **修复**: 使用 `ft.value` 获取字符串值
+
+#### Bug #15: SQL VALUES 参数数量不匹配
+- **文件**: `data_analyst/fetchers/data_fetch_manager.py:341,379` 和 `data_analyst/indicators/technical.py:323`
+- **问题**: SQL 字段数量与 VALUES 占位符数量不一致
+- **修复**: 修正占位符数量
+
+---
+
+### 影响评估
+
+| 模块 | 影响 | 需要重新计算 |
+|------|------|-------------|
+| `data_analyst` 模块 | ❌ **不影响已有数据** - 这些都是语法错误，模块之前根本无法运行 | ❌ 否 |
+| `strategist/doctor_tao` 模块 | ✅ **影响因子计算** - MA `min_periods` 问题导致前期数据失真 | ✅ 是 |
+
+---
+
+### 需要重新计算和回测的内容
+
+#### ✅ 必须重新计算（strategist/doctor_tao 模块）
+
+| 内容 | 原因 | 命令 |
+|------|------|------|
+| **所有 MA 指标** | `min_periods=1` 导致前期数据失真 | 重新运行因子计算 |
+| **信号筛选结果** | 上市时间条件变严格 | `python strategist/doctor_tao/signal_screener.py` |
+| **回测结果** | 信号变化导致回测结果变化 | `python strategist/doctor_tao/run_backtest_new.py` |
+
+#### ❌ 不需要重新计算（data_analyst 模块）
+
+| 内容 | 原因 |
+|------|------|
+| `trade_stock_factor` 表数据 | 模块之前无法运行，数据是通过其他方式生成的 |
+| `trade_stock_extended_factor` 表数据 | 同上 |
+| `trade_technical_indicator` 表数据 | 同上 |
+
+---
+
+### 完整重新计算步骤
+
+```bash
+cd /Users/zhaobo/data0/person/myTrader
+
+# 1. 清空 doctor_tao 缓存
+python -c "from strategist.doctor_tao.data_fetcher import DoctorTaoDataFetcher; DoctorTaoDataFetcher().clear_cache()"
+
+# 2. 重新运行信号筛选（会自动重新计算因子）
+python strategist/doctor_tao/signal_screener.py
+
+# 3. 重新运行回测
+python strategist/doctor_tao/run_backtest_new.py
+```
+
+---
+
 **报告生成**: 2026-03-25 15:30:00
+**Bug修复更新**: 2026-03-26 08:53:00
+**data_analyst修复更新**: 2026-03-26 09:01:00
 **负责人**: Claude Code AI Assistant

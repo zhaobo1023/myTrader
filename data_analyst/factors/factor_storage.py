@@ -12,7 +12,8 @@
   见 create_factor_table()
 """
 import pandas as pd
-from datetime import datetime,import sys
+from datetime import datetime
+import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.db import execute_query, get_connection
@@ -36,10 +37,10 @@ CREATE TABLE IF NOT EXISTS trade_stock_factor (
     momentum_60d DOUBLE COMMENT '60日动量 ROC(60)',
     volatility DOUBLE COMMENT '波动率 ATR(14)/Close',
     rsi_14 DOUBLE COMMENT 'RSI(14)',
-    adx_14 DOUBLE COMMENT 'ADX(14) 趋势强度'
-    turnover_ratio DOUBLE COMMENT '换手率 当日量/20日均量'
-    price_position DOUBLE COMMENT '价格位置 60日区间内位置'
-    macd_signal DOUBLE COMMENT 'MACD柱状图'
+    adx_14 DOUBLE COMMENT 'ADX(14) 趋势强度',
+    turnover_ratio DOUBLE COMMENT '换手率 当日量/20日均量',
+    price_position DOUBLE COMMENT '价格位置 60日区间内位置',
+    macd_signal DOUBLE COMMENT 'MACD柱状图',
 
     -- 辅助字段
     close DOUBLE COMMENT '收盘价',
@@ -281,7 +282,7 @@ def get_latest_factor_date():
     rows = execute_query(sql)
     if rows and rows[0]['latest']:
         return rows[0]['latest']
-    return none
+    return None
 
 
 def get_factor_dates():
@@ -320,7 +321,7 @@ if __name__ == '__main__':
     print("\n[1] 创建因子表...")
     try:
         create_factor_table()
-    except exception as e:
+    except Exception as e:
         print(f"  创建失败: {e}")
 
     # 2. 查询已有数据

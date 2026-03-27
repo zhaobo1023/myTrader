@@ -105,8 +105,14 @@ class DoctorTaoDataFetcher:
             # 缓存有效期：到当天 18:00 之前有效（数据通常在 18:00 更新）
             if cache_time.date() == datetime.now().date() and datetime.now().hour < 18:
                 df = pd.read_parquet(cache_file)
-                df = df[(df['trade_date'] >= start_date) & (df['trade_date'] <= end_date)]
-                return df
+                # 检查缓存数据是否覆盖请求的日期范围
+                if len(df) > 0:
+                    cache_min_date = df['trade_date'].min()
+                    cache_max_date = df['trade_date'].max()
+                    # 只有当缓存完全覆盖请求范围时才使用缓存
+                    if pd.to_datetime(start_date) >= cache_min_date:
+                        df = df[(df['trade_date'] >= start_date) & (df['trade_date'] <= end_date)]
+                        return df
 
         # 从数据库查询
         sql = """

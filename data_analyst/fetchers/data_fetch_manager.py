@@ -17,7 +17,10 @@ from enum import Enum
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from config.db import execute_query,from config.settings import settings
+from config.db import execute_query
+from config.settings import settings
+import time
+import pandas as pd
 
 # 配置日志
 logging.basicConfig(
@@ -69,11 +72,11 @@ class DataFetchManager:
     def get_available_fetchers(self, fetcher_types: Optional[List[FetcherType]] = None) -> List[FetcherType]:
         """获取可用的数据源列表"""
         if fetcher_types is None:
-            fetcher_types = [FetcherType.Qmt, FetcherType.tushare, FetcherType.akshare]
+            fetcher_types = [FetcherType.QMT, FetcherType.TUSHARE, FetcherType.AKSHARE]
 
         available = []
         for ft in fetcher_types:
-            if ft in self.config and self.config[ft]['enabled']:
+            if ft.value in self.config and self.config[ft.value]['enabled']:
                 available.append(ft)
         return available
 
@@ -94,9 +97,9 @@ class DataFetchManager:
         """
         if fetcher_type == FetcherType.QMT:
             return self._fetch_from_qmt(stock_codes, start_date, end_date)
-        elif fetcher_type == FetcherType.Tushare:
+        elif fetcher_type == FetcherType.TUSHARE:
             return self._fetch_from_tushare(stock_codes, start_date, end_date)
-        elif fetcher_type == FetcherType.akshare:
+        elif fetcher_type == FetcherType.AKSHARE:
             return self._fetch_from_akshare(stock_codes, start_date, end_date)
         else:
             return DataFetchResult(
@@ -338,7 +341,7 @@ class DataFetchManager:
             sql = """
                 INSERT INTO trade_stock_daily
                 (stock_code, trade_date, open_price, high_price, low_price, close_price, volume, amount, turnover_rate)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                 open_price=VALUES(open_price), high_price=VALUES(high_price),
                 low_price=VALUES(low_price), close_price=VALUES(close_price),
@@ -376,7 +379,7 @@ class DataFetchManager:
             sql = """
                 INSERT INTO trade_stock_daily
                 (stock_code, trade_date, open_price, high_price, low_price, close_price, volume, amount, turnover_rate)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                 open_price=VALUES(open_price), high_price=VALUES(high_price),
                 low_price=VALUES(low_price), close_price=VALUES(close_price),

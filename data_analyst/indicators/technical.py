@@ -320,7 +320,7 @@ class TechnicalIndicatorCalculator:
          macd_dif, macd_dea, macd_histogram, rsi_6, rsi_12, rsi_24,
          kdj_k, kdj_d, kdj_j, bollinger_upper, bollinger_middle, bollinger_lower,
          atr, volume_ratio, turnover_rate)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
         ma5=VALUES(ma5), ma10=VALUES(ma10), ma20=VALUES(ma20),
         ma60=VALUES(ma60), ma120=VALUES(ma120), ma250=VALUES(ma250),

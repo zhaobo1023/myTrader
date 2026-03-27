@@ -1,0 +1,162 @@
+# -*- coding: utf-8 -*-
+"""
+数据加载模块
+
+从 MySQL 加载股票数据并计算因子
+"""
+import pandas as pd
+import numpy as np
+import sys
+import os
+from typing import List, Optional
+import logging
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+
+from config.db import execute_query
+from .feature_engine import FeatureEngine
+from .preprocessor import Preprocessor
+from .config import StrategyConfig
+
+logger = logging.getLogger(__name__)
+
+
+class DataLoader:
+    """数据加载器"""
+    
+    def __init__(self, config: StrategyConfig = None):
+        """
+        初始化数据加载器
+        
+        参数:
+            config: 策略配置
+        """
+        self.config = config or StrategyConfig()
+        self.feature_engine = FeatureEngine()
+        self.preprocessor = Preprocessor(
+            method=self.config.preprocess_method,
+            mad_multiplier=self.config.mad_multiplier,
+            clip_range=self.config.clip_range,
+        )
+    
+    def load_stock_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        从 MySQL 加载单只股票的日 K 线数据
+        
+        参数:
+            stock_code: 股票代码
+            start_date: 开始日期
+            end_date: 结束日期
+        
+        返回:
+            DataFrame with OHLCV data
+        """
+        sql = """
+            SELECT trade_date, open_price, high_price, low_price, close_price, volume
+            FROM trade_stock_daily
+            WHERE stock_code = %s AND trade_date >= %s AND trade_date <= %s
+            ORDER BY trade_date ASC
+        """
+        rows = execute_query(sql, [stock_code, start_date, end_date])
+        
+        if not rows:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(rows)
+        df['trade_date'] = pd.to_datetime(df['trade_date'])
+        df.set_index('trade_date', inplace=True)
+        df.columns = ['open', 'high', 'low', 'close', 'volume']
+        
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        return df
+    
+    def load_and_compute_factors(
+        self,
+        stock_pool: List[str] = None,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> tuple:
+        """
+        加载股票数据并计算因子
+        
+        参数:
+            stock_pool: 股票池列表
+            start_date: 开始日期
+            end_date: 结束日期
+        
+        返回:
+            (panel, feature_cols)
+        """
+        if stock_pool is None:
+            stock_pool = self.config.stock_pool
+        if start_date is None:
+            start_date = self.config.start_date
+        if end_date is None:
+            end_date = self.config.end_date
+        
+        logger.info("=" * 60)
+        logger.info("加载数据并计算因子")
+        logger.info("=" * 60)
+        logger.info(f"股票池: {len(stock_pool)} 只")
+        logger.info(f"日期范围: {start_date} ~ {end_date}")
+        
+        all_frames = []
+        loaded = 0
+        
+        for i, code in enumerate(stock_pool, 1):
+            try:
+                df = self.load_stock_data(code, start_date, end_date)
+                if len(df) < self.config.min_bars:
+                    logger.debug(f"[{i}/{len(stock_pool)}] {code}: 数据不足 ({len(df)} < {self.config.min_bars})")
+                    continue
+                
+                # 计算因子
+                feat_df = self.feature_engine.calc_features(df)
+                
+                # 计算未来收益率
+                feat_df['future_ret'] = feat_df['close'].pct_change(self.config.predict_horizon).shift(-self.config.predict_horizon)
+                
+                feat_df['stock_code'] = code
+                feat_df['trade_date'] = feat_df.index
+                
+                all_frames.append(feat_df)
+                loaded += 1
+                
+                if loaded % 10 == 0:
+                    logger.info(f"进度: {loaded}/{len(stock_pool)}")
+                
+            except Exception as e:
+                logger.error(f"[{i}/{len(stock_pool)}] {code}: 加载失败 - {e}")
+        
+        logger.info(f"\n成功加载: {loaded}/{len(stock_pool)} 只")
+        
+        if loaded < 10:
+            raise ValueError("有效股票不足10只，无法进行截面分析")
+        
+        # 合并数据
+        panel = pd.concat(all_frames, ignore_index=True)
+        panel = panel.dropna(subset=['future_ret'])
+        
+        # 获取特征列
+        from .feature_engine import get_all_feature_cols
+        feature_cols = get_all_feature_cols()
+        feature_cols = [c for c in feature_cols if c in panel.columns]
+        
+        # 统计信息
+        dates = sorted(panel['trade_date'].unique())
+        daily_counts = panel.groupby('trade_date')['stock_code'].nunique()
+        
+        logger.info(f"\n面板大小: {len(panel):,} 行 x {len(feature_cols)} 个因子")
+        logger.info(f"交易日数: {len(dates)} ({dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')})")
+        logger.info(f"平均每日股票: {daily_counts.mean():.0f} 只")
+        logger.info(f"未来{self.config.predict_horizon}日收益率: 均值={panel['future_ret'].mean()*100:.3f}%, "
+                   f"标准差={panel['future_ret'].std()*100:.2f}%")
+        
+        # 截面预处理
+        logger.info("\n截面预处理...")
+        panel = self.preprocessor.preprocess_cross_section(panel, feature_cols)
+        logger.info("预处理完成")
+        
+        return panel, feature_cols
