@@ -83,54 +83,52 @@ class Predictor:
     def generate_signals(self, results: List[Dict]) -> pd.DataFrame:
         """
         生成交易信号
-        
+
         参数:
             results: 预测结果列表
-        
+
         返回:
-            DataFrame with date, stock_code, prediction, actual, rank
+            DataFrame with date, stock_code, prediction, pred_rank
         """
         all_signals = []
-        
+
         for result in results:
-            date = result['date']
+            date = result['pred_date']
             predictions = result['predictions']
-            actuals = result['actuals']
             stock_codes = result['stock_codes']
-            
+
             # 计算排名
             pred_ranks = pd.Series(predictions).rank(ascending=False, method='min')
-            
+
             for i, code in enumerate(stock_codes):
                 all_signals.append({
                     'date': date,
                     'stock_code': code,
                     'prediction': predictions[i],
-                    'actual': actuals[i] if not np.isnan(actuals[i]) else None,
                     'pred_rank': int(pred_ranks.iloc[i]),
                 })
-        
+
         df = pd.DataFrame(all_signals)
         return df
-    
+
     def get_daily_top_stocks(self, signals: pd.DataFrame, top_n: int = None) -> Dict:
         """
         获取每日的 Top N 股票
-        
+
         参数:
             signals: 信号 DataFrame
             top_n: 选择前 N 只股票
-        
+
         返回:
             {date: [stock_codes]}
         """
         if top_n is None:
             top_n = self.config.top_n
-        
+
         daily_tops = {}
-        
+
         for date, group in signals.groupby('date'):
             top_stocks = group.nsmallest(top_n, 'pred_rank')['stock_code'].tolist()
             daily_tops[date] = top_stocks
-        
+
         return daily_tops

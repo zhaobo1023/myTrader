@@ -146,8 +146,8 @@ class Visualizer:
         
         # 2. 超额收益
         ax = axes[1]
-        ax.bar(portfolio_returns.index, portfolio_returns['excess_return'] * 100,
-               color=['#27ae60' if x > 0 else '#e74c3c' for x in portfolio_returns['excess_return']],
+        ax.bar(portfolio_returns.index, portfolio_returns['excess_ret'] * 100,
+               color=['#27ae60' if x > 0 else '#e74c3c' for x in portfolio_returns['excess_ret']],
                alpha=0.6, width=1.0)
         ax.axhline(y=0, color='black', linewidth=0.5)
         ax.set_title('每日超额收益 (%)')

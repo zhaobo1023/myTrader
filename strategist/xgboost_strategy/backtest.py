@@ -37,43 +37,43 @@ class XGBoostBacktest:
     ) -> Dict:
         """
         运行回测
-        
+
         参数:
-            panel: 面板数据
+            panel: 面板数据（含 trade_date, stock_code, open, close, feature_cols, future_ret）
             feature_cols: 特征列名列表
-        
+
         返回:
             回测结果字典
         """
         logger.info("=" * 60)
         logger.info("开始 XGBoost 截面预测回测")
         logger.info("=" * 60)
-        
+
         # 1. 截面预测
         logger.info("\n[1/4] 截面预测...")
         results = self.predictor.predict_cross_section(panel, feature_cols)
-        
+
         if not results:
             logger.error("预测失败")
             return {}
-        
+
         # 2. IC 评估
         logger.info("\n[2/4] IC 评估...")
-        metrics = self.evaluator.evaluate_predictions(results)
+        metrics = self.evaluator.evaluate_predictions(results, panel)
         self.evaluator.print_metrics(metrics)
-        
+
         # 3. 生成交易信号
         logger.info("\n[3/4] 生成交易信号...")
         signals = self.predictor.generate_signals(results)
         daily_tops = self.predictor.get_daily_top_stocks(signals, self.config.top_n)
-        
+
         logger.info(f"生成信号: {len(signals)} 条")
         logger.info(f"交易日数: {len(daily_tops)}")
-        
-        # 4. 计算组合收益
+
+        # 4. 计算组合收益（传入 panel 用于查询价格）
         logger.info("\n[4/4] 计算组合收益...")
-        portfolio_returns = self.calc_portfolio_returns(signals, daily_tops)
-        
+        portfolio_returns = self.calc_portfolio_returns(results, panel)
+
         # 汇总结果
         result = {
             'metrics': metrics,
@@ -82,77 +82,130 @@ class XGBoostBacktest:
             'portfolio_returns': portfolio_returns,
             'results': results,
         }
-        
+
         logger.info("\n" + "=" * 60)
         logger.info("回测完成")
         logger.info("=" * 60)
-        
+
         return result
     
     def calc_portfolio_returns(
         self,
-        signals: pd.DataFrame,
-        daily_tops: Dict,
+        results: List[Dict],
+        panel: pd.DataFrame,
     ) -> pd.DataFrame:
         """
-        计算组合收益
-        
+        计算组合收益 — T+1 买入，T+1+hold_period 卖出
+
+        时间轴:
+          T日（信号生成日）  → T+1日（买入） → T+1+hold_period日（卖出）
+
         参数:
-            signals: 信号 DataFrame
-            daily_tops: 每日 Top N 股票
-        
+            results: rolling_train_predict 的输出
+            panel: 含 trade_date, stock_code, open, close 的完整数据
+
         返回:
-            DataFrame with date, portfolio_return, benchmark_return
+            DataFrame with signal_date, buy_date, sell_date, portfolio_ret, benchmark_ret, ...
         """
-        portfolio_rets = []
-        
-        for date, top_stocks in daily_tops.items():
-            # 获取当日 Top N 股票的实际收益
-            day_signals = signals[
-                (signals['date'] == date) & 
-                (signals['stock_code'].isin(top_stocks))
-            ]
-            
-            if len(day_signals) == 0:
+        # 建立价格查询表（去重防止重复索引）
+        price_df = panel[['stock_code', 'trade_date', 'close']].drop_duplicates(
+            subset=['stock_code', 'trade_date']
+        )
+        price_table = price_df.set_index(['stock_code', 'trade_date'])['close']
+        all_dates = sorted(panel['trade_date'].unique())
+        date_to_idx = {d: i for i, d in enumerate(all_dates)}
+
+        hold_period = self.config.predict_horizon  # 默认5天
+        top_n = self.config.top_n
+        cost = 0.002  # 双边交易成本 0.2%
+
+        portfolio_records = []
+
+        for signal in results:
+            pred_date = signal['pred_date']  # T日：信号生成日
+            stocks = signal['stock_codes']
+            preds = signal['predictions']
+
+            # 按预测值排名，取 Top N
+            ranked = sorted(zip(stocks, preds), key=lambda x: -x[1])
+            top_stocks = [s for s, _ in ranked[:top_n]]
+
+            # 买入日：T+1 日（下一个交易日）
+            t_idx = date_to_idx.get(pred_date)
+            if t_idx is None or t_idx + 1 >= len(all_dates):
                 continue
-            
-            # 等权组合收益
-            valid_rets = day_signals['actual'].dropna()
-            if len(valid_rets) > 0:
-                portfolio_ret = valid_rets.mean()
-            else:
-                portfolio_ret = 0
-            
-            # 全市场平均收益作为基准
-            all_day_signals = signals[signals['date'] == date]
-            benchmark_ret = all_day_signals['actual'].mean()
-            
-            portfolio_rets.append({
-                'date': date,
-                'portfolio_return': portfolio_ret,
-                'benchmark_return': benchmark_ret,
-                'excess_return': portfolio_ret - benchmark_ret,
-                'n_stocks': len(valid_rets),
+            buy_date = all_dates[t_idx + 1]
+
+            # 卖出日：T+1+hold_period 日
+            sell_idx = t_idx + 1 + hold_period
+            if sell_idx >= len(all_dates):
+                continue
+            sell_date = all_dates[sell_idx]
+
+            # 计算每只 Top N 股票的实际收益
+            stock_rets = []
+            for stk in top_stocks:
+                try:
+                    bp = float(price_table.loc[(stk, buy_date)])
+                    sp = float(price_table.loc[(stk, sell_date)])
+                    if bp <= 0 or np.isnan(bp) or np.isnan(sp):
+                        continue
+                    stock_rets.append(float(sp / bp - 1))
+                except (KeyError, TypeError, ValueError):
+                    continue  # 停牌或数据缺失
+
+            if not stock_rets:
+                continue
+
+            portfolio_ret = float(np.mean(stock_rets))
+
+            # 基准收益：同期全市场等权
+            benchmark_stocks = panel[panel['trade_date'] == buy_date]['stock_code'].tolist()
+            bm_rets = []
+            for stk in benchmark_stocks:
+                try:
+                    bp = float(price_table.loc[(stk, buy_date)])
+                    sp = float(price_table.loc[(stk, sell_date)])
+                    if bp <= 0 or np.isnan(bp) or np.isnan(sp):
+                        continue
+                    bm_rets.append(float(sp / bp - 1))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            benchmark_ret = float(np.mean(bm_rets)) if bm_rets else 0.0
+
+            # 扣除交易成本
+            net_portfolio_ret = portfolio_ret - cost
+
+            portfolio_records.append({
+                'signal_date': pred_date,
+                'buy_date': buy_date,
+                'sell_date': sell_date,
+                'portfolio_ret': net_portfolio_ret,
+                'benchmark_ret': benchmark_ret,
+                'excess_ret': net_portfolio_ret - benchmark_ret,
+                'n_stocks': len(stock_rets),
+                'top_stocks': ','.join(top_stocks),
             })
-        
-        df = pd.DataFrame(portfolio_rets)
-        
+
+        df = pd.DataFrame(portfolio_records)
+
         if len(df) > 0:
             # 计算累计收益
-            df['cum_portfolio'] = (1 + df['portfolio_return']).cumprod()
-            df['cum_benchmark'] = (1 + df['benchmark_return']).cumprod()
-            df['cum_excess'] = (1 + df['excess_return']).cumprod()
-            
+            df['cum_portfolio'] = (1 + df['portfolio_ret']).cumprod()
+            df['cum_benchmark'] = (1 + df['benchmark_ret']).cumprod()
+            df['cum_excess'] = (1 + df['excess_ret']).cumprod()
+
             # 打印统计
             total_ret = df['cum_portfolio'].iloc[-1] - 1
             benchmark_ret = df['cum_benchmark'].iloc[-1] - 1
             excess_ret = total_ret - benchmark_ret
-            
+
             logger.info(f"组合总收益: {total_ret*100:+.2f}%")
             logger.info(f"基准总收益: {benchmark_ret*100:+.2f}%")
             logger.info(f"超额收益:   {excess_ret*100:+.2f}%")
             logger.info(f"平均持仓:   {df['n_stocks'].mean():.1f} 只")
-        
+            logger.info(f"交易成本:   {cost*100:.2f}% (双边)")
+
         return df
     
     def analyze_factor_ic(self, panel: pd.DataFrame, feature_cols: List[str]) -> pd.DataFrame:

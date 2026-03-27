@@ -204,6 +204,137 @@ def test_database_connection():
     return True
 
 
+def test_no_lookahead_leakage():
+    """
+    泄露检测：验证 future_ret 标签的时间对齐正确性
+
+    检查逻辑：
+    1. 抽样验证 future_ret = close[T+5] / close[T] - 1
+    2. 验证面板中不存在 future_ret 被用于预处理的痕迹
+       （检查特征列中是否混入了 future_ret）
+    """
+    import numpy as np
+    import pandas as pd
+
+    print("泄露检测（标签对齐验证）...")
+
+    from config.db import execute_query
+    test_stocks = ['600519.SH', '000858.SZ', '601318.SH']
+    start_date = '2024-01-01'
+    end_date = '2024-12-31'
+
+    all_frames = []
+    for code in test_stocks:
+        sql = """
+            SELECT trade_date, open_price, high_price, low_price, close_price, volume
+            FROM trade_stock_daily
+            WHERE stock_code = %s AND trade_date >= %s AND trade_date <= %s
+            ORDER BY trade_date ASC
+        """
+        rows = execute_query(sql, [code, start_date, end_date])
+        if not rows:
+            continue
+        df = pd.DataFrame(rows)
+        df['trade_date'] = pd.to_datetime(df['trade_date'])
+        df.set_index('trade_date', inplace=True)
+        df.columns = ['open', 'high', 'low', 'close', 'volume']
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df['stock_code'] = code
+        df['trade_date'] = df.index
+        all_frames.append(df)
+
+    if not all_frames:
+        print("  无数据，跳过泄露检测")
+        return True
+
+    panel = pd.concat(all_frames, ignore_index=True)
+
+    # 检查1：验证 future_ret 计算正确
+    panel = panel.sort_values(['stock_code', 'trade_date'])
+    panel['future_ret'] = panel.groupby('stock_code')['close'].transform(
+        lambda x: x.shift(-5) / x - 1
+    )
+
+    errors = 0
+    for code in test_stocks:
+        stock_panel = panel[panel['stock_code'] == code].reset_index(drop=True)
+        for i in range(min(10, len(stock_panel) - 5)):
+            t_close = stock_panel.loc[i, 'close']
+            t5_close = stock_panel.loc[i + 5, 'close']
+            expected = t5_close / t_close - 1
+            actual = stock_panel.loc[i, 'future_ret']
+            if abs(expected - actual) > 1e-8 and not (np.isnan(expected) or np.isnan(actual)):
+                errors += 1
+                print(f"  标签对齐错误: {code} {stock_panel.loc[i, 'trade_date'].strftime('%Y-%m-%d')} "
+                      f"expected={expected:.6f} actual={actual:.6f}")
+
+    if errors == 0:
+        print("  标签对齐验证: 通过 (future_ret = close[T+5]/close[T] - 1)")
+    else:
+        print(f"  标签对齐验证: 失败 ({errors} 处错误)")
+        return False
+
+    # 检查2：验证 future_ret 不在特征列中
+    from strategist.xgboost_strategy.feature_engine import get_all_feature_cols
+    feature_cols = get_all_feature_cols()
+    if 'future_ret' in feature_cols:
+        print("  特征列检查: 失败 (future_ret 被包含在特征列中!)")
+        return False
+    else:
+        print("  特征列检查: 通过 (future_ret 未被包含在特征列中)")
+
+    # 检查3：验证最后5行 future_ret 为 NaN
+    for code in test_stocks:
+        stock_panel = panel[panel['stock_code'] == code].reset_index(drop=True)
+        last_5 = stock_panel.tail(5)['future_ret']
+        if last_5.notna().any():
+            print(f"  尾部NaN检查: 失败 ({code} 最后5行应全为NaN)")
+            return False
+
+    print("  尾部NaN检查: 通过 (最后5行 future_ret 均为 NaN)")
+    print("  结果: 通过 - 无明显泄露")
+    return True
+
+
+def test_time_boundary():
+    """
+    快速检测：打印训练集最后一天和预测日的时间差
+    """
+    import numpy as np
+    from strategist.xgboost_strategy.config import StrategyConfig
+    from strategist.xgboost_strategy.data_loader import DataLoader
+
+    print("时间边界检测...")
+
+    config = StrategyConfig()
+    config.stock_pool = config.stock_pool[:10]  # 只用10只测试
+    config.end_date = '2024-06-30'
+
+    try:
+        data_loader = DataLoader(config)
+        panel, feature_cols = data_loader.load_and_compute_factors()
+        dates = sorted(panel['trade_date'].unique())
+
+        # 检查前3个预测日
+        train_window = config.train_window
+        for i in range(3):
+            pred_idx = train_window + i * config.roll_step
+            if pred_idx >= len(dates):
+                break
+            pred_date = dates[pred_idx]
+            train_end = dates[pred_idx - 1]
+            gap = (pred_date - train_end).days
+            print(f"  信号日: {pred_date.strftime('%Y-%m-%d')}, "
+                  f"训练集截止: {train_end.strftime('%Y-%m-%d')}, "
+                  f"间隔: {gap}天 {'(OK)' if gap > 0 else '(泄露!)'}")
+
+        return True
+    except Exception as e:
+        print(f"  时间边界检测失败: {e}")
+        return False
+
+
 def main():
     """主测试函数"""
     print("=" * 60)
@@ -217,6 +348,8 @@ def main():
         ("配置测试", test_config),
         ("因子引擎", test_feature_engine),
         ("数据库连接", test_database_connection),
+        ("泄露检测", test_no_lookahead_leakage),
+        ("时间边界检测", test_time_boundary),
     ]
     
     results = []

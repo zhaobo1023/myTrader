@@ -104,59 +104,64 @@ class DataLoader:
         
         all_frames = []
         loaded = 0
-        
+
         for i, code in enumerate(stock_pool, 1):
             try:
                 df = self.load_stock_data(code, start_date, end_date)
                 if len(df) < self.config.min_bars:
                     logger.debug(f"[{i}/{len(stock_pool)}] {code}: 数据不足 ({len(df)} < {self.config.min_bars})")
                     continue
-                
-                # 计算因子
+
+                # Step 1: 只计算技术因子（不含 future_ret）
                 feat_df = self.feature_engine.calc_features(df)
-                
-                # 计算未来收益率
-                feat_df['future_ret'] = feat_df['close'].pct_change(self.config.predict_horizon).shift(-self.config.predict_horizon)
-                
+
                 feat_df['stock_code'] = code
                 feat_df['trade_date'] = feat_df.index
-                
+
                 all_frames.append(feat_df)
                 loaded += 1
-                
+
                 if loaded % 10 == 0:
                     logger.info(f"进度: {loaded}/{len(stock_pool)}")
-                
+
             except Exception as e:
                 logger.error(f"[{i}/{len(stock_pool)}] {code}: 加载失败 - {e}")
-        
+
         logger.info(f"\n成功加载: {loaded}/{len(stock_pool)} 只")
-        
+
         if loaded < 10:
             raise ValueError("有效股票不足10只，无法进行截面分析")
-        
-        # 合并数据
+
+        # Step 2: 合并数据
         panel = pd.concat(all_frames, ignore_index=True)
-        panel = panel.dropna(subset=['future_ret'])
-        
-        # 获取特征列
+
+        # 获取特征列（排除价格列和标识列）
         from .feature_engine import get_all_feature_cols
         feature_cols = get_all_feature_cols()
         feature_cols = [c for c in feature_cols if c in panel.columns]
-        
-        # 统计信息
-        dates = sorted(panel['trade_date'].unique())
-        daily_counts = panel.groupby('trade_date')['stock_code'].nunique()
-        
-        logger.info(f"\n面板大小: {len(panel):,} 行 x {len(feature_cols)} 个因子")
-        logger.info(f"交易日数: {len(dates)} ({dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')})")
-        logger.info(f"平均每日股票: {daily_counts.mean():.0f} 只")
-        logger.info(f"未来{self.config.predict_horizon}日收益率: 均值={panel['future_ret'].mean()*100:.3f}%, "
-                   f"标准差={panel['future_ret'].std()*100:.2f}%")
-        
-        # 截面预处理
+
+        # Step 3: 先做截面预处理（此时 panel 里没有 future_ret，不会污染统计量）
         logger.info("\n截面预处理...")
         panel = self.preprocessor.preprocess_cross_section(panel, feature_cols)
         logger.info("预处理完成")
-        
+
+        # Step 4: 预处理完成后，再单独计算标签（不参与标准化）
+        logger.info("计算标签（未来收益率）...")
+        panel = panel.sort_values(['stock_code', 'trade_date'])
+        panel['future_ret'] = panel.groupby('stock_code')['close'].transform(
+            lambda x: x.shift(-self.config.predict_horizon) / x - 1
+        )
+        # 最后 predict_horizon 天没有 future_ret，是 NaN，属正常
+
+        # 统计信息
+        valid_labels = panel.dropna(subset=['future_ret'])
+        dates = sorted(panel['trade_date'].unique())
+        daily_counts = panel.groupby('trade_date')['stock_code'].nunique()
+
+        logger.info(f"\n面板大小: {len(panel):,} 行 x {len(feature_cols)} 个因子")
+        logger.info(f"交易日数: {len(dates)} ({dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')})")
+        logger.info(f"平均每日股票: {daily_counts.mean():.0f} 只")
+        logger.info(f"未来{self.config.predict_horizon}日收益率: 均值={valid_labels['future_ret'].mean()*100:.3f}%, "
+                   f"标准差={valid_labels['future_ret'].std()*100:.2f}%")
+
         return panel, feature_cols

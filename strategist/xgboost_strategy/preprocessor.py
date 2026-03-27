@@ -55,7 +55,7 @@ class Preprocessor:
     def mad_zscore(self, series):
         """
         MAD 去极值 + Z-Score 标准化 (华泰标准)
-        
+
         步骤:
           1. MAD 去极值: 中位数 +/- mad_multiplier*MAD 截断
           2. 缺失值填充: 列中位数
@@ -64,24 +64,23 @@ class Preprocessor:
         # MAD 去极值
         median = series.median()
         mad = (series - median).abs().median()
-        if mad > 0:
-            upper = median + self.mad_multiplier * 1.4826 * mad
-            lower = median - self.mad_multiplier * 1.4826 * mad
-            series = series.clip(lower=lower, upper=upper)
-        
+        # 使用 1e-8 阈值避免 MAD=0 的边界情况
+        if mad < 1e-8:
+            return series - median
+        upper = median + self.mad_multiplier * 1.4826 * mad
+        lower = median - self.mad_multiplier * 1.4826 * mad
+        series = series.clip(lower=lower, upper=upper)
+
         # 填充缺失值
         fill_val = series.median()
         series = series.fillna(fill_val)
-        
+
         # Z-Score 标准化
         mean = series.mean()
         std = series.std()
-        if std > 0:
-            series = (series - mean) / std
-        else:
-            series = series - mean
-        
-        return series
+        if std < 1e-8:
+            return series - mean
+        return (series - mean) / std
     
     def preprocess_features(self, df, feature_cols=None):
         """
@@ -116,51 +115,55 @@ class Preprocessor:
     
     def preprocess_cross_section(self, all_data, feature_cols):
         """
-        截面预处理: 对同一时间截面的所有股票做去极值和标准化
-        
+        截面预处理: 逐日截面标准化，每一天只用当天的截面数据计算统计量
+        绝对不能用全局统计量
+
         参数:
             all_data: DataFrame, 必须含 'trade_date' 列和 feature_cols 中的列
             feature_cols: 特征列名列表
-        
+
         返回:
             DataFrame, 预处理后
         """
         result = all_data.copy()
-        
+
         for date, group in result.groupby('trade_date'):
             for col in feature_cols:
                 if col not in group.columns:
                     continue
                 series = group[col].copy()
-                
+
                 if self.method == 'mad':
-                    # MAD 去极值
-                    median = series.median()
-                    mad = (series - median).abs().median()
-                    if mad > 0:
-                        upper = median + self.mad_multiplier * 1.4826 * mad
-                        lower = median - self.mad_multiplier * 1.4826 * mad
-                        series = series.clip(lower=lower, upper=upper)
-                    
-                    # 填充缺失值
-                    series = series.fillna(series.median())
-                    
-                    # Z-Score 标准化
-                    mean = series.mean()
-                    std = series.std()
-                    if std > 0:
-                        series = (series - mean) / std
-                
+                    series = self.mad_zscore(series)
+
                 elif self.method == 'robust_zscore':
                     vals = series.values.astype(float)
                     series = pd.Series(
                         self.robust_zscore_norm(vals),
                         index=series.index
                     )
-                
+
                 result.loc[group.index, col] = series
-        
+
         return result
+
+    def preprocess_panel(self, df, feature_cols):
+        """
+        截面预处理的向量化版本（等价于 preprocess_cross_section，但更快）
+
+        参数:
+            df: DataFrame, 必须含 'trade_date' 列和 feature_cols 中的列
+            feature_cols: 特征列名列表
+
+        返回:
+            DataFrame, 预处理后
+        """
+        df = df.copy()
+        for col in feature_cols:
+            if col not in df.columns:
+                continue
+            df[col] = df.groupby('trade_date')[col].transform(self.mad_zscore)
+        return df
     
     def neutralize(self, factor_series, industry_dummies, mktcap_log=None):
         """

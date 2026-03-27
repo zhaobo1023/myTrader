@@ -41,29 +41,47 @@ class ICEvaluator:
         
         return ic, ric
     
-    def evaluate_predictions(self, results: List[Dict]) -> Dict:
+    def evaluate_predictions(self, results: List[Dict], panel: pd.DataFrame = None) -> Dict:
         """
         评估预测结果
-        
+
+        IC = corr(预测的未来N日收益排名, 实际未来N日收益排名)
+        两者时间对齐：都是以 pred_date 为基准，往后看 N 天
+
         参数:
-            results: 预测结果列表，每个元素为 {date, predictions, actuals, stock_codes}
-        
+            results: 预测结果列表，每个元素为 {pred_date, predictions, stock_codes}
+            panel: 面板数据，包含 future_ret（用于获取实际标签）
+
         返回:
             评估指标字典
         """
         daily_ics = []
         daily_rics = []
-        
+
         for result in results:
-            pred = result['predictions']
-            actual = result['actuals']
-            
-            valid_mask = ~np.isnan(actual)
-            if valid_mask.sum() < 5:
+            pred_date = result['pred_date']
+            predictions = result['predictions']
+            stock_codes = result['stock_codes']
+
+            # 从 panel 中获取 pred_date 当天的 future_ret（已经是 shift(-N) 的结果）
+            if panel is not None:
+                actual_series = panel[panel['trade_date'] == pred_date].set_index('stock_code')['future_ret']
+                pred_series = pd.Series(predictions, index=stock_codes)
+
+                # 对齐
+                common = pred_series.index.intersection(actual_series.index)
+                pred_aligned = pred_series[common].dropna()
+                actual_aligned = actual_series[common].dropna()
+                common2 = pred_aligned.index.intersection(actual_aligned.index)
+
+                if len(common2) < 10:
+                    continue
+
+                ic, ric = self.calc_ic(pred_aligned[common2].values, actual_aligned[common2].values)
+            else:
+                # 兼容旧接口（无 panel 时跳过）
                 continue
-            
-            ic, ric = self.calc_ic(pred[valid_mask], actual[valid_mask])
-            
+
             if not np.isnan(ic):
                 daily_ics.append(ic)
             if not np.isnan(ric):
