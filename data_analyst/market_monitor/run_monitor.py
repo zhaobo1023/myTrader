@@ -9,23 +9,75 @@ SVD 市场状态监控 - 主入口
 """
 import sys
 import os
+import types
 import argparse
 import logging
+import importlib
 from datetime import date, datetime, timedelta
 from time import time
 
 import pandas as pd
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# 支持直接运行: python data_analyst/market_monitor/run_monitor.py
+# 通过注册 dummy data_analyst 包绕过 data_analyst/__init__.py 的 xtquant 导入
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
-from .config import SVDMonitorConfig
-from .schemas import SVDRecord, MarketRegime
-from .data_builder import DataBuilder
-from .svd_engine import compute_svd, compute_variance_ratios
-from .regime_classifier import RegimeClassifier
-from .storage import SVDStorage
-from .visualizer import plot_regime_chart
-from .reporter import generate_report
+
+def _register_dummy_parent_package():
+    """注册空的 data_analyst 包到 sys.modules，防止 __init__.py 中的 xtquant 导入"""
+    if 'data_analyst' not in sys.modules:
+        dummy = types.ModuleType('data_analyst')
+        dummy.__path__ = [os.path.join(_PROJECT_ROOT, 'data_analyst')]
+        dummy.__package__ = 'data_analyst'
+        sys.modules['data_analyst'] = dummy
+    if 'data_analyst.market_monitor' not in sys.modules:
+        dummy_sub = types.ModuleType('data_analyst.market_monitor')
+        dummy_sub.__path__ = [_THIS_DIR]
+        dummy_sub.__package__ = 'data_analyst.market_monitor'
+        sys.modules['data_analyst.market_monitor'] = dummy_sub
+
+
+def _load_sibling(name):
+    """加载同目录模块，绕过 data_analyst/__init__.py"""
+    import importlib.util
+    full_name = f"data_analyst.market_monitor.{name}"
+    filepath = os.path.join(_THIS_DIR, f"{name}.py")
+    spec = importlib.util.spec_from_file_location(full_name, filepath)
+    mod = importlib.util.module_from_spec(spec)
+    mod.__package__ = "data_analyst.market_monitor"  # 使相对导入生效
+    # 将模块注册到 sys.modules 以支持相对导入
+    sys.modules[full_name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# 注册 dummy 包并加载同包模块
+_register_dummy_parent_package()
+
+
+# 加载同包模块
+_config_mod = _load_sibling("config")
+_schemas_mod = _load_sibling("schemas")
+_svd_engine_mod = _load_sibling("svd_engine")
+_regime_classifier_mod = _load_sibling("regime_classifier")
+_storage_mod = _load_sibling("storage")
+_visualizer_mod = _load_sibling("visualizer")
+_reporter_mod = _load_sibling("reporter")
+_data_builder_mod = _load_sibling("data_builder")
+
+SVDMonitorConfig = _config_mod.SVDMonitorConfig
+SVDRecord = _schemas_mod.SVDRecord
+MarketRegime = _schemas_mod.MarketRegime
+DataBuilder = _data_builder_mod.DataBuilder
+compute_svd = _svd_engine_mod.compute_svd
+compute_variance_ratios = _svd_engine_mod.compute_variance_ratios
+RegimeClassifier = _regime_classifier_mod.RegimeClassifier
+SVDStorage = _storage_mod.SVDStorage
+plot_regime_chart = _visualizer_mod.plot_regime_chart
+generate_report = _reporter_mod.generate_report
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,7 +97,7 @@ class SVDMonitor:
 
     def run(self, start_date: str, end_date: str = None,
             save_db: bool = True, generate_chart: bool = True,
-            generate_report: bool = True) -> dict:
+            do_generate_report: bool = True) -> dict:
         """
         运行 SVD 市场监控
 
@@ -54,7 +106,7 @@ class SVDMonitor:
             end_date: 结束日期 (YYYY-MM-DD), 默认为今天
             save_db: 是否保存到数据库
             generate_chart: 是否生成图表
-            generate_report: 是否生成报告
+            do_generate_report: 是否生成报告
 
         Returns:
             dict: {records, regimes, chart_path, report_path}
@@ -163,7 +215,7 @@ class SVDMonitor:
                 output_dir=self.config.output_dir
             )
 
-        if generate_report and latest_regime:
+        if do_generate_report and latest_regime:
             report_path = generate_report(
                 latest_regime, results_df, chart_path,
                 output_dir=self.config.output_dir
@@ -199,12 +251,16 @@ def main():
     parser.add_argument('--no-chart', action='store_true', help='不生成图表')
     parser.add_argument('--industry-neutral', action='store_true',
                         help='开启行业中性化')
+    parser.add_argument('--min-stocks', type=int, default=None,
+                        help='最小有效股票数 (覆盖默认值)')
 
     args = parser.parse_args()
 
     config = SVDMonitorConfig()
     if args.industry_neutral:
         config.industry_neutral = True
+    if args.min_stocks is not None:
+        config.min_stock_count = args.min_stocks
 
     monitor = SVDMonitor(config)
 

@@ -94,8 +94,10 @@ def generate_report(regime: MarketRegime, results_df: pd.DataFrame,
         lines.append("| 日期 | F1 占比 | Top3 占比 | 重构误差 | 股票数 |")
         lines.append("|------|---------|----------|---------|--------|")
         for _, row in recent.iterrows():
+            d = row['calc_date']
+            date_str = d.strftime('%Y-%m-%d') if hasattr(d, 'strftime') else str(d)
             lines.append(
-                f"| {row['calc_date']} | {row['top1_var_ratio']:.1%} | "
+                f"| {date_str} | {row['top1_var_ratio']:.1%} | "
                 f"{row['top3_var_ratio']:.1%} | {row['reconstruction_error']:.1%} | "
                 f"{row['stock_count']} |"
             )
