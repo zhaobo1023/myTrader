@@ -191,6 +191,15 @@ def trigger_factor_calculation():
         return False
 
 
+def run_svd_monitor():
+    """SVD 市场状态监控任务"""
+    try:
+        from data_analyst.market_monitor.run_monitor import run_daily_monitor
+        run_daily_monitor()
+    except Exception as e:
+        logger.error(f"SVD 市场监控失败: {e}")
+
+
 # ============================================================
 # 初始化调度器
 # ============================================================
@@ -208,6 +217,14 @@ def init_scheduler():
         hour=18,
         minute=0,
         job_id='daily_data_check'
+    )
+
+    # 添加每日 18:30 SVD 市场状态监控
+    scheduler.add_daily_job(
+        func=run_svd_monitor,
+        hour=18,
+        minute=30,
+        job_id='daily_svd_monitor'
     )
 
     logger.info("定时任务初始化完成")
