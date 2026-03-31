@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from strategist.doctor_tao.data_fetcher import DoctorTaoDataFetcher
 from strategist.doctor_tao.indicators import IndicatorCalculator
+from config.db import execute_query
 
 
 @dataclass
@@ -218,6 +219,26 @@ class SignalScreener:
 
         return filtered
 
+    def _fetch_stock_names(self, codes: List[str]) -> Dict[str, str]:
+        """通过 akshare 查询股票名称"""
+        if not codes:
+            return {}
+        try:
+            import akshare as ak
+            df = ak.stock_info_a_code_name()
+            # code 列是纯数字（如 000593），需要拼后缀
+            code_name_map = dict(zip(df['code'], df['name']))
+            result = {}
+            for code in codes:
+                pure_code = code.split('.')[0]
+                result[code] = code_name_map.get(pure_code, '')
+            found = sum(1 for v in result.values() if v)
+            print(f"  查询股票名称: {found}/{len(codes)} 只匹配")
+            return result
+        except Exception as e:
+            print(f"  查询股票名称失败: {e}")
+            return {}
+
     def check_market_condition(self) -> Dict[str, any]:
         """
         大盘条件判断（文档第3.4节）
@@ -396,6 +417,17 @@ class SignalScreener:
         else:
             result = pd.DataFrame()
 
+        # 9.5 查询股票名称
+        if len(result) > 0:
+            name_map = self._fetch_stock_names(result['stock_code'].tolist())
+            result['stock_name'] = result['stock_code'].map(name_map)
+            # 把 stock_name 放在 stock_code 后面
+            cols = list(result.columns)
+            cols.remove('stock_name')
+            idx = cols.index('stock_code') + 1
+            cols.insert(idx, 'stock_name')
+            result = result[cols]
+
         # 10. 输出 CSV
         if output_csv and len(result) > 0:
             output_dir = os.path.join(os.path.dirname(__file__), 'output')
@@ -428,6 +460,6 @@ if __name__ == '__main__':
 
     if len(result) > 0:
         print("\n前10只股票:")
-        cols = ['stock_code', 'trade_date', 'signal_type', 'rps', 'close', 'ma20', 'ma250', 'volume_ratio']
+        cols = ['stock_code', 'stock_name', 'trade_date', 'signal_type', 'rps', 'close', 'ma20', 'ma250', 'volume_ratio']
         available_cols = [c for c in cols if c in result.columns]
         print(result[available_cols].head(10))
