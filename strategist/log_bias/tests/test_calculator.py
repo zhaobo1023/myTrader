@@ -43,9 +43,16 @@ class TestLogBiasCalculator:
         assert not result['log_bias'].isna().all()
 
     def test_output_columns(self):
-        """output should have exact columns"""
+        """output should contain log_bias columns"""
         from strategist.log_bias.calculator import calculate_log_bias
         df = pd.DataFrame({'close': [10.0] * 30})
         result = calculate_log_bias(df)
-        expected_cols = ['close', 'ln_close', 'ema_ln', 'log_bias']
-        assert list(result.columns) == expected_cols
+        for col in ['close', 'ln_close', 'ema_ln', 'log_bias']:
+            assert col in result.columns
+
+    def test_preserves_original_columns(self):
+        """output should preserve original columns like trade_date"""
+        from strategist.log_bias.calculator import calculate_log_bias
+        df = pd.DataFrame({'trade_date': pd.date_range('2025-01-01', periods=30, freq='B'), 'close': [10.0] * 30})
+        result = calculate_log_bias(df)
+        assert 'trade_date' in result.columns

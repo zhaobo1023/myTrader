@@ -76,8 +76,6 @@ def run_daily(config: LogBiasConfig, target_date: str = None):
                 continue
 
             result = calculate_log_bias(df, window=config.ema_window)
-            # merge trade_date back (calculator drops it)
-            result['trade_date'] = df['trade_date'].values
             signals = detector.detect_all(result)
 
             # save to db

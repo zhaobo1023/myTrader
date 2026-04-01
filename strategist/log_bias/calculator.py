@@ -16,7 +16,7 @@ def calculate_log_bias(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
     Returns:
         DataFrame with columns: [close, ln_close, ema_ln, log_bias]
     """
-    out = df[['close']].copy()
+    out = df.copy()
     out['ln_close'] = np.log(out['close'])
     out['ema_ln'] = out['ln_close'].ewm(span=window, adjust=False).mean()
     out['log_bias'] = (out['ln_close'] - out['ema_ln']) * 100
