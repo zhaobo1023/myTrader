@@ -85,7 +85,7 @@ class LogBiasStorage:
 
     def save(self, ts_code: str, df: pd.DataFrame) -> int:
         """
-        save DataFrame to database
+        save DataFrame to database using batch executemany
 
         Args:
             ts_code: ETF code
@@ -98,41 +98,44 @@ class LogBiasStorage:
         if df.empty:
             return 0
 
-        count = 0
-        conn = get_connection(self.env)
-        try:
-            cursor = conn.cursor()
-            for _, row in df.iterrows():
-                trade_date = row['trade_date']
-                if hasattr(trade_date, 'strftime'):
-                    trade_date = trade_date.strftime('%Y-%m-%d')
-                else:
-                    trade_date = str(trade_date)
+        def _format_date(val):
+            if pd.isna(val):
+                return None
+            if hasattr(val, 'strftime'):
+                return val.strftime('%Y-%m-%d')
+            return str(val)
 
-                params = [
-                    ts_code,
-                    trade_date,
-                    float(row['close']) if pd.notna(row['close']) else None,
-                    float(row['ln_close']) if pd.notna(row['ln_close']) else None,
-                    float(row['ema_ln']) if pd.notna(row['ema_ln']) else None,
-                    float(row['log_bias']) if pd.notna(row['log_bias']) else None,
-                    row.get('signal_state', ''),
-                    row.get('prev_state', ''),
-                    row.get('last_breakout_date'),
-                    row.get('last_stall_date'),
-                ]
-                cursor.execute(UPSERT_SQL, params)
-                count += 1
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise
-        finally:
-            cursor.close()
-            conn.close()
+        batch = []
+        for _, row in df.iterrows():
+            batch.append([
+                ts_code,
+                _format_date(row['trade_date']),
+                float(row['close']) if pd.notna(row['close']) else None,
+                float(row['ln_close']) if pd.notna(row['ln_close']) else None,
+                float(row['ema_ln']) if pd.notna(row['ema_ln']) else None,
+                float(row['log_bias']) if pd.notna(row['log_bias']) else None,
+                row.get('signal_state', ''),
+                row.get('prev_state', ''),
+                _format_date(row.get('last_breakout_date')),
+                _format_date(row.get('last_stall_date')),
+            ])
 
-        logger.info(f"Saved {count} rows for {ts_code}")
-        return count
+        def _do():
+            conn = get_connection(self.env)
+            try:
+                cursor = conn.cursor()
+                cursor.executemany(UPSERT_SQL, batch)
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+                conn.close()
+
+        _retry(_do, f"save {len(batch)} rows for {ts_code}")
+        logger.info(f"Saved {len(batch)} rows for {ts_code}")
+        return len(batch)
 
     def get_latest_date(self, ts_code: str) -> Optional[str]:
         """get latest trade_date for a given ts_code"""
