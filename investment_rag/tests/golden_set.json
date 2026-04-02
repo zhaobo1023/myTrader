@@ -1,0 +1,72 @@
+[
+  {
+    "id": "q1",
+    "query": "化工新材料行业的发展趋势和投资机会",
+    "collection": "reports",
+    "expected_doc_ids": ["化工新材料调研.pdf_p1_c0"],
+    "expected_sources": ["化工新材料调研.pdf"]
+  },
+  {
+    "id": "q2",
+    "query": "煤炭行业的产能分析和价格走势",
+    "collection": "reports",
+    "expected_sources": ["10家煤企的对比分析-gemini.md", "coal_decision_matrix_20260327.md"],
+    "min_recall_source": 1
+  },
+  {
+    "id": "q3",
+    "query": "核电行业2025年的投资前景",
+    "collection": "reports",
+    "expected_sources": ["中国核电产业2025深度研究报告.md"],
+    "min_recall_source": 1
+  },
+  {
+    "id": "q4",
+    "query": "量子计算行业的投资价值分析",
+    "collection": "reports",
+    "expected_sources": ["A股与H股量子计算行业深度投资研究报告.md"],
+    "min_recall_source": 1
+  },
+  {
+    "id": "q5",
+    "query": "化工行业的周期性特征和投资策略",
+    "collection": "reports",
+    "expected_sources": ["化工行业深度策略报告"],
+    "min_recall_source": 1
+  },
+  {
+    "id": "q6",
+    "query": "手术机器人行业2026年市场分析",
+    "collection": "reports",
+    "expected_sources": ["2026年中国手术机器人行业深度研究报告"],
+    "min_recall_source": 1
+  },
+  {
+    "id": "q7",
+    "query": "光伏行业龙头企业业绩反转分析",
+    "collection": "reports",
+    "expected_sources": ["战略重构与价值回归"],
+    "min_recall_source": 1
+  },
+  {
+    "id": "q8",
+    "query": "有色金属大宗商品策略报告",
+    "collection": "reports",
+    "expected_sources": ["2026年第一季度大宗商品深度策略报告"],
+    "min_recall_source": 1
+  },
+  {
+    "id": "q9",
+    "query": "航运造船行业深度研究",
+    "collection": "reports",
+    "expected_sources": ["航运&造船.md"],
+    "min_recall_source": 1
+  },
+  {
+    "id": "q10",
+    "query": "基建行业2026年投资分析",
+    "collection": "reports",
+    "expected_sources": ["2026年基建分析.md"],
+    "min_recall_source": 1
+  }
+]
