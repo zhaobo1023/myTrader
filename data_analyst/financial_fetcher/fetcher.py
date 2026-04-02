@@ -184,7 +184,11 @@ def fetch_bank_indicators(stock_code: str, stock_name: str) -> List[dict]:
 
 
 def fetch_dividend(stock_code: str, stock_name: str) -> List[dict]:
-    """dividend history from akshare"""
+    """dividend history from akshare
+
+    akshare columns: ['公告日期', '送股', '转增', '派息', '进度', '除权除息日', '股权登记日', '红股上市日']
+    Only keep records with a valid ex_date (skip '预案' stage entries).
+    """
     records = []
     try:
         df = ak.stock_history_dividend_detail(symbol=stock_code, indicator="分红")
@@ -192,23 +196,30 @@ def fetch_dividend(stock_code: str, stock_name: str) -> List[dict]:
             return records
 
         for _, row in df.iterrows():
-            ex_date_raw = row.get("除权除息日") or row.get("ex_date", "")
+            ex_date_raw = row.get("除权除息日")
+            # skip NaT / None (preliminary/plan entries)
+            if pd.isna(ex_date_raw) or not ex_date_raw:
+                continue
             try:
-                ex_date = datetime.strptime(str(ex_date_raw)[:10], "%Y-%m-%d").date()
+                ex_date = pd.to_datetime(ex_date_raw).date()
             except Exception:
-                ex_date = None
+                continue
 
-            cash_div = (
-                safe_float(row.get("派息(税前)(元)"))
-                or safe_float(row.get("每股股利(税前)"))
-                or safe_float(row.get("现金分红(元/股)"))
-            )
+            cash_div = safe_float(row.get("派息"))
+
+            record_date_raw = row.get("股权登记日")
+            record_date = None
+            if not pd.isna(record_date_raw) and record_date_raw:
+                try:
+                    record_date = pd.to_datetime(record_date_raw).date()
+                except Exception:
+                    pass
 
             records.append({
                 "stock_code": stock_code,
                 "stock_name": stock_name,
                 "ex_date": ex_date,
-                "record_date": None,
+                "record_date": record_date,
                 "cash_div": cash_div,
                 "div_total": None,
                 "div_ratio": None,

@@ -17,6 +17,16 @@ from .storage import FinancialStorage
 logger = logging.getLogger(__name__)
 
 
+def _fmt(val, decimals=2):
+    """format number for Markdown table"""
+    if val is None:
+        return "-"
+    try:
+        return f"{float(val):.{decimals}f}"
+    except (ValueError, TypeError):
+        return str(val)
+
+
 def generate_markdown(stock_code: str, stock_name: str,
                       storage: FinancialStorage,
                       output_dir: str) -> Optional[str]:
@@ -51,8 +61,8 @@ def generate_markdown(stock_code: str, stock_name: str,
         for r in rows:
             lines.append(
                 f"| {r['report_date']} | {r['report_type'] or '-'} "
-                f"| {r['revenue'] or '-'} | {r['net_profit'] or '-'} "
-                f"| {r['net_profit_yoy'] or '-'} | {r['eps'] or '-'} | {r['roe'] or '-'} |"
+                f"| {_fmt(r['revenue'])} | {_fmt(r['net_profit'])} "
+                f"| {_fmt(r['net_profit_yoy'])} | {_fmt(r['eps'])} | {_fmt(r['roe'])} |"
             )
     lines.append("")
 
@@ -72,10 +82,10 @@ def generate_markdown(stock_code: str, stock_name: str,
         lines.append("|--------|------|---------|----------|------|--------|------|")
         for r in rows:
             lines.append(
-                f"| {r['report_date']} | {r['npl_ratio'] or '-'} "
-                f"| {r['provision_coverage'] or '-'} | {r['provision_ratio'] or '-'} "
-                f"| {r['cap_adequacy_ratio'] or '-'} | {r['tier1_ratio'] or '-'} "
-                f"| {r['nim'] or '-'} |"
+                f"| {r['report_date']} | {_fmt(r['npl_ratio'])} "
+                f"| {_fmt(r['provision_coverage'])} | {_fmt(r['provision_ratio'])} "
+                f"| {_fmt(r['cap_adequacy_ratio'])} | {_fmt(r['tier1_ratio'])} "
+                f"| {_fmt(r['nim'])} |"
             )
     lines.append("")
 
@@ -99,8 +109,8 @@ def generate_markdown(stock_code: str, stock_name: str,
                 continue
             direction = "[UP] conservative" if r["provision_adj"] > 0 else "[DOWN] releasing"
             lines.append(
-                f"| {r['report_date']} | {r['provision_adj']} "
-                f"| {r['profit_adj_est']} | {direction} |"
+                f"| {r['report_date']} | {_fmt(r['provision_adj'], 4)} "
+                f"| {_fmt(r['profit_adj_est'], 4)} | {direction} |"
             )
     lines.append("")
 
@@ -115,12 +125,12 @@ def generate_markdown(stock_code: str, stock_name: str,
     """, (stock_code,))
 
     if rows:
-        lines.append("| Ex-Date | Per Share(yi,pre-tax) | Total(yi) | Payout% |")
+        lines.append("| Ex-Date | Per Share(yuan,pre-tax) | Total(yi) | Payout% |")
         lines.append("|--------|----------------------|----------|--------|")
         for r in rows:
             lines.append(
-                f"| {r['ex_date'] or '-'} | {r['cash_div'] or '-'} "
-                f"| {r['div_total'] or '-'} | {r['div_ratio'] or '-'} |"
+                f"| {r['ex_date'] or '-'} | {_fmt(r['cash_div'])} "
+                f"| {_fmt(r['div_total'])} | {_fmt(r['div_ratio'])} |"
             )
     lines.append("")
 
