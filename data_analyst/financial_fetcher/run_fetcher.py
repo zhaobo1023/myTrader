@@ -64,7 +64,8 @@ def main():
     parser.add_argument('--env', type=str, default='online', choices=['local', 'online'])
     parser.add_argument('--output', type=str, help='Output dir for Markdown')
     parser.add_argument('--download-pdf', action='store_true', help='Download PDF annual reports')
-    parser.add_argument('--ingest-rag', action='store_true', help='Ingest Markdown to ChromaDB')
+    parser.add_argument('--ingest-rag', action='store_true', help='Ingest Markdown + PDF text to ChromaDB')
+    parser.add_argument('--ingest-pdf', action='store_true', help='Ingest PDF annual reports to ChromaDB (extract text first)')
     parser.add_argument('--no-db', action='store_true', help='Skip database writes')
 
     args = parser.parse_args()
@@ -98,9 +99,53 @@ def main():
             logger.info(f"PDF downloaded: {len(paths)}")
 
         # 4. RAG ingest
-        if args.ingest_rag:
-            count = ingest_markdown_files(config.output_dir)
-            logger.info(f"RAG ingested: {count} chunks")
+        if args.ingest_rag or args.ingest_pdf:
+            from investment_rag.embeddings.embed_model import EmbeddingClient
+            from investment_rag.store.chroma_client import ChromaClient
+            ec = EmbeddingClient()
+            cc = ChromaClient()
+            collection_name = "financials"
+            total = 0
+
+            if args.ingest_rag:
+                count = ingest_markdown_files(
+                    config.output_dir, collection_name, ec, cc,
+                )
+                total += count
+                logger.info(f"Markdown RAG: {count} chunks")
+
+            if args.ingest_pdf:
+                import re as _re
+                pdf_root = "/Users/zhaobo/Documents/PDF资料/投资研究/公司研究/annual_reports"
+                pdf_dir = config.pdf_dir if hasattr(config, 'pdf_dir') else pdf_root
+                for code_dir in sorted(os.listdir(pdf_dir)):
+                    code_path = os.path.join(pdf_dir, code_dir)
+                    if not os.path.isdir(code_path):
+                        continue
+                    for fname in sorted(os.listdir(code_path)):
+                        if not fname.endswith(".txt"):
+                            continue
+                        # Guess stock info from filename
+                        m = _re.match(r'(.+?)_(\d{6})_(\d{4})_', fname)
+                        if not m:
+                            continue
+                        stock_name = m.group(1)
+                        stock_code = m.group(2)
+                        report_year = m.group(3)
+                        txt_path = os.path.join(code_path, fname)
+                        n = rag_mod.ingest_pdf_text(
+                            pdf_path=txt_path,
+                            stock_code=stock_code,
+                            stock_name=stock_name,
+                            report_year=report_year,
+                            collection_name=collection_name,
+                            embed_client=ec,
+                            chroma_client=cc,
+                        )
+                        total += n
+                        logger.info(f"PDF RAG: {stock_name}({stock_code}) {report_year} -> {n} chunks")
+
+            logger.info(f"RAG total: {total} chunks ingested into '{collection_name}'")
 
         logger.info("Done")
 

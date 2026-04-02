@@ -28,6 +28,44 @@ _DEFAULT_CHUNK_SIZE = 800
 _DEFAULT_CHUNK_OVERLAP = 150
 
 
+def _split_plain_text(
+    text: str,
+    chunk_size: int = _DEFAULT_CHUNK_SIZE,
+    chunk_overlap: int = _DEFAULT_CHUNK_OVERLAP,
+) -> List[str]:
+    """Split plain text (no markdown headings) by paragraphs with sliding window.
+
+    Used for PDF-extracted annual report text that has no ## headings.
+    """
+    # Split on double newlines (paragraph boundaries) or page markers
+    # Remove page markers first
+    text = re.sub(r'<!-- page \d+ -->', '', text)
+    paragraphs = re.split(r'\n\n+', text)
+    paragraphs = [p.strip() for p in paragraphs if p.strip()]
+
+    chunks: List[str] = []
+    window: List[str] = []
+    window_len = 0
+
+    for para in paragraphs:
+        para_len = len(para)
+        if window and window_len + para_len > chunk_size:
+            chunk = "\n\n".join(window)
+            chunks.append(chunk)
+            # Keep overlap
+            while window and sum(len(p) for p in window) > chunk_overlap:
+                removed = window.pop(0)
+                window_len -= len(removed)
+        window.append(para)
+        window_len += para_len
+
+    if window:
+        chunk = "\n\n".join(window)
+        chunks.append(chunk)
+
+    return chunks
+
+
 def _split_markdown(
     text: str,
     chunk_size: int = _DEFAULT_CHUNK_SIZE,
@@ -317,7 +355,7 @@ def ingest_pdf_text(
         )
         return 0
 
-    chunks = _split_markdown(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    chunks = _split_plain_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
     if not chunks:
         return 0

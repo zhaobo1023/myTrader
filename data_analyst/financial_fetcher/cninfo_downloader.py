@@ -18,29 +18,13 @@ logger = logging.getLogger(__name__)
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/122.0.0.0 Safari/537.36",
-    "Referer": "http://www.cninfo.com.cn/",
+                  "Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Referer": "https://www.cninfo.com.cn/new/commonUrl?url=disclosure/list/notice",
+    "Origin": "https://www.cninfo.com.cn",
 }
 
-PDF_DIR = Path("output/annual_reports")
-
-# 公告类型代码（cninfo 内部分类）
-CATEGORY_MAP = {
-    "年报":   "category_ndbg_szsh",
-    "半年报": "category_bndbg_szsh",
-    "一季报": "category_yjdbg_szsh",
-    "三季报": "category_sjdbg_szsh",
-}
-
-# 股票代码 -> 交易所标识映射
-def get_market(stock_code: str) -> str:
-    """沪市 sh，深市 sz，北交所 bj"""
-    if stock_code.startswith(("6", "9")):
-        return "sh"
-    elif stock_code.startswith(("0", "2", "3")):
-        return "sz"
-    else:
-        return "bj"
+PDF_DIR = Path("/Users/zhaobo/Documents/PDF资料/投资研究/公司研究/annual_reports")
 
 
 def search_announcements(stock_code: str, stock_name: str,
@@ -48,30 +32,35 @@ def search_announcements(stock_code: str, stock_name: str,
                          start_date: str = "2020-01-01",
                          end_date: str = None) -> list[dict]:
     """
-    搜索 cninfo 公告列表
-    返回：[{title, date, url, size}, ...]
+    Search cninfo announcements via fulltextSearch API.
+
+    The old hisAnnouncement/query endpoint stopped returning results.
+    The new fulltextSearch/full endpoint works as of 2026-04.
+
+    Returns: [{title, date, url, size_kb, code, name, ann_type}, ...]
     """
     if end_date is None:
         end_date = datetime.now().strftime("%Y-%m-%d")
 
-    market = get_market(stock_code)
-    category = CATEGORY_MAP.get(ann_type, "category_ndbg_szsh")
+    # Build search keywords based on report type
+    type_keywords = {
+        "年报": "年度报告",
+        "半年报": "半年度报告",
+        "一季报": "第一季度报告",
+        "三季报": "第三季度报告",
+    }
+    keyword = type_keywords.get(ann_type, ann_type)
 
-    url = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
+    url = "https://www.cninfo.com.cn/new/fulltextSearch/full"
     payload = {
-        "stock":       f"{stock_code},{market}",
-        "tabName":     "fulltext",
-        "pageSize":    "30",
-        "pageNum":     "1",
-        "column":      market,
-        "category":    category,
-        "plate":       market,
-        "seDate":      f"{start_date}~{end_date}",
-        "searchkey":   "",
-        "secid":       "",
-        "sortName":    "",
-        "sortType":    "",
-        "isHLtitle":   "true",
+        "searchkey": f"{stock_name} {keyword}",
+        "sdate": start_date,
+        "edate": end_date,
+        "isfulltext": "false",
+        "sortName": "pubdate",
+        "sortType": "desc",
+        "pageNum": "1",
+        "pageSize": "30",
     }
 
     results = []
@@ -82,8 +71,15 @@ def search_announcements(stock_code: str, stock_name: str,
 
         announcements = data.get("announcements") or []
         for ann in announcements:
+            # Filter by stock code
+            if ann.get("secCode") != stock_code:
+                continue
+
             title = ann.get("announcementTitle", "")
-            # 过滤：只要正式年报，排除摘要、补充、英文版
+            # Remove HTML highlight tags
+            title = title.replace("<em>", "").replace("</em>", "")
+
+            # Filter: only full reports, exclude summary/supplement/English
             if any(kw in title for kw in ["摘要", "英文", "补充", "更正", "说明"]):
                 continue
             if ann_type == "年报" and "年度报告" not in title:
@@ -93,18 +89,28 @@ def search_announcements(stock_code: str, stock_name: str,
             if not adjunct_url:
                 continue
 
+            # Parse date from millisecond timestamp
+            ann_time = ann.get("announcementTime", 0)
+            if ann_time:
+                date_str = datetime.fromtimestamp(
+                    ann_time / 1000
+                ).strftime("%Y-%m-%d")
+            else:
+                date_str = ""
+
             results.append({
                 "title":    title,
-                "date":     ann.get("announcementTime", "")[:10],
+                "date":     date_str,
                 "url":      f"http://static.cninfo.com.cn/{adjunct_url}",
+                "size_kb":  ann.get("adjunctSize", 0),
                 "code":     stock_code,
                 "name":     stock_name,
                 "ann_type": ann_type,
             })
 
-        logger.info(f"[{stock_code}] {ann_type} 搜索到 {len(results)} 份")
+        logger.info(f"[{stock_code}] {ann_type} search: {len(results)} results")
     except Exception as e:
-        logger.error(f"[{stock_code}] 搜索失败: {e}")
+        logger.error(f"[{stock_code}] search failed: {e}")
 
     return results
 
