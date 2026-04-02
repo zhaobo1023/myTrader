@@ -335,6 +335,65 @@ def test_time_boundary():
         return False
 
 
+def test_reverse_label():
+    """
+    反向标签测试：用过去5日收益率替代未来5日收益率，验证无残留泄露
+
+    如果系统干净，用过去收益做标签时 IC 应接近 0（±0.02）。
+    如果 IC 仍然显著 > 0.03，说明模型可能在使用泄露信号。
+    """
+    import numpy as np
+    from strategist.xgboost_strategy.config import StrategyConfig
+    from strategist.xgboost_strategy.data_loader import DataLoader
+    from strategist.xgboost_strategy.backtest import XGBoostBacktest
+
+    print("反向标签测试...")
+
+    config = StrategyConfig()
+    config.stock_pool = config.stock_pool[:20]
+    config.end_date = '2024-06-30'
+
+    try:
+        data_loader = DataLoader(config)
+        panel, feature_cols = data_loader.load_and_compute_factors()
+
+        # 将 future_ret 替换为过去5日收益率（反向标签）
+        panel = panel.sort_values(['stock_code', 'trade_date'])
+        panel['future_ret'] = panel.groupby('stock_code')['close'].transform(
+            lambda x: x / x.shift(5) - 1  # 过去5日，非未来
+        )
+
+        backtest = XGBoostBacktest(config)
+        result = backtest.run_backtest(panel, feature_cols)
+
+        if not result or 'metrics' not in result:
+            print("  反向标签测试: 无法运行")
+            return False
+
+        m = result['metrics']
+        ic = m['IC']
+        rank_ic = m['RankIC']
+
+        print(f"  反向标签 IC:    {ic:.4f}")
+        print(f"  反向标签 RankIC: {rank_ic:.4f}")
+
+        if abs(ic) < 0.02 and abs(rank_ic) < 0.02:
+            print("  结果: 通过 - 反向标签 IC 接近 0，系统无残留泄露")
+            return True
+        elif abs(ic) < 0.04:
+            print("  结果: 边界 - 反向标签 IC 偏低但非零，可能存在轻微自相关")
+            return True
+        else:
+            print(f"  结果: 失败 - 反向标签 IC={ic:.4f} 偏高，可能存在残留泄露")
+            return False
+
+    except Exception as e:
+        print(f"  反向标签测试失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def main():
     """主测试函数"""
     print("=" * 60)
@@ -350,6 +409,7 @@ def main():
         ("数据库连接", test_database_connection),
         ("泄露检测", test_no_lookahead_leakage),
         ("时间边界检测", test_time_boundary),
+        ("反向标签测试", test_reverse_label),
     ]
     
     results = []

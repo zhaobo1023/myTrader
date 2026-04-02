@@ -183,7 +183,17 @@ class ICEvaluator:
         results_df = pd.DataFrame(results)
         results_df['abs_ICIR'] = results_df['ICIR'].abs()
         results_df = results_df.sort_values('abs_ICIR', ascending=False)
-        
+
+        # RankIC 方向一致性诊断
+        if len(results_df) > 5:
+            ic_ric_corr = results_df['IC'].corr(results_df['RankIC'])
+            if ic_ric_corr < 0.3:
+                logger.warning(
+                    f"IC 与 RankIC 方向不一致 (corr={ic_ric_corr:.3f})，"
+                    f"可能存在异常值影响 Pearson IC。"
+                    f"建议检查因子分布是否有极端值。"
+                )
+
         logger.info(f"单因子 IC 分析完成: {len(results_df)} 个有效因子")
         
         return results_df

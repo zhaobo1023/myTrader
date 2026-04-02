@@ -10,6 +10,7 @@ import sys
 import os
 import shutil
 import logging
+import pandas as pd
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
@@ -52,6 +53,36 @@ def load_index_constituents(index_code):
         else:
             stock_codes.append(f'{code_str}.SZ')
     return stock_codes
+
+
+def load_index_daily(index_code, start_date, end_date):
+    """
+    通过 AKShare 获取指数日线行情，返回日收益率 Series
+
+    参数:
+        index_code: 指数代码 (如 '000300')
+        start_date: 开始日期 (如 '2023-01-01')
+        end_date: 结束日期 (如 '2025-12-31')
+
+    返回:
+        pd.Series, index=Timestamp(交易日), values=日收益率(小数)
+    """
+    import akshare as ak
+
+    start_fmt = start_date.replace('-', '')
+    end_fmt = end_date.replace('-', '')
+
+    df = ak.index_zh_a_hist(
+        symbol=index_code, period='daily',
+        start_date=start_fmt, end_date=end_fmt
+    )
+
+    df['日期'] = pd.to_datetime(df['日期'])
+    df = df.set_index('日期')
+    # '涨跌幅' 列是百分比，转为小数
+    daily_ret = df['涨跌幅'] / 100.0
+
+    return daily_ret
 
 
 def organize_old_output():
@@ -129,11 +160,20 @@ def run_single_index(index_name, index_code, run_date=None):
         print(f"  数据加载失败: {e}")
         return None, None
 
-    # 4. 运行回测
-    print(f"\n[3/5] 运行回测...")
+    # 4. 获取指数基准收益
+    print(f"\n[3/5] 获取 {index_name} 指数基准...")
+    try:
+        benchmark_ret_series = load_index_daily(index_code, config.start_date, config.end_date)
+        print(f"  基准数据: {len(benchmark_ret_series)} 个交易日")
+    except Exception as e:
+        print(f"  获取基准失败: {e}，将使用全市场等权")
+        benchmark_ret_series = None
+
+    # 5. 运行回测
+    print(f"\n[4/5] 运行回测...")
     backtest = XGBoostBacktest(config)
     try:
-        result = backtest.run_backtest(panel, feature_cols)
+        result = backtest.run_backtest(panel, feature_cols, benchmark_ret_series)
     except Exception as e:
         print(f"  回测失败: {e}")
         import traceback
@@ -147,8 +187,8 @@ def run_single_index(index_name, index_code, run_date=None):
     metrics = result['metrics']
     portfolio_returns = result['portfolio_returns']
 
-    # 5. 单因子 IC 分析
-    print(f"\n[4/5] 单因子 IC 分析...")
+    # 6. 单因子 IC 分析
+    print(f"\n[5/6] 单因子 IC 分析...")
     factor_ic_df = backtest.analyze_factor_ic(panel, feature_cols)
 
     if not factor_ic_df.empty:
@@ -159,8 +199,8 @@ def run_single_index(index_name, index_code, run_date=None):
             print(f"  {row['factor']:<28} {row['IC']:>8.4f} {row['ICIR']:>8.4f} "
                   f"{row['RankIC']:>8.4f} {row['RankICIR']:>8.4f}")
 
-    # 6. 保存结果
-    print(f"\n[5/5] 保存结果到 {output_dir}...")
+    # 7. 保存结果
+    print(f"\n[6/6] 保存结果到 {output_dir}...")
 
     # CSV
     result['signals'].to_csv(os.path.join(output_dir, 'signals.csv'), index=False, encoding='utf-8-sig')
@@ -185,7 +225,7 @@ def run_single_index(index_name, index_code, run_date=None):
     print(f"  IC={metrics['IC']:.4f}  ICIR={metrics['ICIR']:.4f}  "
           f"RankIC={metrics['RankIC']:.4f}  RankICIR={metrics['RankICIR']:.4f}")
 
-    return metrics, report_path
+    return metrics, report_path, len(stock_pool)
 
 
 def generate_report(index_name, index_code, config, metrics, portfolio_returns, factor_ic_df, report_path):
@@ -206,7 +246,8 @@ def generate_report(index_name, index_code, config, metrics, portfolio_returns, 
         f.write(f"- **训练窗口**: {config.train_window} 交易日\n")
         f.write(f"- **预测周期**: 未来 {config.predict_horizon} 日收益率\n")
         f.write(f"- **回测区间**: {config.start_date} ~ {config.end_date}\n")
-        f.write(f"- **交易成本**: 0.20% (双边)\n\n")
+        f.write(f"- **交易成本**: 0.20% (双边)\n")
+        f.write(f"- **基准**: {index_name} 指数实际收益\n\n")
 
         f.write("## 二、IC 评估结果\n\n")
         f.write("| 指标 | 值 |\n")
@@ -290,16 +331,15 @@ def main():
     all_results = {}
 
     for index_name, index_code in indices:
-        metrics, report_path = run_single_index(index_name, index_code, run_date)
+        metrics, report_path, n_stocks = run_single_index(index_name, index_code, run_date)
         if metrics is not None:
             # 获取 portfolio_returns 用于汇总
             pr_path = os.path.join(BASE_OUTPUT_DIR, run_date, index_name, 'portfolio_returns.csv')
-            import pandas as pd
             pr = pd.read_csv(pr_path) if os.path.exists(pr_path) else None
             all_results[index_name] = {
                 'metrics': metrics,
                 'portfolio_returns': pr,
-                'n_stocks': len(load_index_constituents(index_code)),
+                'n_stocks': n_stocks,
                 'report_path': report_path,
             }
         else:
