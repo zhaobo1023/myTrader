@@ -86,9 +86,17 @@ class RegimeClassifier:
 
         return False, abs(deviation)
 
-    def classify(self, results_df: pd.DataFrame, calc_date: date) -> MarketRegime:
+    def classify(self, results_df: pd.DataFrame, calc_date: date,
+                 use_percentile: bool = False) -> MarketRegime:
         """
         多尺度综合判定市场状态
+
+        Args:
+            results_df: SVD 计算结果
+            calc_date: 当前日期
+            use_percentile: 是否使用历史分位数阈值 (适用于小样本行业)
+                - False: 使用绝对阈值 50%/35% (适用于全A, 5000+ 只票)
+                - True:  使用历史分位数 70%/30% (适用于行业, 15~200 只票)
         """
         f1_values = {}
         for ws in self.config.windows.keys():
@@ -145,12 +153,10 @@ class RegimeClassifier:
             final_score /= weight_sum
 
         # 状态判定
-        if final_score > self.config.state_threshold_high:
-            state = "齐涨齐跌"
-        elif final_score > self.config.state_threshold_low:
-            state = "板块分化"
+        if use_percentile:
+            state = self._classify_by_percentile(final_score, results_df, calc_date)
         else:
-            state = "个股行情"
+            state = self._classify_by_absolute(final_score)
 
         return MarketRegime(
             calc_date=calc_date,
@@ -162,6 +168,47 @@ class RegimeClassifier:
             f1_long=round(f1_long, 4) if f1_long is not None else None,
             weights_used=weights,
         )
+
+    def _classify_by_absolute(self, score: float) -> str:
+        """绝对阈值判定 (全A: 5000+ 只票)"""
+        if score > self.config.state_threshold_high:
+            return "齐涨齐跌"
+        elif score > self.config.state_threshold_low:
+            return "板块分化"
+        else:
+            return "个股行情"
+
+    def _classify_by_percentile(self, score: float, results_df: pd.DataFrame,
+                                calc_date: date) -> str:
+        """
+        历史分位数判定 (行业: 15~200 只票)
+
+        用该行业/股票池自身的历史 F1 分布计算动态阈值:
+        - 高阈值 = 历史 70 分位数 (超过此值为"齐涨齐跌")
+        - 低阈值 = 历史 30 分位数 (低于此值为"个股行情")
+
+        小样本行业 F1 天然偏高 (15 只票 vs 5000 只票),
+        绝对阈值 50% 会导致几乎所有行业都被标记为"齐涨齐跌"。
+        """
+        # 取 120 日窗口的历史综合得分作为参照
+        hist_120 = results_df[
+            (results_df['window_size'] == 120) &
+            (results_df['calc_date'] < calc_date)
+        ]['top1_var_ratio']
+
+        if len(hist_120) < 10:
+            # 历史数据不足, 回退到绝对阈值
+            return self._classify_by_absolute(score)
+
+        threshold_high = hist_120.quantile(0.70)
+        threshold_low = hist_120.quantile(0.30)
+
+        if score > threshold_high:
+            return "齐涨齐跌"
+        elif score > threshold_low:
+            return "板块分化"
+        else:
+            return "个股行情"
 
     def reset_mutation(self):
         """重置突变追踪器"""

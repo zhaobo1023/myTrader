@@ -47,7 +47,7 @@ def generate_report(regime: MarketRegime, results_df: pd.DataFrame,
 
     lines = []
     lines.append(f"# SVD 市场状态监控报告")
-    lines.append(f"\n**日期**: {regime.calc_date}")
+    lines.append(f"\n**观测日期**: {regime.calc_date} (120日窗口中点)")
     lines.append(f"**市场状态**: {regime.market_state}")
     lines.append(f"**综合得分**: {regime.final_score:.1%}")
     lines.append(f"**突变警报**: {'是' if regime.is_mutation else '否'}")
@@ -86,14 +86,14 @@ def generate_report(regime: MarketRegime, results_df: pd.DataFrame,
         lines.append(f"![SVD 市场状态]({chart_path})")
         lines.append("")
 
-    # 历史状态变化 (最近 30 天)
-    lines.append("## 近期状态变化")
+    # 历史状态变化: 用 120日窗口的详细数据展示趋势
+    lines.append("## 近期状态变化 (120日窗口)")
     lines.append("")
-    recent = results_df[results_df['window_size'] == 120].tail(30)
-    if not recent.empty:
+    recent_120 = results_df[results_df['window_size'] == 120].sort_values('calc_date')
+    if not recent_120.empty:
         lines.append("| 日期 | F1 占比 | Top3 占比 | 重构误差 | 股票数 |")
         lines.append("|------|---------|----------|---------|--------|")
-        for _, row in recent.iterrows():
+        for _, row in recent_120.iterrows():
             d = row['calc_date']
             date_str = d.strftime('%Y-%m-%d') if hasattr(d, 'strftime') else str(d)
             lines.append(
@@ -114,3 +114,111 @@ def generate_report(regime: MarketRegime, results_df: pd.DataFrame,
 
 def _ws_label(ws: int) -> str:
     return {20: 'short', 60: 'mid', 120: 'long'}.get(ws, str(ws))
+
+
+def generate_industry_report(industry_results: dict,
+                             output_dir: str = 'output/svd_monitor') -> str:
+    """
+    生成行业 SVD 总览报告
+
+    内容:
+    1. 各行业最新状态排名表 (按 F1 从高到低)
+    2. 齐涨齐跌行业列表 (Beta 共振强)
+    3. 个股行情行业列表 (Alpha 机会多)
+    4. 突变警报行业
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    report_path = os.path.join(output_dir, 'svd_industry_report.md')
+
+    # 收集各行业最新状态
+    industry_summary = []
+    for ind_name, data in industry_results.items():
+        records = data.get('records', [])
+        regimes = data.get('regimes', [])
+        if not records or not regimes:
+            continue
+        latest = regimes[-1]
+        # 最新 120 日窗口的 F1
+        r120 = [r for r in records if r.window_size == 120]
+        latest_f1 = r120[-1].top1_var_ratio if r120 else None
+        latest_stock_count = r120[-1].stock_count if r120 else 0
+
+        industry_summary.append({
+            'industry': ind_name,
+            'state': latest.market_state,
+            'score': latest.final_score,
+            'f1_120': latest_f1,
+            'stock_count': latest_stock_count,
+            'is_mutation': latest.is_mutation,
+        })
+
+    if not industry_summary:
+        logger.warning("无行业数据，跳过报告生成")
+        return None
+
+    # 按 F1 从高到低排序
+    industry_summary.sort(key=lambda x: x['f1_120'] or 0, reverse=True)
+
+    lines = []
+    lines.append("# 申万一级行业 SVD 监控总览")
+    lines.append("")
+    lines.append(f"**行业数量**: {len(industry_summary)}")
+    lines.append(f"**阈值说明**: 行业分类使用历史分位数 (70%/30%)，非绝对阈值")
+    lines.append("")
+
+    # 1. 全行业排名表
+    lines.append("## 行业 F1 排名 (120日窗口, 最新)")
+    lines.append("")
+    lines.append("| 排名 | 行业 | F1 占比 | 状态 | 股票数 | 突变 |")
+    lines.append("|------|------|---------|------|--------|------|")
+    for i, ind in enumerate(industry_summary, 1):
+        mutation_flag = "**!!**" if ind['is_mutation'] else ""
+        f1_str = f"{ind['f1_120']:.1%}" if ind['f1_120'] is not None else "N/A"
+        lines.append(
+            f"| {i} | {ind['industry']} | {f1_str} | "
+            f"{ind['state']} | {ind['stock_count']} | {mutation_flag} |"
+        )
+    lines.append("")
+
+    # 2. 齐涨齐跌行业 (Beta 共振)
+    beta_industries = [d for d in industry_summary if d['state'] == '齐涨齐跌']
+    if beta_industries:
+        lines.append("## Beta 共振行业 (齐涨齐跌)")
+        lines.append("")
+        lines.append("> 这些行业内部高度一致，资金合力明显。适合指数增强/ETF，不适合选股。")
+        lines.append("")
+        for ind in beta_industries:
+            f1_str = f"{ind['f1_120']:.1%}" if ind['f1_120'] is not None else "N/A"
+            lines.append(f"- **{ind['industry']}**: F1={f1_str}, {ind['stock_count']} 只")
+        lines.append("")
+
+    # 3. 个股行情行业 (Alpha 机会)
+    alpha_industries = [d for d in industry_summary if d['state'] == '个股行情']
+    if alpha_industries:
+        lines.append("## Alpha 机会行业 (个股行情)")
+        lines.append("")
+        lines.append("> 这些行业内部分化明显，选股策略有效。适合多因子选股/强弱对冲。")
+        lines.append("")
+        for ind in alpha_industries:
+            f1_str = f"{ind['f1_120']:.1%}" if ind['f1_120'] is not None else "N/A"
+            lines.append(f"- **{ind['industry']}**: F1={f1_str}, {ind['stock_count']} 只")
+        lines.append("")
+
+    # 4. 突变警报
+    mutation_industries = [d for d in industry_summary if d['is_mutation']]
+    if mutation_industries:
+        lines.append("## 突变警报行业")
+        lines.append("")
+        lines.append("> 这些行业的市场结构近期发生剧烈变化，需重点关注。")
+        lines.append("")
+        for ind in mutation_industries:
+            lines.append(f"- **{ind['industry']}**: {ind['state']}, score={ind['score']:.1%}")
+        lines.append("")
+
+    report_text = "\n".join(lines)
+
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write(report_text)
+
+    logger.info(f"行业报告已保存: {report_path}")
+    return report_path

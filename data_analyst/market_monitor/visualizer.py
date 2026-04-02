@@ -12,14 +12,40 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.colors as mcolors
 
-# 中文字体配置
-if platform.system() == "Darwin":
-    matplotlib.rcParams['font.family'] = ["Heiti TC", "STHeiti", "Arial Unicode MS", "sans-serif"]
-elif platform.system() == "Windows":
-    matplotlib.rcParams['font.family'] = ["SimHei", "Microsoft YaHei", "sans-serif"]
+# 中文字体配置 - 自动检测可用字体
+def _find_chinese_font():
+    """从系统已安装字体中查找第一个可用的中文字体"""
+    available = {f.name for f in matplotlib.font_manager.fontManager.ttflist}
+    candidates = [
+        # macOS
+        "PingFang SC", "PingFang HK", "Hiragino Sans GB", "Heiti TC",
+        "Songti SC", "STHeiti", "STSong", "Apple SD Gothic Neo",
+        # Windows
+        "SimHei", "Microsoft YaHei", "Microsoft YaHei UI",
+        # Linux
+        "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Zen Hei",
+        "WenQuanYi Micro Hei", "Source Han Sans SC",
+        # 通用 fallback
+        "Arial Unicode MS",
+    ]
+    for font in candidates:
+        if font in available:
+            return font
+    return None
+
+_chinese_font = _find_chinese_font()
+if _chinese_font:
+    matplotlib.rcParams['font.sans-serif'] = [_chinese_font] + matplotlib.rcParams.get('font.sans-serif', [])
 else:
-    matplotlib.rcParams['font.family'] = ["Noto Sans CJK SC", "WenQuanYi Zen Hei", "DejaVu Sans"]
+    # 回退到平台默认列表
+    if platform.system() == "Darwin":
+        matplotlib.rcParams['font.sans-serif'] = ["Heiti TC", "Arial Unicode MS"] + matplotlib.rcParams.get('font.sans-serif', [])
+    elif platform.system() == "Windows":
+        matplotlib.rcParams['font.sans-serif'] = ["SimHei", "Microsoft YaHei"] + matplotlib.rcParams.get('font.sans-serif', [])
+    else:
+        matplotlib.rcParams['font.sans-serif'] = ["Noto Sans CJK SC", "WenQuanYi Zen Hei"] + matplotlib.rcParams.get('font.sans-serif', [])
 matplotlib.rcParams['axes.unicode_minus'] = False
 
 logger = logging.getLogger(__name__)
@@ -124,4 +150,84 @@ def plot_regime_chart(results_df: pd.DataFrame, regimes: list,
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
     logger.info(f"图表已保存: {output_path}")
+    return output_path
+
+
+def plot_industry_heatmap(industry_results: dict,
+                          output_dir: str = 'output/svd_monitor') -> str:
+    """
+    行业 F1 热力图: 纵轴=行业, 横轴=日期, 颜色=F1 占比
+
+    一眼看出:
+    - 哪些行业 Beta 共振强 (红色)
+    - 哪些行业个股分化 (绿色)
+    - 市场压力的传导路径 (红色从哪些行业开始蔓延)
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, 'svd_industry_heatmap.png')
+
+    # 收集所有行业的 120 日窗口 F1 数据
+    rows = []
+    for industry_name, data in industry_results.items():
+        records = data.get('records', [])
+        for r in records:
+            if r.window_size == 120:
+                rows.append({
+                    'industry': industry_name,
+                    'date': r.calc_date,
+                    'f1': r.top1_var_ratio,
+                    'state': r.market_state,
+                })
+
+    if not rows:
+        logger.warning("无行业数据，跳过热力图")
+        return None
+
+    df = pd.DataFrame(rows)
+    df['date'] = pd.to_datetime(df['date'])
+
+    # 构建透视表: index=行业, columns=日期, values=F1
+    pivot = df.pivot_table(index='industry', columns='date', values='f1', aggfunc='first')
+    pivot = pivot.sort_index()
+
+    # 计算图大小: 根据行业数量动态调整
+    n_industries = len(pivot)
+    fig_height = max(10, n_industries * 0.35)
+    fig, ax = plt.subplots(figsize=(18, fig_height))
+
+    # 绘制热力图
+    # 颜色映射: 绿(低F1/个股行情) -> 黄(板块分化) -> 红(高F1/齐涨齐跌)
+    cmap = plt.cm.RdYlGn_r
+    norm = mcolors.Normalize(vmin=20, vmax=80)
+
+    im = ax.imshow(pivot.values * 100, aspect='auto', cmap=cmap, norm=norm,
+                   interpolation='nearest')
+
+    # 坐标轴
+    ax.set_xticks(range(len(pivot.columns)))
+    ax.set_xticklabels([d.strftime('%m-%d') for d in pivot.columns],
+                       rotation=45, ha='right', fontsize=8)
+    ax.set_yticks(range(len(pivot.index)))
+    ax.set_yticklabels(pivot.index, fontsize=9)
+
+    # 在格子中标注数值
+    for i in range(len(pivot.index)):
+        for j in range(len(pivot.columns)):
+            val = pivot.values[i, j]
+            if not np.isnan(val):
+                text_color = 'white' if val * 100 > 60 or val * 100 < 25 else 'black'
+                ax.text(j, i, f'{val*100:.0f}', ha='center', va='center',
+                        fontsize=6, color=text_color)
+
+    # 色标
+    cbar = plt.colorbar(im, ax=ax, shrink=0.6, pad=0.02)
+    cbar.set_label('F1 方差占比 (%)', fontsize=10)
+
+    ax.set_title('申万一级行业 F1 方差占比热力图 (120日窗口)', fontsize=14, fontweight='bold')
+    ax.set_xlabel('日期', fontsize=12)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    logger.info(f"行业热力图已保存: {output_path}")
     return output_path

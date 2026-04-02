@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-收益率矩阵构建 - 数据加载 + 预处理 + 停牌过滤
+收益率矩阵构建 - 数据加载 + 预处理 + 停牌过滤 + 行业中性化
 """
 import sys
 import os
@@ -21,29 +21,49 @@ class DataBuilder:
 
     def __init__(self, config: SVDMonitorConfig = None):
         self.config = config or SVDMonitorConfig()
+        self._industry_map: dict = None  # 延迟加载 + 缓存
 
-    def load_returns(self, start_date: str, end_date: str) -> pd.DataFrame:
+    # ================================================================
+    # 数据加载
+    # ================================================================
+
+    def load_returns(self, start_date: str, end_date: str,
+                     stock_codes: list = None) -> pd.DataFrame:
         """
-        从数据库加载全 A 股日收益率矩阵
+        从数据库加载日收益率矩阵
 
         Args:
             start_date: 开始日期 (YYYY-MM-DD)
             end_date: 结束日期 (YYYY-MM-DD)
+            stock_codes: 可选，指定股票子集 (用于行业 SVD)
 
         Returns:
-            DataFrame: index=trade_date, columns=stock_code, values=close_price
+            DataFrame: index=trade_date, columns=stock_code, values=return
         """
-        # 需要额外加载 start_date 之前的数据用于计算首日收益率
         max_window = max(self.config.windows.keys())
         extended_start = self._subtract_trading_days(start_date, max_window + 10)
 
-        sql = """
-            SELECT stock_code, trade_date, close_price, volume
-            FROM trade_stock_daily
-            WHERE trade_date >= %s AND trade_date <= %s
-            ORDER BY stock_code, trade_date ASC
-        """
-        rows = execute_query(sql, [extended_start, end_date])
+        if stock_codes:
+            # 指定股票子集: 使用 IN 查询
+            placeholders = ','.join(['%s'] * len(stock_codes))
+            sql = f"""
+                SELECT stock_code, trade_date, close_price, volume
+                FROM trade_stock_daily
+                WHERE trade_date >= %s AND trade_date <= %s
+                  AND stock_code IN ({placeholders})
+                ORDER BY stock_code, trade_date ASC
+            """
+            params = [extended_start, end_date] + list(stock_codes)
+        else:
+            sql = """
+                SELECT stock_code, trade_date, close_price, volume
+                FROM trade_stock_daily
+                WHERE trade_date >= %s AND trade_date <= %s
+                ORDER BY stock_code, trade_date ASC
+            """
+            params = [extended_start, end_date]
+
+        rows = execute_query(sql, params)
 
         if not rows:
             raise ValueError(f"未加载到数据: {extended_start} ~ {end_date}")
@@ -57,8 +77,8 @@ class DataBuilder:
         price_df = df.pivot(index='trade_date', columns='stock_code', values='close_price')
         price_df = price_df.sort_index()
 
-        # 计算收益率
-        returns_df = price_df.pct_change()
+        # 计算收益率 (fill_method=None 避免前向填充停牌价格)
+        returns_df = price_df.pct_change(fill_method=None)
 
         # 处理 inf 值 (涨停/跌停后一字板产生的 inf)
         returns_df = returns_df.replace([np.inf, -np.inf], np.nan)
@@ -67,28 +87,76 @@ class DataBuilder:
         target_start = pd.Timestamp(start_date)
         returns_df = returns_df.loc[target_start:]
 
-        logger.info(f"加载收益率矩阵: {returns_df.shape[0]} 天 x {returns_df.shape[1]} 只股票")
+        logger.info(f"加载收益率矩阵: {returns_df.shape[0]} 天 x {returns_df.shape[1]} 只股票"
+                     + (f" (子集)" if stock_codes else ""))
         return returns_df
 
+    def load_industry_map(self) -> dict:
+        """加载股票-行业映射 (带缓存)"""
+        if self._industry_map is not None:
+            return self._industry_map
+
+        try:
+            rows = execute_query(
+                "SELECT stock_code, industry_name FROM trade_stock_industry"
+            )
+            self._industry_map = {
+                r['stock_code']: r['industry_name']
+                for r in rows if r.get('industry_name')
+            }
+            logger.info(f"加载行业映射: {len(self._industry_map)} 只股票")
+            return self._industry_map
+        except Exception as e:
+            logger.warning(f"行业数据加载失败: {e}")
+            self._industry_map = {}
+            return {}
+
+    def load_industry_stocks(self) -> dict:
+        """
+        加载申万一级行业 -> 股票列表映射
+
+        Returns:
+            dict: {行业名: [stock_code, ...]}
+        """
+        industry_map = self.load_industry_map()
+        industry_stocks = {}
+        for stock_code, industry_name in industry_map.items():
+            industry_stocks.setdefault(industry_name, []).append(stock_code)
+        return industry_stocks
+
+    # ================================================================
+    # 窗口矩阵构建
+    # ================================================================
+
     def build_window_matrix(self, returns_df: pd.DataFrame,
-                            start_idx: int, window_size: int) -> tuple:
+                            start_idx: int, window_size: int,
+                            stock_subset: list = None) -> tuple:
         """
         构建单个窗口的预处理后矩阵
 
+        预处理流水线:
+        - 默认模式: 停牌过滤 + fillna(0) + 行去均值 (最小预处理)
+        - 行业中性化: fillna(0) + MAD + Z-Score + LinearRegression行业中性化 + 重新Z-Score + 行去均值
+
         Args:
-            returns_df: 全量收益率 DataFrame
+            returns_df: 全量收益率 DataFrame (index=trade_date, columns=stock_code)
             start_idx: 窗口起始索引
             window_size: 窗口大小
+            stock_subset: 可选，指定股票子集列 (用于行业 SVD)
 
         Returns:
             (processed_matrix, stock_count, valid_stocks)
-            processed_matrix: numpy array (stocks x days), 已去均值
-            stock_count: 有效股票数
         """
         window_data = returns_df.iloc[start_idx:start_idx + window_size]
 
         if len(window_data) < window_size:
             return None, 0, []
+
+        # 可选: 只取子集股票
+        if stock_subset:
+            available = [s for s in stock_subset if s in window_data.columns]
+            if available:
+                window_data = window_data[available]
 
         # 1. 停牌/僵尸股过滤
         min_valid = int(window_size * self.config.min_valid_days_ratio)
@@ -103,20 +171,15 @@ class DataBuilder:
 
         window_filtered = window_data[valid_stocks].copy()
 
-        # 2. 停牌日设为 0 (代表无超额波动)
+        # 2. 停牌日设为 0
         window_filtered = window_filtered.fillna(0)
 
-        # 3. MAD 去极值 (截面)
-        window_filtered = self._mad_winsorize(window_filtered)
-
-        # 4. Z-Score 截面标准化
-        window_filtered = self._zscore_cross_section(window_filtered)
-
-        # 5. [可选] 行业中性化
         if self.config.industry_neutral:
-            window_filtered = self._industry_neutralize(window_filtered)
-            # 中性化后必须重新 Z-Score 标准化
-            window_filtered = self._zscore_cross_section(window_filtered)
+            # 行业中性化模式
+            window_filtered = self._mad_winsorize(window_filtered)
+            window_filtered = self._zscore_standardize(window_filtered)
+            window_filtered = self._industry_neutralize_lr(window_filtered)
+            window_filtered = self._zscore_standardize(window_filtered)
 
         # 转置为 (stocks x days) 并去均值
         matrix = window_filtered.values.T  # (stocks, days)
@@ -124,65 +187,102 @@ class DataBuilder:
 
         return matrix, len(valid_stocks), list(valid_stocks)
 
+    # ================================================================
+    # 预处理方法
+    # ================================================================
+
     def _mad_winsorize(self, df: pd.DataFrame) -> pd.DataFrame:
-        """MAD 去极值: ±n*MAD 截断"""
+        """MAD 去极值: per stock across dates"""
         median = df.median(axis=0)
         mad = (df - median).abs().median(axis=0)
-        mad = mad.replace(0, 1e-8)  # 防止除零
+        mad = mad.replace(0, 1e-8)
         upper = median + self.config.mad_n * 1.4826 * mad
         lower = median - self.config.mad_n * 1.4826 * mad
         return df.clip(lower, upper, axis=0)
 
-    def _zscore_cross_section(self, df: pd.DataFrame) -> pd.DataFrame:
-        """截面 Z-Score 标准化"""
+    def _zscore_standardize(self, df: pd.DataFrame) -> pd.DataFrame:
+        """时序 Z-Score 标准化 (per stock across dates)"""
         mean = df.mean(axis=0)
         std = df.std(axis=0)
-        std = std.replace(0, 1e-8)  # 防止除零
+        std = std.replace(0, 1e-8)
         return (df - mean) / std
 
-    def _industry_neutralize(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _industry_neutralize_lr(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        行业中性化: 申万一级行业哑变量回归取残差
-        使用简单方法: 每日截面减去行业均值
+        行业中性化: LinearRegression 哑变量回归取残差
+
+        对每个截面 (每个交易日):
+            y = stock returns (N x 1)
+            X = industry dummy variables (N x K)
+            residual = y - X @ beta
+
+        残差代表去除行业效应后的个股超额收益。
         """
+        from sklearn.linear_model import LinearRegression
+
         try:
-            industry_map = self._load_industry_map()
+            industry_map = self.load_industry_map()
             if not industry_map:
-                logger.warning("行业数据加载失败，跳过行业中性化")
+                logger.warning("行业数据为空，跳过行业中性化")
                 return df
 
-            stocks = df.columns
-            industries = pd.Series([industry_map.get(s, 'unknown') for s in stocks],
-                                   index=stocks)
+            stocks = list(df.columns)
+            industries = pd.Series(
+                [industry_map.get(s, None) for s in stocks], index=stocks
+            )
 
-            result = df.copy()
-            for date_idx in df.index:
-                row = df.loc[date_idx]
-                for ind_name in industries.unique():
-                    if ind_name == 'unknown':
-                        continue
-                    mask = industries == ind_name
-                    ind_stocks = mask[mask].index
-                    if len(ind_stocks) < 3:
-                        continue
-                    ind_mean = row[ind_stocks].mean()
-                    result.loc[date_idx, ind_stocks] = row[ind_stocks] - ind_mean
+            # 只保留有行业标签的股票
+            valid_mask = industries.notna()
+            valid_stocks = stocks  # 保留所有列，未知行业不参与回归
 
-            return result
+            # 构建行业哑变量矩阵
+            unique_industries = sorted(industries.dropna().unique())
+            if len(unique_industries) < 2:
+                logger.warning("行业数量不足，跳过行业中性化")
+                return df
 
+            # 哑变量: N stocks x K industries
+            dummy_matrix = np.zeros((len(stocks), len(unique_industries)))
+            ind_to_idx = {ind: i for i, ind in enumerate(unique_industries)}
+            for i, s in enumerate(stocks):
+                ind = industries.get(s)
+                if ind and ind in ind_to_idx:
+                    dummy_matrix[i, ind_to_idx[ind]] = 1.0
+
+            result = df.copy().values  # (T days, N stocks)
+
+            # 逐日截面回归
+            lr = LinearRegression(fit_intercept=True)
+            for t in range(df.shape[0]):
+                y = df.iloc[t].values.astype(float)
+                X = dummy_matrix
+
+                # 只用有行业标签的样本回归
+                labeled_mask = np.array([industries.get(s) is not None for s in stocks])
+                if labeled_mask.sum() < len(unique_industries) + 5:
+                    continue
+
+                try:
+                    lr.fit(X[labeled_mask], y[labeled_mask])
+                    fitted = lr.predict(X)
+                    # 取残差: 只有有标签的股票替换为残差
+                    residuals = y - fitted
+                    result[t, labeled_mask] = residuals[labeled_mask]
+                except Exception:
+                    continue
+
+            return pd.DataFrame(result, index=df.index, columns=df.columns)
+
+        except ImportError:
+            logger.warning("sklearn 未安装，跳过行业中性化")
+            return df
         except Exception as e:
             logger.warning(f"行业中性化失败: {e}, 跳过")
             return df
 
-    def _load_industry_map(self) -> dict:
-        """加载股票-行业映射"""
-        try:
-            rows = execute_query(
-                "SELECT stock_code, industry_name FROM trade_stock_industry"
-            )
-            return {r['stock_code']: r['industry_name'] for r in rows if r.get('industry_name')}
-        except Exception:
-            return {}
+    # ================================================================
+    # 工具方法
+    # ================================================================
 
     def _subtract_trading_days(self, date_str: str, n_days: int) -> str:
         """从日期往前减去约 n_days 个交易日 (粗估: 交易日/自然日 ≈ 5/7)"""

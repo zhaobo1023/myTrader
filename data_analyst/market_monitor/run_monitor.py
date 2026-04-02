@@ -4,8 +4,9 @@ SVD 市场状态监控 - 主入口
 
 支持:
   1. CLI 手动运行: python -m data_analyst.market_monitor.run_monitor --latest
-  2. 编程调用: SVDMonitor().run(start_date, end_date)
-  3. 定时调度: run_daily_monitor()
+  2. 多股票池: --universe 全A / --universe SW_L1 / --universe SW_L1:银行
+  3. 编程调用: SVDMonitor().run(start_date, end_date)
+  4. 定时调度: run_daily_monitor()
 """
 import sys
 import os
@@ -15,6 +16,7 @@ import logging
 import importlib
 from datetime import date, datetime, timedelta
 from time import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import pandas as pd
 
@@ -77,7 +79,9 @@ compute_variance_ratios = _svd_engine_mod.compute_variance_ratios
 RegimeClassifier = _regime_classifier_mod.RegimeClassifier
 SVDStorage = _storage_mod.SVDStorage
 plot_regime_chart = _visualizer_mod.plot_regime_chart
+plot_industry_heatmap = _visualizer_mod.plot_industry_heatmap
 generate_report = _reporter_mod.generate_report
+generate_industry_report = _reporter_mod.generate_industry_report
 
 logging.basicConfig(
     level=logging.INFO,
@@ -97,7 +101,9 @@ class SVDMonitor:
 
     def run(self, start_date: str, end_date: str = None,
             save_db: bool = True, generate_chart: bool = True,
-            do_generate_report: bool = True) -> dict:
+            do_generate_report: bool = True,
+            universe_type: str = "全A", universe_id: str = "",
+            stock_codes: list = None) -> dict:
         """
         运行 SVD 市场监控
 
@@ -107,6 +113,9 @@ class SVDMonitor:
             save_db: 是否保存到数据库
             generate_chart: 是否生成图表
             do_generate_report: 是否生成报告
+            universe_type: 股票池类型 ("全A" / "SW_L1")
+            universe_id: 股票池 ID (行业名，全A时为空)
+            stock_codes: 可选，直接指定股票列表
 
         Returns:
             dict: {records, regimes, chart_path, report_path}
@@ -114,21 +123,27 @@ class SVDMonitor:
         if end_date is None:
             end_date = date.today().strftime('%Y-%m-%d')
 
+        universe_label = f"{universe_type}:{universe_id}" if universe_id else universe_type
         logger.info(f"=" * 60)
         logger.info(f"SVD 市场监控: {start_date} ~ {end_date}")
+        logger.info(f"股票池: {universe_label}")
         logger.info(f"窗口配置: {self.config.windows}")
         logger.info(f"行业中性化: {self.config.industry_neutral}")
         logger.info(f"=" * 60)
 
         t0 = time()
 
-        # 1. 初始化数据库
+        # 1. 初始化数据库 (失败不阻断)
         if save_db:
-            self.storage.init_table()
+            try:
+                self.storage.init_table()
+            except Exception as e:
+                logger.warning(f"DB 初始化失败，将跳过保存: {e}")
+                save_db = False
 
         # 2. 加载收益率数据
         logger.info("[1/5] 加载收益率数据...")
-        returns_df = self.data_builder.load_returns(start_date, end_date)
+        returns_df = self.data_builder.load_returns(start_date, end_date, stock_codes)
 
         if returns_df.empty or len(returns_df) < max(self.config.windows.keys()):
             logger.error("数据不足，退出")
@@ -147,7 +162,7 @@ class SVDMonitor:
                 calc_date = mid_date.date() if hasattr(mid_date, 'date') else mid_date
 
                 matrix, stock_count, _ = self.data_builder.build_window_matrix(
-                    returns_df, start_idx, window_size
+                    returns_df, start_idx, window_size, stock_codes
                 )
 
                 if matrix is None:
@@ -160,6 +175,8 @@ class SVDMonitor:
                 record = SVDRecord(
                     calc_date=calc_date,
                     window_size=window_size,
+                    universe_type=universe_type,
+                    universe_id=universe_id,
                     top1_var_ratio=ratios['top1_var_ratio'],
                     top3_var_ratio=ratios['top3_var_ratio'],
                     top5_var_ratio=ratios['top5_var_ratio'],
@@ -199,14 +216,17 @@ class SVDMonitor:
                         f"(score={latest_regime.final_score:.1%}, "
                         f"mutation={latest_regime.is_mutation})")
 
-        # 5. 保存 + 可视化 + 报告
+        # 5. 保存 + 可视化 + 报告 (DB 失败不阻断后续步骤)
         chart_path = None
         report_path = None
 
         if save_db:
             logger.info("[4/5] 保存到数据库...")
-            self.storage.save_batch(all_records)
-            logger.info(f"  保存 {len(all_records)} 条记录")
+            try:
+                self.storage.save_batch(all_records)
+                logger.info(f"  保存 {len(all_records)} 条记录")
+            except Exception as e:
+                logger.error(f"  DB 保存失败 (图表/报告仍将生成): {e}")
 
         if generate_chart:
             logger.info("[5/5] 生成图表...")
@@ -235,6 +255,162 @@ class SVDMonitor:
             'report_path': report_path,
         }
 
+    def run_sw_l1_industries(self, start_date: str, end_date: str = None,
+                             save_db: bool = True,
+                             min_industry_stocks: int = 10) -> dict:
+        """
+        对所有申万一级行业分别运行 SVD 监控
+
+        数据加载策略: 一次加载全 A 数据，在内存中按行业切片，避免重复查询。
+
+        Args:
+            start_date: 开始日期
+            end_date: 结束日期
+            save_db: 是否保存到数据库
+            min_industry_stocks: 行业最少股票数 (低于此数跳过)
+
+        Returns:
+            dict: {industry_name: run_result, ...}
+        """
+        if end_date is None:
+            end_date = date.today().strftime('%Y-%m-%d')
+
+        t0 = time()
+        logger.info(f"=" * 60)
+        logger.info(f"SVD 行业监控: {start_date} ~ {end_date}")
+        logger.info(f"=" * 60)
+
+        # 1. 加载全 A 数据 (一次性)
+        logger.info("[1/3] 加载全 A 收益率数据...")
+        returns_df = self.data_builder.load_returns(start_date, end_date)
+        if returns_df.empty:
+            logger.error("数据加载失败")
+            return {}
+
+        # 2. 加载行业映射
+        logger.info("[2/3] 加载行业映射...")
+        industry_stocks = self.data_builder.load_industry_stocks()
+
+        # 过滤小行业
+        valid_industries = {
+            ind: stocks for ind, stocks in industry_stocks.items()
+            if len(stocks) >= min_industry_stocks
+        }
+        logger.info(f"有效行业: {len(valid_industries)}/{len(industry_stocks)} "
+                     f"(过滤 < {min_industry_stocks} 只)")
+
+        # 3. 逐行业运行 SVD
+        logger.info(f"[3/3] 逐行业 SVD 计算 ({len(valid_industries)} 个行业)...")
+        results = {}
+        success_count = 0
+        skip_count = 0
+
+        for i, (industry_name, stocks) in enumerate(sorted(valid_industries.items()), 1):
+            # 检查行业股票是否在 returns_df 中
+            available_stocks = [s for s in stocks if s in returns_df.columns]
+            if len(available_stocks) < min_industry_stocks:
+                skip_count += 1
+                continue
+
+            logger.info(f"  [{i}/{len(valid_industries)}] {industry_name} "
+                        f"({len(available_stocks)} 只股票)...")
+
+            # 行业 SVD: 在内存中切片
+            industry_returns = returns_df[available_stocks]
+            T = len(industry_returns)
+
+            industry_records = []
+            for window_size, step in self.config.windows.items():
+                for start_idx in range(0, T - window_size, step):
+                    mid_idx = start_idx + window_size // 2
+                    mid_date = industry_returns.index[mid_idx]
+                    calc_date = mid_date.date() if hasattr(mid_date, 'date') else mid_date
+
+                    matrix, stock_count, _ = self.data_builder.build_window_matrix(
+                        industry_returns, start_idx, window_size, available_stocks
+                    )
+
+                    if matrix is None:
+                        continue
+
+                    _, sigma, _ = compute_svd(matrix, self.config.n_components)
+                    ratios = compute_variance_ratios(sigma)
+
+                    record = SVDRecord(
+                        calc_date=calc_date,
+                        window_size=window_size,
+                        universe_type="SW_L1",
+                        universe_id=industry_name,
+                        top1_var_ratio=ratios['top1_var_ratio'],
+                        top3_var_ratio=ratios['top3_var_ratio'],
+                        top5_var_ratio=ratios['top5_var_ratio'],
+                        reconstruction_error=ratios['reconstruction_error'],
+                        stock_count=stock_count,
+                        market_state="",
+                        is_mutation=0,
+                    )
+                    industry_records.append(record)
+
+            if not industry_records:
+                skip_count += 1
+                continue
+
+            # 市场状态分类 (每个行业独立 classifier + 分位数阈值)
+            ind_df = pd.DataFrame([r.model_dump() for r in industry_records])
+            unique_dates = sorted(ind_df['calc_date'].unique())
+            # 行业独立 classifier: 避免行业间突变状态互相污染
+            ind_classifier = RegimeClassifier(self.config)
+            regimes = []
+            for calc_date in unique_dates:
+                regime = ind_classifier.classify(
+                    ind_df, calc_date, use_percentile=True
+                )
+                regimes.append(regime)
+                for r in industry_records:
+                    if r.calc_date == calc_date:
+                        r.market_state = regime.market_state
+                        r.is_mutation = 1 if regime.is_mutation else 0
+
+            results[industry_name] = {
+                'records': industry_records,
+                'regimes': regimes,
+            }
+            success_count += 1
+
+            # DB 保存 (每个行业单独保存，失败不阻断)
+            if save_db:
+                try:
+                    self.storage.save_batch(industry_records)
+                except Exception as e:
+                    logger.warning(f"    DB 保存失败: {e}")
+
+        elapsed = time() - t0
+        logger.info(f"=" * 60)
+        logger.info(f"行业 SVD 完成! 成功 {success_count}, 跳过 {skip_count}, 耗时 {elapsed:.1f}s")
+        logger.info(f"=" * 60)
+
+        # 4. 生成行业热力图
+        if results:
+            try:
+                heatmap_path = plot_industry_heatmap(
+                    results, output_dir=self.config.output_dir
+                )
+                logger.info(f"行业热力图: {heatmap_path}")
+            except Exception as e:
+                logger.warning(f"行业热力图生成失败: {e}")
+
+        # 5. 生成行业总览报告
+        if results:
+            try:
+                report_path = generate_industry_report(
+                    results, output_dir=self.config.output_dir
+                )
+                logger.info(f"行业报告: {report_path}")
+            except Exception as e:
+                logger.warning(f"行业报告生成失败: {e}")
+
+        return results
+
 
 # ============================================================
 # CLI 入口
@@ -253,6 +429,10 @@ def main():
                         help='开启行业中性化')
     parser.add_argument('--min-stocks', type=int, default=None,
                         help='最小有效股票数 (覆盖默认值)')
+    parser.add_argument('--universe', type=str, default='全A',
+                        help='股票池: 全A / SW_L1 (全部行业) / SW_L1:银行 (单个行业)')
+    parser.add_argument('--min-industry-stocks', type=int, default=10,
+                        help='行业 SVD 最少股票数 (默认 10)')
 
     args = parser.parse_args()
 
@@ -274,12 +454,46 @@ def main():
         end_date = date.today().strftime('%Y-%m-%d')
         start_date = (date.today() - timedelta(days=args.backfill_days)).strftime('%Y-%m-%d')
 
-    monitor.run(
-        start_date=start_date,
-        end_date=end_date,
-        save_db=not args.no_db,
-        generate_chart=not args.no_chart,
-    )
+    save_db = not args.no_db
+
+    # 解析 --universe 参数
+    if args.universe == 'SW_L1':
+        # 所有申万一级行业
+        monitor.run_sw_l1_industries(
+            start_date=start_date,
+            end_date=end_date,
+            save_db=save_db,
+            min_industry_stocks=args.min_industry_stocks,
+        )
+    elif args.universe.startswith('SW_L1:'):
+        # 单个行业
+        industry_name = args.universe.split(':', 1)[1]
+        logger.info(f"单行业模式: {industry_name}")
+        # 先加载行业映射获取股票列表
+        industry_stocks = monitor.data_builder.load_industry_stocks()
+        stocks = industry_stocks.get(industry_name, [])
+        if not stocks:
+            logger.error(f"未找到行业: {industry_name}")
+            return
+        monitor.run(
+            start_date=start_date,
+            end_date=end_date,
+            save_db=save_db,
+            generate_chart=not args.no_chart,
+            universe_type="SW_L1",
+            universe_id=industry_name,
+            stock_codes=stocks,
+        )
+    else:
+        # 全 A (默认)
+        monitor.run(
+            start_date=start_date,
+            end_date=end_date,
+            save_db=save_db,
+            generate_chart=not args.no_chart,
+            universe_type="全A",
+            universe_id="",
+        )
 
 
 def run_daily_monitor():

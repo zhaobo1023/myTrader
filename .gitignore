@@ -68,3 +68,7 @@ htmlcov/
 *.pem
 *.key
 secrets/
+
+# Output (generated artifacts)
+output/
+data_analyst/output/
