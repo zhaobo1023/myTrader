@@ -174,15 +174,19 @@ def check_data_and_trigger_factor():
 
 
 def trigger_factor_calculation():
-    """触发因子计算"""
+    """触发因子计算（包括 RPS）"""
     logger.info("开始因子计算...")
 
     try:
-        # TODO: 实现因子计算逻辑
-        # 这里可以调用因子计算模块
-        # from data_analyst.factors.factor_calculator import FactorCalculator
-        # calculator = FactorCalculator()
-        # calculator.calculate_all_factors()
+        # 1. 计算 RPS（增量更新）
+        try:
+            from data_analyst.indicators.rps_calculator import rps_daily_update
+            rps_rows = rps_daily_update()
+            logger.info(f"RPS 增量更新完成: {rps_rows} 行")
+        except Exception as e:
+            logger.error(f"RPS 计算失败: {e}")
+
+        # TODO: 其他因子计算可以在这里添加
 
         logger.info("因子计算完成")
         return True

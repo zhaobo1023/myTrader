@@ -409,6 +409,27 @@ CREATE TABLE IF NOT EXISTS trade_macro_indicator (
 
 
 # ============================================================
+# RPS 数据表
+# ============================================================
+
+TRADE_STOCK_RPS_SQL = """
+CREATE TABLE IF NOT EXISTS trade_stock_rps (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    stock_code VARCHAR(20) NOT NULL COMMENT '股票代码',
+    trade_date DATE NOT NULL COMMENT '交易日期',
+    rps_20 DOUBLE COMMENT 'RPS(20日)',
+    rps_60 DOUBLE COMMENT 'RPS(60日)',
+    rps_120 DOUBLE COMMENT 'RPS(120日)',
+    rps_250 DOUBLE COMMENT 'RPS(250日)',
+    rps_slope DOUBLE COMMENT 'RPS动量斜率Z-Score(4周)',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_rps (stock_code, trade_date),
+    KEY idx_rps_trade_date (trade_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+"""
+
+# ============================================================
 # 建表SQL字典
 # ============================================================
 
@@ -437,6 +458,7 @@ CREATE_TABLE_SQLS = {
     'trade_etf_daily': TRADE_ETF_DAILY_SQL,
     'trade_ocr_record': TRADE_OCR_RECORD_SQL,
     'trade_macro_indicator': TRADE_MACRO_INDICATOR_SQL,
+    'trade_stock_rps': TRADE_STOCK_RPS_SQL,
 }
 
 

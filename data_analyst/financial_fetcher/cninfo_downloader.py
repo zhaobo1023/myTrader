@@ -82,7 +82,9 @@ def search_announcements(stock_code: str, stock_name: str,
             # Filter: only full reports, exclude summary/supplement/English
             if any(kw in title for kw in ["摘要", "英文", "补充", "更正", "说明"]):
                 continue
-            if ann_type == "年报" and "年度报告" not in title:
+            if ann_type == "年报" and ("年度报告" not in title or "半年度报告" in title):
+                continue
+            if ann_type == "半年报" and "半年度报告" not in title:
                 continue
 
             adjunct_url = ann.get("adjunctUrl", "")
