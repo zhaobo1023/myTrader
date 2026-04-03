@@ -259,3 +259,55 @@ def _add_composite_factors(df: pd.DataFrame):
             df[name] = df[name].where(valid)
             n_valid = df[name].notna().sum()
             logger.info(f"  composite factor {name}: {n_valid:,} valid values")
+
+
+def load_stock_filter() -> set:
+    """
+    加载股票过滤黑名单。
+
+    Returns:
+        set of stock_code to exclude
+    """
+    from .config import FILTER_EXCLUDE_ST, FILTER_MIN_LIST_DAYS, FILTER_EXCLUDE_KCBJ
+
+    blacklist = set()
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        # 1. ST stocks
+        if FILTER_EXCLUDE_ST:
+            cursor.execute(
+                "SELECT stock_code FROM trade_stock_basic WHERE is_st = 1"
+            )
+            st_codes = {row[0] for row in cursor.fetchall()}
+            blacklist.update(st_codes)
+            logger.info(f"  filter: {len(st_codes)} ST stocks excluded")
+
+        # 2. Newly listed stocks (approximate by MIN trade_date)
+        if FILTER_MIN_LIST_DAYS > 0:
+            cutoff = (pd.Timestamp.now() - pd.Timedelta(days=int(FILTER_MIN_LIST_DAYS * 365 / 250)))
+            cursor.execute(
+                f"SELECT stock_code FROM trade_stock_daily "
+                f"GROUP BY stock_code HAVING MIN(trade_date) > '{cutoff.strftime('%Y-%m-%d')}'"
+            )
+            new_codes = {row[0] for row in cursor.fetchall()}
+            blacklist.update(new_codes)
+            logger.info(f"  filter: {len(new_codes)} newly listed stocks excluded "
+                        f"(<{FILTER_MIN_LIST_DAYS} trading days)")
+
+        # 3. ChiNext (300)科创板(688)北交所(8/4) - optional
+        if FILTER_EXCLUDE_KCBJ:
+            cursor.execute(
+                "SELECT stock_code FROM trade_stock_basic "
+                "WHERE stock_code LIKE '688%' OR stock_code LIKE '8%' OR stock_code LIKE '4%'"
+            )
+            kcbj_codes = {row[0] for row in cursor.fetchall()}
+            blacklist.update(kcbj_codes)
+            logger.info(f"  filter: {len(kcbj_codes)} KCB/BJ stocks excluded")
+
+    finally:
+        conn.close()
+
+    logger.info(f"  filter: total blacklist = {len(blacklist)} stocks")
+    return blacklist

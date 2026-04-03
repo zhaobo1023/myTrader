@@ -87,5 +87,8 @@ IC_FORWARD_PERIOD = 20  # 前瞻收益率周期(天)
 IC_MIN_SAMPLES = 30     # 截面最少股票数
 IC_MIN_DATES = 20       # IC时间序列最少天数
 
-# 过滤: 剔除 ST / 停牌 / 上市不足60天
-FILTER_MIN_PRICE = 1.0  # 最低价格过滤
+# 过滤参数
+FILTER_MIN_PRICE = 1.0        # 最低价格过滤
+FILTER_EXCLUDE_ST = True       # 排除 ST / *ST
+FILTER_MIN_LIST_DAYS = 250     # 上市至少250个交易日(约1年)
+FILTER_EXCLUDE_KCBJ = True     # 排除科创板(688)和北交所(8/4)

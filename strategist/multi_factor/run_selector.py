@@ -30,7 +30,7 @@ from strategist.multi_factor.config import (
     FACTORS, FACTOR_LABELS, FACTOR_DIRECTIONS, DEFAULT_TOP_N,
     DEFAULT_REBALANCE_FREQ, IC_FORWARD_PERIOD,
 )
-from strategist.multi_factor.data_loader import load_factor_panel, load_forward_returns
+from strategist.multi_factor.data_loader import load_factor_panel, load_forward_returns, load_stock_filter
 from strategist.multi_factor.scorer import FactorSelector, calc_backtest_returns
 from strategist.multi_factor.evaluator import (
     evaluate_all_factors, evaluate_single_factor,
@@ -207,22 +207,44 @@ def mode_select(args):
 
     selector = FactorSelector()
 
+    # 加载黑名单
+    logger.info("\n[0] Loading stock filter...")
+    blacklist = load_stock_filter()
+    n_before = len(df_day)
+    df_day_filtered = df_day[~df_day.index.isin(blacklist)]
+    n_after = len(df_day_filtered)
+    logger.info(f"  after filter: {n_after}/{n_before} stocks")
+
     # 1) 等权合成选股
     logger.info(f"\n[1] Equal-weight composite selection (Top {top_n})...")
-    top_stocks = selector.select_top_n(df_day, top_n=top_n)
+    top_stocks = selector.select_top_n(df_day, top_n=top_n, blacklist=blacklist)
     scores = selector.score_cross_section(df_day)
 
+    # 加载股票名称
+    from config.db import get_connection
+    conn = get_connection()
+    try:
+        name_df = pd.read_sql(
+            "SELECT stock_code, stock_name FROM trade_stock_basic", conn
+        )
+        name_map = dict(zip(name_df['stock_code'], name_df['stock_name']))
+    finally:
+        conn.close()
+
     print(f"\n## Top {top_n} Stocks (Equal-Weight Composite)")
-    print(f"Date: {closest_date.strftime('%Y-%m-%d')}\n")
-    print(f"| Rank | Stock | Score | PB | PE | MktCap | Vol20 | Price | ROE |")
-    print(f"|------|-------|-------|----|----|--------|-------|-------|-----|")
+    print(f"Date: {closest_date.strftime('%Y-%m-%d')}")
+    print(f"Universe: {n_after} stocks (after filtering)\n")
+    print(f"| Rank | Code | Name | Score | PB | PE | MktCap | Vol20 | Price | ROE |")
+    print(f"|------|------|------|-------|----|----|--------|-------|-------|-----|")
 
     for i, code in enumerate(top_stocks, 1):
         row = df_day.loc[code]
+        name = name_map.get(code, '')
+        mktcap = row.get('market_cap', 0)
         print(
-            f"| {i} | {code} | {scores[code]:.3f} | "
+            f"| {i} | {code} | {name} | {scores[code]:.3f} | "
             f"{row.get('pb', 0):.2f} | {row.get('pe_ttm', 0):.2f} | "
-            f"{row.get('market_cap', 0):.1f} | {row.get('volatility_20', 0):.4f} | "
+            f"{mktcap:.2f} | {row.get('volatility_20', 0):.4f} | "
             f"{row.get('close', 0):.2f} | {row.get('roe_ttm', 0):.2f} |"
         )
 

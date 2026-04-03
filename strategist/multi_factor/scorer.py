@@ -124,7 +124,7 @@ class FactorSelector:
         return result.to_frame('composite_score')
 
     def select_top_n(self, df: pd.DataFrame, top_n: int = DEFAULT_TOP_N,
-                     min_price: float = 1.0) -> list:
+                     min_price: float = 1.0, blacklist: set = None) -> list:
         """
         从单日横截面选出 Top N 股票。
 
@@ -132,23 +132,27 @@ class FactorSelector:
             df: DataFrame, index=stock_code, columns include factor names + close_price
             top_n: number of stocks to select
             min_price: filter out stocks with price below this
+            blacklist: set of stock_code to exclude (ST, newly listed, etc.)
 
         Returns:
             list of stock_code
         """
-        # 价格过滤 (使用 close 或 close_price 列)
-        price_col = 'close_price' if 'close_price' in df.columns else 'close'
-        if price_col in df.columns:
-            mask = df[price_col].notna() & (df[price_col] >= min_price)
-            df_filtered = df[mask]
-        else:
-            df_filtered = df
+        df_filtered = df
+
+        # 黑名单过滤
+        if blacklist:
+            df_filtered = df_filtered[~df_filtered.index.isin(blacklist)]
 
         # 因子值过滤: 至少有一半因子非空
         factor_cols = [f for f in self.factors if f in df_filtered.columns]
         if factor_cols:
             valid_mask = df_filtered[factor_cols].notna().sum(axis=1) >= len(factor_cols) / 2
             df_filtered = df_filtered[valid_mask]
+
+        # 基本面过滤: PB > 0, PE > 0 (排除亏损公司)
+        for neg_filter_col in ('pb', 'pe_ttm'):
+            if neg_filter_col in df_filtered.columns:
+                df_filtered = df_filtered[df_filtered[neg_filter_col] > 0]
 
         if len(df_filtered) < top_n:
             logger.warning(f"Only {len(df_filtered)} stocks after filtering, requested {top_n}")
@@ -162,7 +166,8 @@ class FactorSelector:
         return top_stocks
 
     def select_panel(self, panel: pd.DataFrame, top_n: int = DEFAULT_TOP_N,
-                     rebalance_freq: int = 20, min_price: float = 1.0) -> pd.DataFrame:
+                     rebalance_freq: int = 20, min_price: float = 1.0,
+                     blacklist: set = None) -> pd.DataFrame:
         """
         面板回测选股: 按调仓频率定期选股。
 
@@ -184,7 +189,7 @@ class FactorSelector:
             if isinstance(df_day, pd.Series):
                 continue
 
-            top_stocks = self.select_top_n(df_day, top_n=top_n, min_price=min_price)
+            top_stocks = self.select_top_n(df_day, top_n=top_n, min_price=min_price, blacklist=blacklist)
             if not top_stocks:
                 continue
 
