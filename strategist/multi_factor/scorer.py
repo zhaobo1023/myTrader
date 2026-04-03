@@ -14,7 +14,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from .config import FACTOR_DEFS, FACTOR_DIRECTIONS, FACTOR_LABELS, DEFAULT_TOP_N
+from .config import FACTOR_DEFS, FACTOR_DIRECTIONS, FACTOR_LABELS, FACTOR_GROUPS, DEFAULT_TOP_N
 
 logger = logging.getLogger(__name__)
 
@@ -22,22 +22,36 @@ logger = logging.getLogger(__name__)
 class FactorSelector:
     """多因子选股器"""
 
-    def __init__(self, factors=None, weights=None):
+    def __init__(self, factors=None, weights=None, use_groups=False):
         """
         Args:
-            factors: list of factor names, None = all 6 factors
+            factors: list of factor names, None = all factors
             weights: list of float, None = equal weight
+            use_groups: if True, derive weights from FACTOR_GROUPS
         """
         if factors is None:
-            factors = [f['name'] for f in FACTOR_DEFS]
+            if use_groups:
+                factors = [f for g in FACTOR_GROUPS for f in g['factors']]
+            else:
+                factors = [f['name'] for f in FACTOR_DEFS]
         self.factors = factors
 
         if weights is None:
-            weights = [1.0 / len(factors)] * len(factors)
+            if use_groups:
+                # group-level equal weight, within-group equal weight
+                weights = {}
+                for g in FACTOR_GROUPS:
+                    n = len(g['factors'])
+                    w_per_factor = g['weight'] / n
+                    for f in g['factors']:
+                        weights[f] = w_per_factor
+            else:
+                weights = [1.0 / len(factors)] * len(factors)
+                weights = dict(zip(factors, weights))
         else:
             total = sum(weights)
-            weights = [w / total for w in weights]
-        self.weights = dict(zip(factors, weights))
+            weights = {f: w / total for f, w in zip(factors, weights)}
+        self.weights = weights
 
     def _validate_factors(self, df):
         """Check which factors are available in the DataFrame."""
@@ -73,6 +87,7 @@ class FactorSelector:
                 scores[f] = 1.0 - pct
             else:
                 scores[f] = pct
+            scores[f] = scores[f].fillna(0.5)  # neutral for missing data
 
         # 去掉全 NaN 的因子列
         scores = scores.dropna(axis=1, how='all')
@@ -109,14 +124,20 @@ class FactorSelector:
                 # only one stock, skip
                 continue
             scores = self.score_cross_section(df_day)
+            if scores.empty:
+                continue
             scores.name = 'composite_score'
+            # 保留 trade_date 作为 index 的一层
+            scores = scores.to_frame()
+            scores.index.name = 'stock_code'
+            scores['trade_date'] = dt
             results.append(scores)
 
         if not results:
             return pd.DataFrame()
 
-        result = pd.concat(results)
-        return result.to_frame('composite_score')
+        result = pd.concat(results).reset_index().set_index(['trade_date', 'stock_code'])
+        return result[['composite_score']]
 
     def select_top_n(self, df: pd.DataFrame, top_n: int = DEFAULT_TOP_N,
                      min_price: float = 1.0) -> list:

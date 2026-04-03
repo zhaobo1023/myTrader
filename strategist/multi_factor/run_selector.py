@@ -75,7 +75,7 @@ def mode_ic(args):
     report = format_ic_report(results)
     print(report)
 
-    # 3. Evaluate composite score
+    # 3. Evaluate composite score (equal-weight)
     logger.info("\n[2] Evaluating composite score (equal-weight)...")
     selector = FactorSelector()
     score_panel = selector.score_panel(panel)
@@ -91,16 +91,36 @@ def mode_ic(args):
         results.append(composite_result)
 
         report2 = format_ic_report([composite_result])
-        print("\n## Composite Score IC\n")
+        print("\n## Composite Score IC (Equal-Weight)\n")
         print(report2)
 
-    # 4. Factor correlation matrix
-    logger.info("\n[3] Computing factor correlation matrix...")
+    # 4. Evaluate composite score (group-weight)
+    logger.info("\n[3] Evaluating composite score (group-weight)...")
+    selector_grp = FactorSelector(use_groups=True)
+    score_panel_grp = selector_grp.score_panel(panel)
+    if not score_panel_grp.empty:
+        combined_grp = panel.reset_index().merge(
+            score_panel_grp.reset_index(), on=['trade_date', 'stock_code'], how='inner'
+        ).set_index(['trade_date', 'stock_code'])
+        grp_result = evaluate_single_factor(
+            combined_grp, fwd, 'composite_score', IC_FORWARD_PERIOD
+        )
+        grp_result['label'] = 'Composite (Group-Weight)'
+        results.append(grp_result)
+
+        report3 = format_ic_report([grp_result])
+        print("\n## Composite Score IC (Group-Weight)\n")
+        print(report3)
+
+    # 5. Factor correlation matrix
+    logger.info("\n[4] Computing factor correlation matrix...")
     factor_cols_all = FACTORS + ['composite_score']
     factor_cols_available = [c for c in factor_cols_all if c in panel.columns]
-    if 'composite_score' in score_panel.columns and 'composite_score' not in panel.columns:
+    # Use group-weight score panel for correlation matrix
+    score_panel_for_corr = score_panel_grp if not score_panel_grp.empty else score_panel
+    if 'composite_score' in score_panel_for_corr.columns and 'composite_score' not in panel.columns:
         panel_with_score = panel.reset_index().merge(
-            score_panel.reset_index(), on=['trade_date', 'stock_code'], how='inner'
+            score_panel_for_corr.reset_index(), on=['trade_date', 'stock_code'], how='inner'
         ).set_index(['trade_date', 'stock_code'])
     else:
         panel_with_score = panel
@@ -132,7 +152,7 @@ def mode_ic(args):
                     label2 = FACTOR_LABELS.get(c2, c2)
                     print(f"  - {label1}({c1}) <-> {label2}({c2}): r={v:.3f}")
 
-    # 5. Save report
+    # 6. Save report
     ensure_output_dir()
     report_path = os.path.join(OUTPUT_DIR, 'ic_report.md')
     full_report = format_ic_report(results)
@@ -142,15 +162,21 @@ def mode_ic(args):
 
     # Save IC series CSV
     ic_data = []
-    for f in FACTORS + ['composite_score']:
-        if f in panel.columns or f == 'composite_score':
-            src = score_panel if f == 'composite_score' else panel
-            if f not in src.columns:
-                continue
-            ic_s = calculate_ic_series(src, fwd, f, IC_FORWARD_PERIOD)
-            if not ic_s.empty:
-                ic_s.name = f
-                ic_data.append(ic_s.to_frame())
+    for f in FACTORS + ['composite_score', 'composite_score_grp']:
+        f_actual = f  # default: column name in DataFrame
+        if f in panel.columns:
+            src = panel
+        elif f == 'composite_score_grp' and not score_panel_grp.empty:
+            src = score_panel_grp
+            f_actual = 'composite_score'
+        elif f == 'composite_score' and not score_panel.empty:
+            src = score_panel
+        else:
+            continue
+        ic_s = calculate_ic_series(src, fwd, f_actual, IC_FORWARD_PERIOD)
+        if not ic_s.empty:
+            ic_s.name = f
+            ic_data.append(ic_s.to_frame())
 
     if ic_data:
         ic_df = pd.concat(ic_data, axis=1)

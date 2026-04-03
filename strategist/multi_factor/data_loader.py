@@ -2,10 +2,12 @@
 """
 数据加载模块
 
-从4张因子表加载并合并横截面数据:
+从6张因子表加载并合并横截面数据:
 - trade_stock_valuation_factor: pb, pe_ttm, market_cap
-- trade_stock_basic_factor: volatility_20, close
-- trade_stock_extended_factor: roe_ttm
+- trade_stock_basic_factor: volatility_20, close, mom_20, reversal_5
+- trade_stock_extended_factor: roe_ttm, gross_margin, net_profit_growth, revenue_growth
+- trade_stock_quality_factor: roa, debt_ratio
+- trade_stock_daily_basic: dv_ttm
 - trade_stock_daily: close_price (用于计算前瞻收益率 + ST过滤)
 
 使用 pymysql + pd.read_sql 直接读取，支持大结果集。
@@ -81,30 +83,50 @@ def load_factor_panel(start_date: str, end_date: str) -> pd.DataFrame:
         df_val = _read_sql(sql_val, conn)
         logger.info(f"  valuation_factor: {len(df_val):,} rows")
 
-        # 2) 基础因子: volatility_20, close
+        # 2) 基础因子: volatility_20, close, mom_20, reversal_5
         sql_basic = f"""
             SELECT stock_code, calc_date AS trade_date,
-                   volatility_20, close
+                   volatility_20, close, mom_20, reversal_5
             FROM trade_stock_basic_factor
             WHERE calc_date >= '{start_date}' AND calc_date <= '{end_date}'
         """
         df_basic = _read_sql(sql_basic, conn)
         logger.info(f"  basic_factor: {len(df_basic):,} rows")
 
-        # 3) 扩展因子: roe_ttm
+        # 3) 扩展因子: roe_ttm, gross_margin, net_profit_growth, revenue_growth
         sql_ext = f"""
             SELECT stock_code, calc_date AS trade_date,
-                   roe_ttm
+                   roe_ttm, gross_margin, net_profit_growth, revenue_growth
             FROM trade_stock_extended_factor
             WHERE calc_date >= '{start_date}' AND calc_date <= '{end_date}'
         """
         df_ext = _read_sql(sql_ext, conn)
         logger.info(f"  extended_factor: {len(df_ext):,} rows")
+
+        # 4) 质量因子: roa, debt_ratio
+        sql_quality = f"""
+            SELECT stock_code, calc_date AS trade_date,
+                   roa, debt_ratio
+            FROM trade_stock_quality_factor
+            WHERE calc_date >= '{start_date}' AND calc_date <= '{end_date}'
+        """
+        df_quality = _read_sql(sql_quality, conn)
+        logger.info(f"  quality_factor: {len(df_quality):,} rows")
+
+        # 5) 每日基本面: dv_ttm
+        sql_daily_basic = f"""
+            SELECT stock_code, trade_date,
+                   dv_ttm
+            FROM trade_stock_daily_basic
+            WHERE trade_date >= '{start_date}' AND trade_date <= '{end_date}'
+        """
+        df_daily_basic = _read_sql(sql_daily_basic, conn)
+        logger.info(f"  daily_basic: {len(df_daily_basic):,} rows")
     finally:
         conn.close()
 
     # 逐个 merge (outer join on date+code)
-    dfs = [df_val, df_basic, df_ext]
+    dfs = [df_val, df_basic, df_ext, df_quality, df_daily_basic]
     dfs = [df for df in dfs if not df.empty]
 
     if not dfs:

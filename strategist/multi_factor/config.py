@@ -5,10 +5,11 @@
 定义因子列表、方向、来源表、权重等配置。
 """
 
-# 6 个核心因子定义
+# 14 个基础因子定义
 # (factor_name, source_table, source_column, direction)
 # direction: -1 = low value better, +1 = high value better
 FACTOR_DEFS = [
+    # -- 估值因子 --
     {
         'name': 'pb',
         'table': 'trade_stock_valuation_factor',
@@ -27,9 +28,10 @@ FACTOR_DEFS = [
         'name': 'market_cap',
         'table': 'trade_stock_valuation_factor',
         'column': 'market_cap',
-        'direction': 1,
-        'label': 'Large Cap',
+        'direction': -1,
+        'label': 'Small Cap',
     },
+    # -- 基础因子 --
     {
         'name': 'volatility_20',
         'table': 'trade_stock_basic_factor',
@@ -45,11 +47,70 @@ FACTOR_DEFS = [
         'label': 'Low Price',
     },
     {
+        'name': 'mom_20',
+        'table': 'trade_stock_basic_factor',
+        'column': 'mom_20',
+        'direction': 1,
+        'label': 'Momentum 20D',
+    },
+    {
+        'name': 'reversal_5',
+        'table': 'trade_stock_basic_factor',
+        'column': 'reversal_5',
+        'direction': 1,
+        'label': 'Reversal 5D',
+    },
+    # -- 扩展因子 --
+    {
         'name': 'roe_ttm',
         'table': 'trade_stock_extended_factor',
         'column': 'roe_ttm',
         'direction': 1,
         'label': 'High ROE',
+    },
+    {
+        'name': 'gross_margin',
+        'table': 'trade_stock_extended_factor',
+        'column': 'gross_margin',
+        'direction': 1,
+        'label': 'High Gross Margin',
+    },
+    {
+        'name': 'net_profit_growth',
+        'table': 'trade_stock_extended_factor',
+        'column': 'net_profit_growth',
+        'direction': 1,
+        'label': 'Profit Growth',
+    },
+    {
+        'name': 'revenue_growth',
+        'table': 'trade_stock_extended_factor',
+        'column': 'revenue_growth',
+        'direction': 1,
+        'label': 'Revenue Growth',
+    },
+    # -- 质量因子 --
+    {
+        'name': 'roa',
+        'table': 'trade_stock_quality_factor',
+        'column': 'roa',
+        'direction': 1,
+        'label': 'High ROA',
+    },
+    {
+        'name': 'debt_ratio',
+        'table': 'trade_stock_quality_factor',
+        'column': 'debt_ratio',
+        'direction': -1,
+        'label': 'Low Leverage',
+    },
+    # -- 每日基本面 --
+    {
+        'name': 'dv_ttm',
+        'table': 'trade_stock_daily_basic',
+        'column': 'dv_ttm',
+        'direction': 1,
+        'label': 'High Dividend Yield',
     },
 ]
 
@@ -62,6 +123,34 @@ COMPOSITE_FACTORS = [
         'direction': 1,  # 越高越好: 高ROE + 低PB
         'label': 'PB-ROE',
         'filter': 'pb > 0',  # PB必须为正
+    },
+]
+
+# 因子分组 (用于分组等权合成)
+FACTOR_GROUPS = [
+    {
+        'name': 'value',
+        'label': 'Value',
+        'factors': ['pb', 'pe_ttm', 'close'],
+        'weight': 0.25,
+    },
+    {
+        'name': 'momentum',
+        'label': 'Momentum/Reversal',
+        'factors': ['mom_20', 'reversal_5'],
+        'weight': 0.25,
+    },
+    {
+        'name': 'quality',
+        'label': 'Quality/Growth',
+        'factors': ['roe_ttm', 'revenue_growth', 'net_profit_growth', 'roa'],
+        'weight': 0.25,
+    },
+    {
+        'name': 'risk',
+        'label': 'Risk',
+        'factors': ['volatility_20', 'market_cap'],
+        'weight': 0.25,
     },
 ]
 
