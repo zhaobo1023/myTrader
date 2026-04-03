@@ -546,6 +546,13 @@ def report_plan_a(results: pd.DataFrame, regime_at: pd.DataFrame):
         m['mom_20'] = regime_at.loc[common, 'mom_20']
         m['cross_vol_20'] = regime_at.loc[common, 'cross_vol_20']
 
+        # Show correlation of regime indicators with excess return
+        corr_vol = m['vol_20'].corr(m['excess_return'])
+        corr_mom = m['mom_20'].corr(m['excess_return'])
+        corr_cv = m['cross_vol_20'].corr(m['excess_return']) if m['cross_vol_20'].notna().sum() > 4 else 0
+        print(f"Indicator-Excess Correlation: vol_20={corr_vol:+.3f}, mom_20={corr_mom:+.3f}, cross_vol={corr_cv:+.3f}")
+        print(f"(Higher vol_20 = strategy works better)\n")
+
         def regime_stats(sub, label):
             if len(sub) == 0:
                 return
@@ -613,20 +620,24 @@ def report_plan_a(results: pd.DataFrame, regime_at: pd.DataFrame):
 
 def report_plan_b(results_a: pd.DataFrame, regime_at: pd.DataFrame):
     """
-    Plan B: Conditional backtest.
-    Only activate strategy when regime conditions are met.
+    Plan B: Conditional backtest (vol_20 centric).
+    Only activate strategy when market volatility is elevated.
     Otherwise hold benchmark.
+
+    Core insight: vol_20 (20-day realized vol of market index) has the
+    strongest correlation with strategy excess return (~0.42).
+    High vol = "chaos/low risk appetite" = defensive factors work.
     """
-    if regime_at.empty or len(regime_at.dropna(subset=['cross_vol_20', 'mom_20'])) < 6:
+    if regime_at.empty or len(regime_at.dropna(subset=['vol_20'])) < 6:
         print("\n[WARN] Cannot run Plan B: insufficient regime data")
         return
 
     print("\n" + "=" * 100)
-    print("PLAN B: Conditional Backtest (Regime-Filtered)")
+    print("PLAN B: Conditional Backtest (Vol-20 Centric)")
     print("=" * 100)
 
     merged = results_a.copy().set_index('rebalance_date')
-    common = merged.index.intersection(regime_at.dropna(subset=['cross_vol_20', 'mom_20']).index)
+    common = merged.index.intersection(regime_at.dropna(subset=['vol_20']).index)
     if len(common) < 4:
         print("[WARN] Not enough overlap for Plan B")
         return
@@ -635,18 +646,32 @@ def report_plan_b(results_a: pd.DataFrame, regime_at: pd.DataFrame):
     m['cross_vol_20'] = regime_at.loc[common, 'cross_vol_20']
     m['mom_20'] = regime_at.loc[common, 'mom_20']
     m['vol_20'] = regime_at.loc[common, 'vol_20']
+    m['drawdown_60'] = regime_at.loc[common, 'drawdown_60']
 
-    # Define conditions
-    cv_threshold = m['cross_vol_20'].quantile(0.60)
+    # Print vol_20 correlation with excess return
+    corr_vol = m['vol_20'].corr(m['excess_return'])
+    corr_cv = m['cross_vol_20'].corr(m['excess_return']) if m['cross_vol_20'].notna().sum() > 4 else 0
+    print(f"\n### Regime-Excess Correlation\n")
+    print(f"| Indicator | Corr with Excess |")
+    print(f"|-----------|------------------|")
+    print(f"| vol_20 (index realized vol) | {corr_vol:+.3f} |")
+    print(f"| cross_vol_20 (dispersion) | {corr_cv:+.3f} |")
+
+    # Define conditions: vol_20 is the primary trigger
+    vol_p75 = m['vol_20'].quantile(0.75)
+    vol_p60 = m['vol_20'].quantile(0.60)
+    vol_p50 = m['vol_20'].quantile(0.50)
+    cv_p75 = m['cross_vol_20'].quantile(0.75) if m['cross_vol_20'].notna().sum() > 4 else 0
     declining = m['mom_20'] < 0
 
-    # Condition sets to try
     conditions = {
-        'A: cross_vol>=60pct + declining': (m['cross_vol_20'] >= cv_threshold) & declining,
-        'B: cross_vol>=50pct + declining': (m['cross_vol_20'] >= m['cross_vol_20'].quantile(0.50)) & declining,
-        'C: cross_vol>=60pct only': m['cross_vol_20'] >= cv_threshold,
-        'D: declining only': declining,
-        'E: index_vol>=median + declining': (m['vol_20'] >= m['vol_20'].median()) & declining,
+        'A: vol>=75pct': m['vol_20'] >= vol_p75,
+        'B: vol>=60pct': m['vol_20'] >= vol_p60,
+        'C: vol>=median': m['vol_20'] >= vol_p50,
+        'D: vol>=75pct OR cross_vol>=75pct': (m['vol_20'] >= vol_p75) | (m['cross_vol_20'] >= cv_p75),
+        'E: vol>=75pct + declining': (m['vol_20'] >= vol_p75) & declining,
+        'F: vol>=60pct + declining': (m['vol_20'] >= vol_p60) & declining,
+        'G: cross_vol>=60pct + declining (old)': (m['cross_vol_20'] >= m['cross_vol_20'].quantile(0.60)) & declining,
     }
 
     # Compare all conditions
@@ -688,21 +713,22 @@ def report_plan_b(results_a: pd.DataFrame, regime_at: pd.DataFrame):
 
     # Detailed report for best condition
     print(f"\n### Best Condition: {plan_b_best_name}\n")
-    print(f"Threshold: cross_vol >= {cv_threshold:.4f} (60th pct) AND mom_20 < 0\n")
+    print(f"Threshold: vol_20 >= {vol_p75:.1%} (75th pct)\n")
 
     plan_b_ret = np.where(plan_b_best, m['portfolio_return'], m['benchmark_return'])
     m['plan_b_return'] = plan_b_ret
     m['plan_b_excess'] = plan_b_ret - m['benchmark_return']
     m['active'] = plan_b_best
 
-    print(f"| Month | Active | Strat | Plan B | BM | Exc(A) | Exc(B) | CumExc(B) |")
-    print(f"|-------|--------|-------|--------|-----|--------|--------|-----------|")
+    print(f"| Month | Active | Vol20 | Strat | Plan B | BM | Exc(A) | Exc(B) | CumExc(B) |")
+    print(f"|-------|--------|-------|-------|--------|-----|--------|--------|-----------|")
 
     cum_b = 1.0
     for _, row in m.iterrows():
         cum_b *= (1 + row['plan_b_excess'])
         act = "YES" if row['active'] else " no"
         print(f"| {row['month']} | {act} "
+              f"| {fmt_pct(row['vol_20'], False)} "
               f"| {fmt_pct(row['portfolio_return'])} "
               f"| {fmt_pct(row['plan_b_return'])} "
               f"| {fmt_pct(row['benchmark_return'])} "
@@ -720,6 +746,15 @@ def report_plan_b(results_a: pd.DataFrame, regime_at: pd.DataFrame):
 
     n_active = plan_b_best.sum()
 
+    # Active-only performance
+    active_mask = plan_b_best
+    if active_mask.sum() > 0:
+        active_exc = m.loc[active_mask, 'excess_return']
+        active_wr = (active_exc > 0).mean()
+        active_avg = active_exc.mean()
+    else:
+        active_wr = active_avg = 0
+
     print(f"\n### Final Comparison\n")
     print(f"| Metric | Plan A | Plan B | Improvement |")
     print(f"|--------|--------|--------|-------------|")
@@ -728,6 +763,8 @@ def report_plan_b(results_a: pd.DataFrame, regime_at: pd.DataFrame):
     print(f"| Sharpe (excess) | {sharpe_a:.2f} | {sharpe_b_val:.2f} | {sharpe_b_val - sharpe_a:+.2f} |")
     print(f"| Avg Monthly Exc | {m['excess_return'].mean():+.2%} | {m['plan_b_excess'].mean():+.2%} | "
           f"{m['plan_b_excess'].mean() - m['excess_return'].mean():+.2%} |")
+    print(f"| Active-only Win Rate | - | {active_wr:.0%} | - |")
+    print(f"| Active-only Avg Exc | - | {active_avg:+.2%} | - |")
 
     return m
 
