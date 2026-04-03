@@ -206,7 +206,119 @@ class SingleStockScanner:
             pass
 
         return code
-    
+
+    @staticmethod
+    def _clean_for_json(data_list):
+        """Replace NaN with None for JSON serialization."""
+        cleaned = []
+        for item in data_list:
+            if isinstance(item, list):
+                cleaned.append([None if (v is None or (isinstance(v, float) and np.isnan(v))) else v for v in item])
+            else:
+                cleaned.append(None if (item is None or (isinstance(item, float) and np.isnan(item))) else item)
+        return cleaned
+
+    def _build_echarts_html(self, df: pd.DataFrame, display_days: int = 120) -> str:
+        """Generate ECharts interactive K-line chart HTML."""
+        display_df = df.tail(display_days).copy()
+        dates = display_df['trade_date'].dt.strftime('%m-%d').tolist()
+
+        # OHLC data: [open, close, low, high] for ECharts
+        ohlc_data = display_df.apply(
+            lambda r: [round(r['open'], 2), round(r['close'], 2), round(r['low'], 2), round(r['high'], 2)],
+            axis=1
+        ).tolist()
+
+        def clean_series(series):
+            return [round(v, 2) if v is not None and not pd.isna(v) else None for v in series]
+
+        ma5_data = clean_series(display_df.get('ma5', pd.Series()))
+        ma20_data = clean_series(display_df.get('ma20', pd.Series()))
+        ma60_data = clean_series(display_df.get('ma60', pd.Series()))
+        ma250_data = clean_series(display_df.get('ma250', pd.Series()))
+
+        boll_upper = clean_series(display_df.get('boll_upper', pd.Series()))
+        boll_lower = clean_series(display_df.get('boll_lower', pd.Series()))
+
+        volume_data = display_df.apply(
+            lambda r: [
+                int(r['volume']),
+                round(r['pct_change'], 2) if not pd.isna(r.get('pct_change', 0)) else 0
+            ],
+            axis=1
+        ).tolist()
+
+        macd_dif_data = clean_series(display_df.get('macd_dif', pd.Series()))
+        macd_dea_data = clean_series(display_df.get('macd_dea', pd.Series()))
+        macd_hist_data = [round(v, 4) if v is not None and not pd.isna(v) else None for v in display_df.get('macd_hist', pd.Series())]
+
+        # Serialize data arrays to JSON
+        dates_json = json.dumps(dates)
+        ohlc_json = json.dumps(self._clean_for_json(ohlc_data))
+        ma5_json = json.dumps(ma5_data)
+        ma20_json = json.dumps(ma20_data)
+        ma60_json = json.dumps(ma60_data)
+        ma250_json = json.dumps(ma250_data)
+        boll_upper_json = json.dumps(boll_upper)
+        boll_lower_json = json.dumps(boll_lower)
+        volume_json = json.dumps(self._clean_for_json(volume_data))
+        macd_dif_json = json.dumps(macd_dif_data)
+        macd_dea_json = json.dumps(macd_dea_data)
+        macd_hist_json = json.dumps(macd_hist_data)
+
+        echarts_js = f'''
+var chartDom = document.getElementById('kline_chart');
+var myChart = echarts.init(chartDom);
+var option = {{
+    animation: false,
+    tooltip: {{ trigger: 'axis', axisPointer: {{ type: 'cross' }} }},
+    legend: {{ data: ['MA5', 'MA20', 'MA60', 'MA250', 'BOLL\u4e0a\u8f68', 'BOLL\u4e0b\u8f68', 'MACD DIF', 'MACD DEA'], top: 10 }},
+    grid: [
+        {{ left: '8%', right: '3%', top: '8%', height: '55%' }},
+        {{ left: '8%', right: '3%', top: '70%', height: '10%' }},
+        {{ left: '8%', right: '3%', top: '84%', height: '14%' }}
+    ],
+    xAxis: [
+        {{ type: 'category', data: {dates_json}, gridIndex: 0, show: false, boundaryGap: true }},
+        {{ type: 'category', data: {dates_json}, gridIndex: 1, show: false, boundaryGap: true }},
+        {{ type: 'category', data: {dates_json}, gridIndex: 2, boundaryGap: true }}
+    ],
+    yAxis: [
+        {{ scale: true, gridIndex: 0, splitArea: {{ show: false }} }},
+        {{ scale: true, gridIndex: 1, splitNumber: 2, splitArea: {{ show: false }} }},
+        {{ scale: true, gridIndex: 2, splitNumber: 2, splitArea: {{ show: false }} }}
+    ],
+    dataZoom: [
+        {{ type: 'inside', xAxisIndex: [0, 1, 2], start: 50, end: 100 }},
+        {{ show: true, xAxisIndex: [0, 1, 2], type: 'slider', top: '95%', start: 50, end: 100 }}
+    ],
+    series: [
+        {{ name: 'K\u7ebf', type: 'candlestick', xAxisIndex: 0, yAxisIndex: 0,
+          data: {ohlc_json}, itemStyle: {{ color: '#e74c3c', color0: '#27ae60', borderColor: '#e74c3c', borderColor0: '#27ae60' }} }},
+        {{ name: 'MA5', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: {ma5_json}, smooth: true, lineStyle: {{ width: 1 }}, symbol: 'none' }},
+        {{ name: 'MA20', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: {ma20_json}, smooth: true, lineStyle: {{ width: 1 }}, symbol: 'none' }},
+        {{ name: 'MA60', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: {ma60_json}, smooth: true, lineStyle: {{ width: 1 }}, symbol: 'none' }},
+        {{ name: 'MA250', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: {ma250_json}, smooth: true, lineStyle: {{ width: 1 }}, symbol: 'none' }},
+        {{ name: 'BOLL\u4e0a\u8f68', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: {boll_upper_json}, lineStyle: {{ type: 'dashed', width: 0.8 }}, symbol: 'none' }},
+        {{ name: 'BOLL\u4e0b\u8f68', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: {boll_lower_json}, lineStyle: {{ type: 'dashed', width: 0.8 }}, symbol: 'none' }},
+        {{ name: '\u6210\u4ea4\u91cf', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: {volume_json},
+          itemStyle: {{ color: function(p) {{ return p.data[1] >= 0 ? '#e74c3c' : '#27ae60'; }} }} }},
+        {{ name: 'MACD\u67f1', type: 'bar', xAxisIndex: 2, yAxisIndex: 2, data: {macd_hist_json},
+          itemStyle: {{ color: function(p) {{ return p.value >= 0 ? '#e74c3c' : '#27ae60'; }} }} }},
+        {{ name: 'MACD DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: {macd_dif_json}, symbol: 'none', lineStyle: {{ width: 1 }} }},
+        {{ name: 'MACD DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: {macd_dea_json}, symbol: 'none', lineStyle: {{ width: 1 }} }}
+    ]
+}};
+myChart.setOption(option);
+window.addEventListener('resize', function() {{ myChart.resize(); }});
+'''
+
+        return f'''<div id="kline_chart" style="width:100%;height:600px;margin-bottom:20px;border:1px solid #ddd;border-radius:4px;"></div>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script>
+{echarts_js}
+</script>'''
+
     def _generate_text_report(self, code: str, stock_name: str, df: pd.DataFrame, latest: pd.Series, latest_date: str) -> str:
         """Generate plain text report."""
         lines = []
@@ -351,14 +463,20 @@ class SingleStockScanner:
                               recent_features=None,
                               rps_120=None, rps_250=None, rps_slope=None):
         """Generate HTML report v2.0 with scoring, interpretation, and structured analysis."""
-        import base64
         from pathlib import Path
 
-        # Chart image
-        chart_img_html = ''
-        if chart_path:
-            chart_b64 = base64.b64encode(Path(chart_path).read_bytes()).decode('utf-8')
-            chart_img_html = f'<img src="data:image/png;base64,{chart_b64}" style="max-width:100%;border:1px solid #ddd;border-radius:4px;margin-bottom:20px;">'
+        # Build chart HTML: ECharts first, fallback to matplotlib base64
+        chart_html = ''
+        if self.generate_chart:
+            try:
+                chart_html = self._build_echarts_html(df, display_days=120)
+            except Exception as e:
+                import logging
+                logging.getLogger('tech_scan').warning(f'ECharts generation failed: {e}, falling back to matplotlib')
+                if chart_path:
+                    import base64
+                    chart_b64 = base64.b64encode(Path(chart_path).read_bytes()).decode('utf-8')
+                    chart_html = f'<img src="data:image/png;base64,{chart_b64}" style="max-width:100%;border:1px solid #ddd;border-radius:4px;margin-bottom:20px;">'
 
         # Fallbacks if ReportEngine not used
         if score_result is None:
@@ -585,7 +703,7 @@ tr:nth-child(even) {{ background: #f9f9f9; }}
 </style></head><body>
 <h1>{stock_name} ({code}) - 技术面扫描</h1>
 <div class="meta">扫描日期: {latest_date} | 数据行数: {len(df)} | 数据源: {self.env}</div>
-{chart_img_html}
+{chart_html}
 
 <!-- Section 1: Comprehensive Conclusion -->
 <div class="info-card" style="border:2px solid {badge_color}">
