@@ -43,7 +43,6 @@ env/
 logs/
 
 # Data files
-*.csv
 *.xlsx
 *.parquet
 data/
@@ -70,5 +69,4 @@ htmlcov/
 secrets/
 
 # Output (generated artifacts)
-output/
 data_analyst/output/

@@ -109,6 +109,11 @@ class FactorSelector:
                 # only one stock, skip
                 continue
             scores = self.score_cross_section(df_day)
+            # attach trade_date as outer index level
+            scores.index = pd.MultiIndex.from_tuples(
+                [(dt, code) for code in scores.index],
+                names=['trade_date', 'stock_code']
+            )
             scores.name = 'composite_score'
             results.append(scores)
 

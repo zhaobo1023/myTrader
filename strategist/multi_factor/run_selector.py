@@ -107,8 +107,16 @@ def mode_ic(args):
 
     corr_cols = [c for c in factor_cols_available if c in panel_with_score.columns]
     if corr_cols:
-        # 取最近一个交易日的截面计算相关性
-        last_date = panel_with_score.index.get_level_values(0).max()
+        # 取最近一个数据完整的交易日截面计算相关性
+        all_dates = panel_with_score.index.get_level_values(0).unique().sort_values(ascending=False)
+        last_date = None
+        for dt in all_dates:
+            df_try = panel_with_score.loc[dt]
+            if isinstance(df_try, pd.DataFrame) and df_try[corr_cols].notna().mean().min() > 0.8:
+                last_date = dt
+                break
+        if last_date is None:
+            last_date = all_dates[0]
         df_last = panel_with_score.loc[last_date]
         if isinstance(df_last, pd.DataFrame):
             corr = df_last[corr_cols].corr()
