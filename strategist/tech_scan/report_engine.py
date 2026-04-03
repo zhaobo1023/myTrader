@@ -15,6 +15,7 @@ class ScoreResult:
     score: float           # 0-10
     trend_label: str       # e.g. "偏多"
     action_advice: str     # e.g. "持有为主，轻仓参与"
+    breakdown: dict = None  # {'ma': 1.5, 'macd': 2.0, 'kdj': 2.0, 'rsi': 1.0, 'vol_price': 2.0}
 
 
 @dataclass
@@ -55,59 +56,74 @@ class ReportEngine:
 
     def calc_score(self, latest: pd.Series) -> ScoreResult:
         """Calculate composite trend score 0-10."""
+        breakdown = {}
         score = 0.0
         close = latest['close']
 
         # MA system (max 3)
+        ma_score = 0.0
         for w, pts in [(5, 0.5), (20, 1.0), (60, 1.0), (250, 0.5)]:
             ma = latest.get(f'ma{w}')
             if ma is not None and not np.isnan(ma):
                 if close > ma:
-                    score += pts
-
+                    ma_score += pts
         # MA alignment bonus/penalty
         ma5, ma20, ma60 = latest.get('ma5'), latest.get('ma20'), latest.get('ma60')
         if all(v is not None and not np.isnan(v) for v in [ma5, ma20, ma60]):
             if ma5 > ma20 > ma60:
-                score += 0.5
+                ma_score += 0.5
             if ma5 < ma20:
-                score -= 0.5
+                ma_score -= 0.5
+        score += ma_score
+        breakdown['ma'] = round(ma_score, 1)
 
         # MACD (max 2)
+        macd_score = 0.0
         dif = latest.get('macd_dif', 0)
         dea = latest.get('macd_dea', 0)
         hist = latest.get('macd_hist', 0)
         prev_hist = latest.get('prev_macd_hist', 0)
         if dif > dea:
-            score += 1.0
+            macd_score += 1.0
         if hist > 0:
-            score += 0.5
+            macd_score += 0.5
         if hist > prev_hist:
-            score += 0.5
+            macd_score += 0.5
+        score += macd_score
+        breakdown['macd'] = round(macd_score, 1)
 
         # KDJ (max 2)
+        kdj_score = 0.0
         k = latest.get('kdj_k')
         d = latest.get('kdj_d')
         j = latest.get('kdj_j')
         if all(v is not None and not np.isnan(v) for v in [k, d, j]):
-            if k > 50: score += 0.5
-            if k > d: score += 0.5
-            if j > 50: score += 0.5
-            if j < 80: score += 0.5
+            if k > 50: kdj_score += 0.5
+            if k > d: kdj_score += 0.5
+            if j > 50: kdj_score += 0.5
+            if j < 80: kdj_score += 0.5
+        score += kdj_score
+        breakdown['kdj'] = round(kdj_score, 1)
 
         # RSI (max 1)
+        rsi_score = 0.0
         rsi = latest.get('rsi')
         if rsi is not None and not np.isnan(rsi):
-            if 40 < rsi < 70: score += 1.0
-            elif 30 < rsi <= 40: score += 0.5
+            if 40 < rsi < 70: rsi_score += 1.0
+            elif 30 < rsi <= 40: rsi_score += 0.5
+        score += rsi_score
+        breakdown['rsi'] = round(rsi_score, 1)
 
         # Volume-price (max 2)
+        vp_score = 0.0
         vr = latest.get('volume_ratio')
         pct = latest.get('pct_change', 0)
         if vr is not None and not np.isnan(vr):
-            if vr > 1.2 and pct > 0: score += 1.0
-            elif vr < 0.8 and pct < 0: score += 1.0
-            elif vr > 1.5 and pct < 0: score -= 1.0
+            if vr > 1.2 and pct > 0: vp_score += 1.0
+            elif vr < 0.8 and pct < 0: vp_score += 1.0
+            elif vr > 1.5 and pct < 0: vp_score -= 1.0
+        score += vp_score
+        breakdown['vol_price'] = round(vp_score, 1)
 
         score = max(0, min(10, round(score, 1)))
 
@@ -117,7 +133,7 @@ class ReportEngine:
         elif score >= 2.0: label, advice = '偏空', '减仓或空仓，警惕破位'
         else: label, advice = '强势空头', '空仓，严控风险'
 
-        return ScoreResult(score=score, trend_label=label, action_advice=advice)
+        return ScoreResult(score=score, trend_label=label, action_advice=advice, breakdown=breakdown)
 
     def classify_ma_pattern(self, latest: pd.Series) -> MAPattern:
         close = latest['close']

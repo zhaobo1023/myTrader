@@ -342,7 +342,7 @@ class SingleStockScanner:
         # Fallbacks if ReportEngine not used
         if score_result is None:
             from strategist.tech_scan.report_engine import ScoreResult
-            score_result = ScoreResult(score=5.0, trend_label='N/A', action_advice='N/A')
+            score_result = ScoreResult(score=5.0, trend_label='N/A', action_advice='N/A', breakdown={'ma': 0, 'macd': 0, 'kdj': 0, 'rsi': 0, 'vol_price': 0})
         if ma_pattern is None:
             from strategist.tech_scan.report_engine import MAPattern
             ma_pattern = MAPattern('N/A', 'gray', 'N/A')
@@ -395,21 +395,24 @@ class SingleStockScanner:
         badge_color = {'强势多头': '#27ae60', '偏多': '#2ecc71', '中性震荡': '#f39c12', '偏空': '#e67e22', '强势空头': '#e74c3c'}.get(score_result.trend_label, '#95a5a6')
         pattern_color = {'green': '#27ae60', 'orange': '#e67e22', 'red': '#e74c3c', 'yellow': '#f39c12', 'gray': '#95a5a6'}.get(ma_pattern.color, '#95a5a6')
 
+        # Score breakdown
+        bd = score_result.breakdown or {'ma': 0, 'macd': 0, 'kdj': 0, 'rsi': 0, 'vol_price': 0}
+
         # --- Alerts ---
         alerts_html = ''
         danger_alerts = [a for a in alerts if a.category == 'danger']
         opp_alerts = [a for a in alerts if a.category == 'opportunity']
         if danger_alerts:
-            alerts_html += '<h3 style="color:#e74c3c;margin-top:15px">[RED] Risk Alerts</h3>'
+            alerts_html += '<h3 style="color:#e74c3c;margin-top:15px">[RED] 风险提示</h3>'
             for a in danger_alerts:
                 level_tag = f'[{a.level.upper()}] ' if a.level != 'medium' else ''
                 alerts_html += f'<div class="danger-alert">{level_tag}{a.name}: {a.description}</div>'
         if opp_alerts:
-            alerts_html += '<h3 style="color:#27ae60;margin-top:15px">[OK] Opportunities</h3>'
+            alerts_html += '<h3 style="color:#27ae60;margin-top:15px">[OK] 机会信号</h3>'
             for a in opp_alerts:
                 alerts_html += f'<div class="opportunity-alert">{a.name}: {a.description}</div>'
         if not alerts:
-            alerts_html = '<div class="opportunity-alert">No significant technical risk signals</div>'
+            alerts_html = '<div class="opportunity-alert">暂无明显技术面风险信号</div>'
 
         # --- Divergence ---
         div_html = ''
@@ -433,7 +436,7 @@ class SingleStockScanner:
         <div style="position:absolute;top:22px;left:{rsi_pos}%;transform:translateX(-50%);font-size:11px;color:#333;font-weight:bold">{rsi_val:.1f}</div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:8px">
-        <span>&lt;30 oversold</span><span>30-40</span><span>40-50</span><span>50-70</span><span>70-80</span><span>&gt;80 overbought</span>
+        <span>&lt;30 超卖</span><span>30-40 偏弱</span><span>40-50 中性</span><span>50-70 偏强</span><span>70-80 偏买</span><span>&gt;80 超买</span>
         </div>'''
 
         # --- BOLL ---
@@ -452,10 +455,10 @@ class SingleStockScanner:
         vp_color_map = {'green': '#27ae60', 'yellow': '#f39c12', 'orange': '#e67e22', 'red': '#e74c3c'}
         vp_c = vp_color_map.get(vp.color, '#95a5a6')
         vp_grid = f'''<div class="quadrant-grid" style="margin:10px 0">
-        <div class="quadrant-cell" style="background:#eafaf1;border:2px solid {'#27ae60' if vp.label=='放量上涨' else '#ddd'}">放量上涨 [OK]<br><span style="font-size:10px"> strongest buy signal</span></div>
-        <div class="quadrant-cell" style="background:#fef9e7;border:2px solid {'#f39c12' if vp.label=='缩量上涨' else '#ddd'}">缩量上涨 [WARN]<br><span style="font-size:10px"> weak rally</span></div>
-        <div class="quadrant-cell" style="background:#fef5e7;border:2px solid {'#e67e22' if vp.label=='缩量下跌' else '#ddd'}">缩量下跌 [OK]<br><span style="font-size:10px"> normal pullback</span></div>
-        <div class="quadrant-cell" style="background:#fdedec;border:2px solid {'#e74c3c' if vp.label=='放量下跌' else '#ddd'}">放量下跌 [RED]<br><span style="font-size:10px"> danger signal</span></div>
+        <div class="quadrant-cell" style="background:#eafaf1;border:2px solid {'#27ae60' if vp.label=='放量上涨' else '#ddd'}">放量上涨 [OK]<br><span style="font-size:10px"> 最强买入信号</span></div>
+        <div class="quadrant-cell" style="background:#fef9e7;border:2px solid {'#f39c12' if vp.label=='缩量上涨' else '#ddd'}">缩量上涨 [WARN]<br><span style="font-size:10px"> 上涨乏力</span></div>
+        <div class="quadrant-cell" style="background:#fef5e7;border:2px solid {'#e67e22' if vp.label=='缩量下跌' else '#ddd'}">缩量下跌 [OK]<br><span style="font-size:10px"> 正常回调</span></div>
+        <div class="quadrant-cell" style="background:#fdedec;border:2px solid {'#e74c3c' if vp.label=='放量下跌' else '#ddd'}">放量下跌 [RED]<br><span style="font-size:10px"> 危险信号</span></div>
         </div>'''
 
         # --- Stop-loss ---
@@ -500,7 +503,7 @@ class SingleStockScanner:
         close_display = f'{latest["close"]:.2f}'
 
         html = f'''<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>{code} {stock_name} - Technical Scan v2.0</title>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>{code} {stock_name} - Technical Scan v2.0</title>
 <style>
 body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 860px; margin: 0 auto; padding: 20px; background: #f5f5f5; color: #333; }}
 h1 {{ border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
@@ -519,42 +522,56 @@ tr:nth-child(even) {{ background: #f9f9f9; }}
 .opportunity-alert {{ border-left: 4px solid #27ae60; background: #eafaf1; padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 13px; }}
 .quadrant-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }}
 .quadrant-cell {{ padding: 8px; text-align: center; border-radius: 4px; font-size: 12px; }}
+@media (prefers-color-scheme: dark) {{
+    body {{ background: #1a1a2e; color: #e0e0e0; }}
+    .info-card {{ background: #16213e; box-shadow: 0 1px 3px rgba(255,255,255,0.05); }}
+    h1 {{ border-bottom-color: #4a90d9; }}
+    h2 {{ color: #e0e0e0; border-left-color: #4a90d9; }}
+    th {{ background: #2c3e6b; }}
+    td {{ border-color: #3a3a5c; }}
+    table {{ background: #16213e; }}
+    tr:nth-child(even) {{ background: #1a2744; }}
+    .meta {{ color: #888; }}
+    .danger-alert {{ background: #3d1f1f; }}
+    .opportunity-alert {{ background: #1f3d2a; }}
+}}
 </style></head><body>
-<h1>{code} {stock_name} - Technical Scan</h1>
-<div class="meta">Date: {latest_date} | Rows: {len(df)} | DB: {self.env}</div>
+<h1>{stock_name} ({code}) - 技术面扫描</h1>
+<div class="meta">扫描日期: {latest_date} | 数据行数: {len(df)} | 数据源: {self.env}</div>
 {chart_img_html}
 
 <!-- Section 1: Comprehensive Conclusion -->
 <div class="info-card" style="border:2px solid {badge_color}">
-<h2>Comprehensive Conclusion</h2>
+<h2>综合结论</h2>
 <table style="border:none;margin:0">
-<tr style="border:none"><td style="border:none;width:120px"><b>Score:</b> {score_result.score}/10</td><td style="border:none">
+<tr style="border:none"><td style="border:none;width:120px"><b>评分:</b> {score_result.score}/10</td><td style="border:none">
 <div class="score-bar"><div class="score-marker" style="left:{score_pct}%"></div></div>
 </td></tr>
 </table>
+<p style="margin:5px 0;font-size:12px;color:#888">MA: {bd.get("ma", 0):.1f} | MACD: {bd.get("macd", 0):.1f} | KDJ: {bd.get("kdj", 0):.1f} | RSI: {bd.get("rsi", 0):.1f} | Vol-Price: {bd.get("vol_price", 0):.1f}</p>
 <p style="margin:10px 0"><span class="badge" style="background:{badge_color}">{score_result.trend_label}</span>
 <span class="badge" style="background:{pattern_color};margin-left:8px">{ma_pattern.name}</span></p>
-<p style="margin:8px 0"><b>Action:</b> {score_result.action_advice}</p>
-<p style="margin:8px 0"><b>Current:</b> {close_display} | <b>Stop-loss:</b> {sl_atr_display} (ATR) | {sl_ma_display} (MA20)</p>
+<p style="margin:8px 0"><b>操作建议:</b> {score_result.action_advice}</p>
+<p style="margin:8px 0"><b>当前价:</b> {close_display} | <b>止损参考:</b> {sl_atr_display} (ATR) | {sl_ma_display} (MA20)</p>
 {alerts_html}
 </div>
 
 <!-- Section 2: Trend Analysis -->
 <div class="info-card">
-<h2>Trend Analysis</h2>
+<h2>趋势分析</h2>
 <p style="margin:5px 0;color:#666">{ma_pattern.description}</p>
-<table><tr><th>MA</th><th>Price</th><th>Bias</th><th>Status</th><th>Interpretation</th></tr>
-<tr><td>Close</td><td>{close_display}</td><td colspan="2">Prev: {prev_close:.2f} | Chg: <span style="color:{'#e74c3c' if pct >= 0 else '#27ae60'}">{pct:+.2f}%</span></td><td>Yesterday close {prev_close:.2f}, today {pct:+.2f}%</td></tr>
+<table><tr><th>均线</th><th>价格</th><th>偏离度</th><th>位置</th><th>解读</th></tr>
+<tr><td>Close</td><td>{close_display}</td><td colspan="2">昨收: {prev_close:.2f} | 涨跌: <span style="color:{'#e74c3c' if pct >= 0 else '#27ae60'}">{pct:+.2f}%</span></td><td>昨日收盘 {prev_close:.2f}, 今日 {pct:+.2f}%</td></tr>
 {ma_rows}</table>
 </div>
 
 <!-- Section 3: Momentum -->
 <div class="info-card">
-<h2>Momentum Analysis</h2>
+<h2>动量分析</h2>
 <h3>MACD (12,26,9)</h3>
 <table><tr><th>DIF</th><th>DEA</th><th>Histogram</th><th>Status</th></tr>
 <tr><td>{macd_interp["dif"]:.3f}</td><td>{macd_interp["dea"]:.3f}</td><td>{macd_interp["hist"]:.3f}</td><td>{macd_interp["status"]}</td></tr></table>
-<p style="margin:5px 0;color:#666;font-size:13px">Histogram: {macd_interp["hist_trend"]}</p>
+<p style="margin:5px 0;color:#666;font-size:13px">柱状图: {macd_interp["hist_trend"]}</p>
 {div_html}
 
 <h3>KDJ (9,3,3)</h3>
@@ -566,7 +583,7 @@ tr:nth-child(even) {{ background: #f9f9f9; }}
 
 <!-- Section 4: Overbought/Oversold -->
 <div class="info-card">
-<h2>Overbought / Oversold Analysis</h2>
+<h2>超买超卖分析</h2>
 <h3>RSI (14)</h3>
 <p style="margin:5px 0"><b>RSI: {rsi_display}</b> -> <span style="color:{rsi_interp["color"]}">{rsi_interp["zone"]}</span></p>
 {rsi_bar_html}
@@ -576,32 +593,35 @@ tr:nth-child(even) {{ background: #f9f9f9; }}
 
 <!-- Section 5: Volume-Price -->
 <div class="info-card">
-<h2>Volume-Price Analysis</h2>
-<table><tr><th>Volume</th><th>5d Avg</th><th>Vol Ratio</th><th>Turnover</th></tr>
+<h2>量价分析</h2>
+<table><tr><th>成交量</th><th>5日均量</th><th>量比</th><th>换手率</th></tr>
 <tr><td>{latest.get("volume", 0):.0f}</td><td>{latest.get("vol_ma5", 0):.0f}</td><td>{latest.get("volume_ratio", 0):.2f}</td>{turnover_html}</tr></table>
-<p style="margin:10px 0"><b>Signal:</b> <span class="badge" style="background:{vp_c}">{vp.label}</span> - {vp.description}</p>
+<p style="margin:10px 0"><b>量价信号:</b> <span class="badge" style="background:{vp_c}">{vp.label}</span> - {vp.description}</p>
 {vp_grid}
 </div>
 
 <!-- Section 6: Key Levels -->
 <div class="info-card">
-<h2>Key Levels</h2>
-<table><tr><th>Source</th><th>Price</th><th>Type</th><th>Strength</th></tr>
+<h2>关键价位</h2>
+<table><tr><th>来源</th><th>价格</th><th>类型</th><th>强度</th></tr>
 {sr_rows}</table>
-<h3>Stop-Loss Reference</h3>
-<table><tr><th>Method</th><th>Price</th><th>Description</th></tr>
+<h3>止损参考</h3>
+<table><tr><th>方法</th><th>价格</th><th>说明</th></tr>
 {sl_rows}</table>
 </div>
 
 <!-- Section 7: Recent Days -->
 <div class="info-card">
-<h2>Recent {n} Days</h2>
+<h2>近{n}日走势</h2>
 {f'<p style="margin:5px 0;color:#666;font-size:13px">[INFO] {features_html}</p>' if features_html else ''}
-<table><tr><th>Date</th><th>Close</th><th>Change</th><th>Volume</th></tr>
+<table><tr><th>日期</th><th>收盘价</th><th>涨跌幅</th><th>成交量</th></tr>
 {recent_rows}</table>
 </div>
 
 <p style="color:#aaa;text-align:center;margin-top:30px">Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} | Tech Scan v2.0</p>
+<div class="disclaimer" style="margin-top:20px;padding:12px;background:#fff8e1;border-radius:6px;font-size:12px;color:#666;text-align:center;border:1px solid #ffe082">
+<b>Disclaimer:</b> This report is auto-generated by AI/program. Data may be delayed or contain errors. For technical analysis and learning purposes only -- does NOT constitute any investment advice. Stock market has risks, trade with caution.
+</div>
 </body></html>'''
         return html
 
