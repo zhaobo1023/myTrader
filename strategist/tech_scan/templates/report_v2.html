@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>{{ code }} {{ stock_name }} - Technical Scan v2.0</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 860px; margin: 0 auto; padding: 20px; background: #f5f5f5; color: #333; }
+h1 { border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+h2 { color: #2c3e50; border-left: 4px solid #3498db; padding-left: 10px; margin-top: 25px; }
+h3 { color: #34495e; margin-top: 15px; }
+.meta { color: #888; margin-bottom: 15px; }
+table { border-collapse: collapse; width: 100%; margin: 10px 0; background: white; }
+th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+th { background: #3498db; color: white; }
+tr:nth-child(even) { background: #f9f9f9; }
+.info-card { background: white; padding: 15px; border-radius: 8px; margin: 10px 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.badge { display: inline-block; padding: 4px 12px; border-radius: 12px; color: white; font-weight: bold; font-size: 14px; }
+.score-bar { height: 20px; border-radius: 10px; background: linear-gradient(to right, #e74c3c, #f1c40f, #27ae60); position: relative; margin: 10px 0; }
+.score-marker { position: absolute; top: -4px; width: 4px; height: 28px; background: #2c3e50; border-radius: 2px; }
+.danger-alert { border-left: 4px solid #e74c3c; background: #ffeaea; padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 13px; }
+.opportunity-alert { border-left: 4px solid #27ae60; background: #eafaf1; padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 13px; }
+.quadrant-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.quadrant-cell { padding: 8px; text-align: center; border-radius: 4px; font-size: 12px; }
+@media (prefers-color-scheme: dark) {
+    body { background: #1a1a2e; color: #e0e0e0; }
+    .info-card { background: #16213e; box-shadow: 0 1px 3px rgba(255,255,255,0.05); }
+    h1 { border-bottom-color: #4a90d9; }
+    h2 { color: #e0e0e0; border-left-color: #4a90d9; }
+    th { background: #2c3e6b; }
+    td { border-color: #3a3a5c; }
+    table { background: #16213e; }
+    tr:nth-child(even) { background: #1a2744; }
+    .meta { color: #888; }
+    .danger-alert { background: #3d1f1f; }
+    .opportunity-alert { background: #1f3d2a; }
+}
+</style></head><body>
+<h1>{{ stock_name }} ({{ code }}) - 技术面扫描</h1>
+<div class="meta">扫描日期: {{ latest_date }} | 数据行数: {{ df_len }} | 数据源: {{ env }}</div>
+{{ chart_html | safe }}
+
+<!-- Section 1: Comprehensive Conclusion -->
+<div class="info-card" style="border:2px solid {{ badge_color }}">
+<h2>综合结论</h2>
+<table style="border:none;margin:0">
+<tr style="border:none"><td style="border:none;width:120px"><b>评分:</b> {{ score_result.score }}/10</td><td style="border:none">
+<div class="score-bar"><div class="score-marker" style="left:{{ score_pct }}%"></div></div>
+</td></tr>
+</table>
+<p style="margin:5px 0;font-size:12px;color:#888">MA: {{ "%.1f"|format(score_result.breakdown.ma) }} | MACD: {{ "%.1f"|format(score_result.breakdown.macd) }} | KDJ: {{ "%.1f"|format(score_result.breakdown.kdj) }} | RSI: {{ "%.1f"|format(score_result.breakdown.rsi) }} | Vol-Price: {{ "%.1f"|format(score_result.breakdown.vol_price) }}</p>
+<p style="margin:10px 0"><span class="badge" style="background:{{ badge_color }}">{{ score_result.trend_label }}</span>
+<span class="badge" style="background:{{ pattern_color }};margin-left:8px">{{ ma_pattern.name }}</span>{{ rps_html | safe }}</p>
+<p style="margin:8px 0"><b>操作建议:</b> {{ score_result.action_advice }}</p>
+<p style="margin:8px 0"><b>当前价:</b> {{ close_display }} | <b>止损参考:</b> {{ sl_atr_display }} (ATR) | {{ sl_ma_display }} (MA20)</p>
+
+{% if alerts %}
+  {% set danger_alerts = alerts | selectattr('category', 'equalto', 'danger') | list %}
+  {% set opp_alerts = alerts | selectattr('category', 'equalto', 'opportunity') | list %}
+  {% if danger_alerts %}
+  <h3 style="color:#e74c3c;margin-top:15px">[RED] 风险提示</h3>
+  {% for a in danger_alerts %}
+    <div class="danger-alert">{% if a.level != 'medium' %}[{{ a.level | upper }}] {% endif %}{{ a.name }}: {{ a.description }}</div>
+  {% endfor %}
+  {% endif %}
+  {% if opp_alerts %}
+  <h3 style="color:#27ae60;margin-top:15px">[OK] 机会信号</h3>
+  {% for a in opp_alerts %}
+    <div class="opportunity-alert">{{ a.name }}: {{ a.description }}</div>
+  {% endfor %}
+  {% endif %}
+{% else %}
+<div class="opportunity-alert">暂无明显技术面风险信号</div>
+{% endif %}
+</div>
+
+<!-- Section 2: Trend Analysis -->
+<div class="info-card">
+<h2>趋势分析</h2>
+<p style="margin:5px 0;color:#666">{{ ma_pattern.description }}</p>
+<table><tr><th>均线</th><th>价格</th><th>偏离度</th><th>位置</th><th>解读</th></tr>
+<tr><td>Close</td><td>{{ close_display }}</td><td colspan="2">昨收: {{ "%.2f"|format(prev_close) }} | 涨跌: <span style="color:{% if pct >= 0 %}#e74c3c{% else %}#27ae60{% endif %}">{{ "%+.2f"|format(pct) }}%</span></td><td>昨日收盘 {{ "%.2f"|format(prev_close) }}, 今日 {{ "%+.2f"|format(pct) }}%</td></tr>
+{% for row in ma_rows %}
+<tr><td>{{ row.name }}</td><td>{{ row.price }}</td><td style="color:{{ row.color }}">{{ row.bias }}</td><td style="color:{{ row.color }}">{{ row.tag }}</td><td style="font-size:12px;color:#666">{{ row.interp }}</td></tr>
+{% endfor %}
+</table>
+</div>
+
+<!-- Section 3: Momentum -->
+<div class="info-card">
+<h2>动量分析</h2>
+<h3>MACD (12,26,9)</h3>
+<table><tr><th>DIF</th><th>DEA</th><th>Histogram</th><th>Status</th></tr>
+<tr><td>{{ "%.3f"|format(macd_interp.dif) }}</td><td>{{ "%.3f"|format(macd_interp.dea) }}</td><td>{{ "%.3f"|format(macd_interp.hist) }}</td><td>{{ macd_interp.status }}</td></tr></table>
+<p style="margin:5px 0;color:#666;font-size:13px">柱状图: {{ macd_interp.hist_trend }}</p>
+
+{% if divergence and divergence.type != '无背驰' %}
+  {% set div_color = '#e74c3c' if divergence.type == '顶背驰' else '#27ae60' %}
+  <div class="danger-alert" style="border-left-color:{{ div_color }}">[SIGNAL] MACD {{ divergence.type }} (confidence: {{ divergence.confidence }})<br>{{ divergence.description }}</div>
+{% endif %}
+
+<h3>KDJ (9,3,3)</h3>
+<table><tr><th>K</th><th>D</th><th>J</th><th>Status</th><th>Zone</th></tr>
+<tr><td>{{ kdj_interp.k_display }}</td><td>{{ kdj_interp.d_display }}</td><td>{{ kdj_interp.j_display }}</td><td>{{ kdj_interp.status }}</td><td>{{ kdj_interp.zone }}</td></tr></table>
+<p style="margin:5px 0;color:#666;font-size:13px">{{ kdj_interp.desc }}</p>
+
+{% for s in kdj_signals %}
+  {% set sig_color = '#e74c3c' if 'RED' in s.level_str else ('#27ae60' if 'GREEN' in s.level_str else '#f39c12') %}
+  <div style="color:{{ sig_color }};margin:2px 0;font-size:13px">{{ s.level_str }} {{ s.name }}: {{ s.description }}</div>
+{% endfor %}
+</div>
+
+<!-- Section 4: Overbought/Oversold -->
+<div class="info-card">
+<h2>超买超卖分析</h2>
+<h3>RSI (14)</h3>
+<p style="margin:5px 0"><b>RSI: {{ rsi_display }}</b> -> <span style="color:{{ rsi_interp.color }}">{{ rsi_interp.zone }}</span></p>
+{{ rsi_bar_html | safe }}
+<p style="margin:5px 0;color:#666;font-size:13px">{{ rsi_interp.desc }}</p>
+
+{% if boll_interp %}
+<div class="info-card">
+<h2>BOLL (20, 2)</h2>
+<table><tr><th>Upper</th><th>Middle (MA20)</th><th>Lower</th><th>%B</th><th>Bandwidth</th></tr>
+<tr><td>{{ "%.2f"|format(boll_interp.upper) }}</td><td>{{ "%.2f"|format(boll_interp.middle) }}</td><td>{{ "%.2f"|format(boll_interp.lower) }}</td><td>{{ "%.2f"|format(boll_interp.pctb) }}</td><td>{{ "%.1f"|format(boll_interp.bandwidth * 100) }}%</td></tr></table>
+<p style="margin:8px 0"><b>Position:</b> {{ boll_interp.position }} - {{ boll_interp.pos_desc }}</p>
+<p style="margin:8px 0"><b>Width:</b> {{ boll_interp.width_signal }}</p>
+</div>
+{% endif %}
+</div>
+
+<!-- Section 5: Volume-Price -->
+<div class="info-card">
+<h2>量价分析</h2>
+<table><tr><th>成交量</th><th>5日均量</th><th>量比</th><th>换手率</th></tr>
+<tr><td>{{ "%.0f"|format(volume) }}</td><td>{{ "%.0f"|format(vol_ma5) }}</td><td>{{ "%.2f"|format(volume_ratio) }}</td>{{ turnover_html | safe }}</tr></table>
+<p style="margin:10px 0"><b>量价信号:</b> <span class="badge" style="background:{{ vp_quadrant.color_mapped }}">{{ vp_quadrant.label }}</span> - {{ vp_quadrant.description }}</p>
+{{ vp_grid_html | safe }}
+</div>
+
+<!-- Section 6: Key Levels -->
+<div class="info-card">
+<h2>关键价位</h2>
+<table><tr><th>来源</th><th>价格</th><th>类型</th><th>强度</th></tr>
+{% for l in resistances %}
+<tr><td style="color:#e74c3c">{{ l.source }}</td><td>{{ "%.2f"|format(l.price) }}</td><td>{{ l.level_type }}</td><td>{{ l.strength }}</td></tr>
+{% endfor %}
+{% for l in supports %}
+<tr><td style="color:#27ae60">{{ l.source }}</td><td>{{ "%.2f"|format(l.price) }}</td><td>{{ l.level_type }}</td><td>{{ l.strength }}</td></tr>
+{% endfor %}
+</table>
+<h3>止损参考</h3>
+<table><tr><th>方法</th><th>价格</th><th>说明</th></tr>
+{% for sl in sl_rows %}
+<tr><td>{{ sl.method }}</td><td>{{ sl.price }}</td><td>{{ sl.description }}</td></tr>
+{% endfor %}
+</table>
+</div>
+
+<!-- Section 7: Recent Days -->
+<div class="info-card">
+<h2>近{{ n_recent }}日走势</h2>
+{% if recent_features %}
+<p style="margin:5px 0;color:#666;font-size:13px">[INFO] {{ recent_features | join(' | ') }}</p>
+{% endif %}
+<table><tr><th>日期</th><th>收盘价</th><th>涨跌幅</th><th>成交量</th></tr>
+{% for r in recent_rows %}
+<tr><td>{{ r.date }}</td><td>{{ r.close }}</td><td style="color:{{ r.pct_color }}">{{ r.pct }}</td><td>{{ r.vol }}</td></tr>
+{% endfor %}
+</table>
+</div>
+
+<p style="color:#aaa;text-align:center;margin-top:30px">Generated: {{ generated_time }} | Tech Scan v2.0</p>
+<div class="disclaimer" style="margin-top:20px;padding:12px;background:#fff8e1;border-radius:6px;font-size:12px;color:#666;text-align:center;border:1px solid #ffe082">
+<b>Disclaimer:</b> This report is auto-generated by AI/program. Data may be delayed or contain errors. For technical analysis and learning purposes only -- does NOT constitute any investment advice. Stock market has risks, trade with caution.
+</div>
+</body></html>

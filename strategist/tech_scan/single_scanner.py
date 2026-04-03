@@ -18,6 +18,8 @@ import pandas as pd
 from datetime import datetime
 from typing import Optional
 
+from jinja2 import Environment, FileSystemLoader
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from strategist.tech_scan.data_fetcher import DataFetcher
@@ -123,10 +125,19 @@ class SingleStockScanner:
         supports, resistances = engine.calc_key_levels(latest, df)
         recent_features = engine.analyze_recent_pattern(df)
 
-        # Extract RPS values from latest row
-        rps_120 = latest.get('rps_120')
-        rps_250 = latest.get('rps_250')
-        rps_slope = latest.get('rps_slope')
+        # Extract RPS values (use most recent non-NaN, RPS may lag 1-2 days)
+        rps_120 = rps_250 = rps_slope = None
+        for col in ['rps_120', 'rps_250', 'rps_slope']:
+            if col in df.columns:
+                valid = df[col].dropna()
+                if not valid.empty:
+                    val = valid.iloc[-1]
+                    if col == 'rps_120':
+                        rps_120 = val
+                    elif col == 'rps_250':
+                        rps_250 = val
+                    else:
+                        rps_slope = val
 
         if output_format == 'html':
             return self._generate_html_report(
@@ -462,7 +473,7 @@ window.addEventListener('resize', function() {{ myChart.resize(); }});
                               alerts=None, supports=None, resistances=None,
                               recent_features=None,
                               rps_120=None, rps_250=None, rps_slope=None):
-        """Generate HTML report v2.0 with scoring, interpretation, and structured analysis."""
+        """Generate HTML report v2.0 with scoring, interpretation, and structured analysis using Jinja2."""
         from pathlib import Path
 
         # Build chart HTML: ECharts first, fallback to matplotlib base64
@@ -515,15 +526,14 @@ window.addEventListener('resize', function() {{ myChart.resize(); }});
         if rps_slope is None:
             rps_slope = latest.get('rps_slope')
 
-        # --- Build MA rows ---
-        ma_rows = ''
+        # --- Build MA rows (list of dicts for template) ---
+        ma_rows = []
         for w in [5, 20, 60, 120, 250]:
             ma = latest.get(f'ma{w}')
             if ma is not None and not np.isnan(ma):
                 bias = (latest['close'] / ma - 1) * 100
                 color = '#27ae60' if latest['close'] > ma else '#e74c3c'
                 tag = 'above' if latest['close'] > ma else 'below'
-                # Interpretation
                 if w == 5:
                     interp = '短期趋势向上' if latest['close'] > ma else '短期趋势向下'
                 elif w == 20:
@@ -532,46 +542,25 @@ window.addEventListener('resize', function() {{ myChart.resize(); }});
                     interp = '长期趋势向上' if latest['close'] > ma else '长期趋势向下'
                 else:
                     interp = '年线支撑有效' if latest['close'] > ma else '跌破年线'
-                ma_rows += f'<tr><td>MA{w}</td><td>{ma:.2f}</td><td style="color:{color}">{bias:+.2f}%</td><td style="color:{color}">{tag}</td><td style="font-size:12px;color:#666">{interp}</td></tr>'
+                ma_rows.append({
+                    'name': f'MA{w}',
+                    'price': f'{ma:.2f}',
+                    'bias': f'{bias:+.2f}%',
+                    'color': color,
+                    'tag': tag,
+                    'interp': interp,
+                })
 
         # --- Score bar ---
         score_pct = score_result.score / 10 * 100
-        score_color = '#27ae60' if score_result.score >= 6 else ('#f39c12' if score_result.score >= 4 else '#e74c3c')
         badge_color = {'强势多头': '#27ae60', '偏多': '#2ecc71', '中性震荡': '#f39c12', '偏空': '#e67e22', '强势空头': '#e74c3c'}.get(score_result.trend_label, '#95a5a6')
         pattern_color = {'green': '#27ae60', 'orange': '#e67e22', 'red': '#e74c3c', 'yellow': '#f39c12', 'gray': '#95a5a6'}.get(ma_pattern.color, '#95a5a6')
 
-        # Score breakdown
+        # Score breakdown - ensure keys exist
         bd = score_result.breakdown or {'ma': 0, 'macd': 0, 'kdj': 0, 'rsi': 0, 'vol_price': 0}
+        bd = {k: bd.get(k, 0) for k in ('ma', 'macd', 'kdj', 'rsi', 'vol_price')}
 
-        # --- Alerts ---
-        alerts_html = ''
-        danger_alerts = [a for a in alerts if a.category == 'danger']
-        opp_alerts = [a for a in alerts if a.category == 'opportunity']
-        if danger_alerts:
-            alerts_html += '<h3 style="color:#e74c3c;margin-top:15px">[RED] 风险提示</h3>'
-            for a in danger_alerts:
-                level_tag = f'[{a.level.upper()}] ' if a.level != 'medium' else ''
-                alerts_html += f'<div class="danger-alert">{level_tag}{a.name}: {a.description}</div>'
-        if opp_alerts:
-            alerts_html += '<h3 style="color:#27ae60;margin-top:15px">[OK] 机会信号</h3>'
-            for a in opp_alerts:
-                alerts_html += f'<div class="opportunity-alert">{a.name}: {a.description}</div>'
-        if not alerts:
-            alerts_html = '<div class="opportunity-alert">暂无明显技术面风险信号</div>'
-
-        # --- Divergence ---
-        div_html = ''
-        if divergence.get('type') != '无背驰':
-            div_color = '#e74c3c' if divergence['type'] == '顶背驰' else '#27ae60'
-            div_html = f'<div class="danger-alert" style="border-left-color:{div_color}">[SIGNAL] MACD {divergence["type"]} (confidence: {divergence["confidence"]})<br>{divergence["description"]}</div>'
-
-        # --- KDJ signals ---
-        kdj_sig_html = ''
-        for s in kdj_signals:
-            sig_color = '#e74c3c' if 'RED' in str(s.level) else ('#27ae60' if 'GREEN' in str(s.level) else '#f39c12')
-            kdj_sig_html += f'<div style="color:{sig_color};margin:2px 0;font-size:13px">{s.level.value} {s.name}: {s.description}</div>'
-
-        # --- RSI zone bar ---
+        # --- RSI zone bar (complex visual, keep as pre-built HTML) ---
         rsi_val = latest.get('rsi')
         rsi_bar_html = ''
         if rsi_val is not None and not np.isnan(rsi_val):
@@ -584,53 +573,48 @@ window.addEventListener('resize', function() {{ myChart.resize(); }});
         <span>&lt;30 超卖</span><span>30-40 偏弱</span><span>40-50 中性</span><span>50-70 偏强</span><span>70-80 偏买</span><span>&gt;80 超买</span>
         </div>'''
 
-        # --- BOLL ---
-        boll_html = ''
-        if boll_interp:
-            boll_html = f'''<div class="info-card">
-        <h2>BOLL (20, 2)</h2>
-        <table><tr><th>Upper</th><th>Middle (MA20)</th><th>Lower</th><th>%B</th><th>Bandwidth</th></tr>
-        <tr><td>{boll_interp["upper"]:.2f}</td><td>{boll_interp["middle"]:.2f}</td><td>{boll_interp["lower"]:.2f}</td><td>{boll_interp["pctb"]:.2f}</td><td>{boll_interp["bandwidth"]*100:.1f}%</td></tr></table>
-        <p style="margin:8px 0"><b>Position:</b> {boll_interp["position"]} - {boll_interp["pos_desc"]}</p>
-        <p style="margin:8px 0"><b>Width:</b> {boll_interp["width_signal"]}</p>
-        </div>'''
-
-        # --- Volume-price quadrant ---
+        # --- Volume-price quadrant (keep as pre-built HTML) ---
         vp = vp_quadrant
         vp_color_map = {'green': '#27ae60', 'yellow': '#f39c12', 'orange': '#e67e22', 'red': '#e74c3c'}
         vp_c = vp_color_map.get(vp.color, '#95a5a6')
-        vp_grid = f'''<div class="quadrant-grid" style="margin:10px 0">
+        vp_grid_html = f'''<div class="quadrant-grid" style="margin:10px 0">
         <div class="quadrant-cell" style="background:#eafaf1;border:2px solid {'#27ae60' if vp.label=='放量上涨' else '#ddd'}">放量上涨 [OK]<br><span style="font-size:10px"> 最强买入信号</span></div>
         <div class="quadrant-cell" style="background:#fef9e7;border:2px solid {'#f39c12' if vp.label=='缩量上涨' else '#ddd'}">缩量上涨 [WARN]<br><span style="font-size:10px"> 上涨乏力</span></div>
         <div class="quadrant-cell" style="background:#fef5e7;border:2px solid {'#e67e22' if vp.label=='缩量下跌' else '#ddd'}">缩量下跌 [OK]<br><span style="font-size:10px"> 正常回调</span></div>
         <div class="quadrant-cell" style="background:#fdedec;border:2px solid {'#e74c3c' if vp.label=='放量下跌' else '#ddd'}">放量下跌 [RED]<br><span style="font-size:10px"> 危险信号</span></div>
         </div>'''
 
-        # --- Stop-loss ---
-        sl_rows = ''
+        # --- Stop-loss rows (list of dicts for template) ---
+        sl_rows = []
         sl_atr = self.detector.calc_stop_loss_price(latest, method='atr')
         if sl_atr:
-            sl_rows += f'<tr><td>ATR</td><td>{sl_atr["stop_price"]:.2f}</td><td>{sl_atr["description"]}</td></tr>'
+            sl_rows.append({'method': 'ATR', 'price': f'{sl_atr["stop_price"]:.2f}', 'description': sl_atr["description"]})
         sl_ma = self.detector.calc_stop_loss_price(latest, method='ma20')
         if sl_ma:
-            sl_rows += f'<tr><td>MA20</td><td>{sl_ma["stop_price"]:.2f}</td><td>{sl_ma["description"]}</td></tr>'
+            sl_rows.append({'method': 'MA20', 'price': f'{sl_ma["stop_price"]:.2f}', 'description': sl_ma["description"]})
 
-        # --- Key levels ---
-        sr_rows = ''
-        for l in resistances:
-            sr_rows += f'<tr><td style="color:#e74c3c">{l.source}</td><td>{l.price:.2f}</td><td>{l.level_type}</td><td>{l.strength}</td></tr>'
+        # --- Key levels: pass supports/resistances as lists of dicts ---
+        support_dicts = []
         for l in supports:
-            sr_rows += f'<tr><td style="color:#27ae60">{l.source}</td><td>{l.price:.2f}</td><td>{l.level_type}</td><td>{l.strength}</td></tr>'
+            support_dicts.append({'source': l.source, 'price': l.price, 'level_type': l.level_type, 'strength': l.strength})
+        resistance_dicts = []
+        for l in resistances:
+            resistance_dicts.append({'source': l.source, 'price': l.price, 'level_type': l.level_type, 'strength': l.strength})
 
-        # --- Recent days ---
-        recent_rows = ''
-        n = min(10, len(df))
-        for _, row in df.tail(n).iterrows():
+        # --- Recent days (list of dicts for template) ---
+        n_recent = min(10, len(df))
+        recent_rows = []
+        for _, row in df.tail(n_recent).iterrows():
             p = row.get('pct_change', 0)
             vol = row.get('volume', 0)
             p_color = '#e74c3c' if p >= 0 else '#27ae60'
-            recent_rows += f'<tr><td>{row["trade_date"].strftime("%m-%d")}</td><td>{row["close"]:.2f}</td><td style="color:{p_color}">{p:+.2f}%</td><td>{vol:.0f}</td></tr>'
-        features_html = ' | '.join(recent_features) if recent_features else ''
+            recent_rows.append({
+                'date': row['trade_date'].strftime('%m-%d'),
+                'close': f'{row["close"]:.2f}',
+                'pct': f'{p:+.2f}%',
+                'pct_color': p_color,
+                'vol': f'{vol:.0f}',
+            })
 
         # --- Price info ---
         pct = latest.get('pct_change', 0)
@@ -638,21 +622,35 @@ window.addEventListener('resize', function() {{ myChart.resize(); }});
         turnover = latest.get('turnover_rate')
         turnover_html = f'<td>{turnover:.2f}%</td>' if turnover is not None and not pd.isna(turnover) else '<td>N/A</td>'
 
-        # Pre-compute stop-loss display values to avoid f-string format spec issues
+        # Pre-compute display values
         sl_atr_display = f'{sl_atr["stop_price"]:.2f}' if sl_atr else 'N/A'
         sl_ma_display = f'{sl_ma["stop_price"]:.2f}' if sl_ma else 'N/A'
-        kdj_k_display = f'{kdj_interp["k"]:.1f}' if kdj_interp["k"] is not None else 'N/A'
-        kdj_d_display = f'{kdj_interp["d"]:.1f}' if kdj_interp["d"] is not None else 'N/A'
-        kdj_j_display = f'{kdj_interp["j"]:.1f}' if kdj_interp["j"] is not None else 'N/A'
         rsi_display = f'{rsi_val:.1f}' if rsi_val is not None and not np.isnan(rsi_val) else 'N/A'
         close_display = f'{latest["close"]:.2f}'
+
+        # --- KDJ display values ---
+        kdj_interp_dict = dict(kdj_interp) if isinstance(kdj_interp, dict) else {
+            'k': None, 'd': None, 'j': None, 'status': 'N/A', 'zone': 'N/A', 'desc': ''
+        }
+        kdj_interp_dict['k_display'] = f'{kdj_interp_dict["k"]:.1f}' if kdj_interp_dict['k'] is not None else 'N/A'
+        kdj_interp_dict['d_display'] = f'{kdj_interp_dict["d"]:.1f}' if kdj_interp_dict['d'] is not None else 'N/A'
+        kdj_interp_dict['j_display'] = f'{kdj_interp_dict["j"]:.1f}' if kdj_interp_dict['j'] is not None else 'N/A'
+
+        # --- KDJ signals: convert to simple dicts for template ---
+        kdj_signal_dicts = []
+        for s in kdj_signals:
+            level_str = s.level.value if hasattr(s.level, 'value') else str(s.level)
+            kdj_signal_dicts.append({
+                'name': s.name,
+                'description': s.description,
+                'level_str': level_str,
+            })
 
         # --- RPS display ---
         rps_html = ''
         if rps_250 is not None and not pd.isna(rps_250):
             rps_val = float(rps_250)
             rps_color = '#e74c3c' if rps_val >= 90 else ('#f39c12' if rps_val >= 80 else '#95a5a6')
-            rps_bg = '#ffeaea' if rps_val >= 90 else ('#fff8e1' if rps_val >= 80 else '#f5f5f5')
             rps_html = f'<span class="badge" style="background:{rps_color};margin-left:8px">RPS250: {rps_val:.0f}</span>'
             if rps_val >= 90:
                 rps_html += ' <span style="font-size:11px;color:#e74c3c">[强势]</span>'
@@ -667,128 +665,69 @@ window.addEventListener('resize', function() {{ myChart.resize(); }});
             rps_color = '#e74c3c' if rps_val >= 90 else ('#f39c12' if rps_val >= 80 else '#95a5a6')
             rps_html = f'<span class="badge" style="background:{rps_color};margin-left:8px">RPS120: {rps_val:.0f}</span>'
 
-        html = f'''<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>{code} {stock_name} - Technical Scan v2.0</title>
-<style>
-body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 860px; margin: 0 auto; padding: 20px; background: #f5f5f5; color: #333; }}
-h1 {{ border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
-h2 {{ color: #2c3e50; border-left: 4px solid #3498db; padding-left: 10px; margin-top: 25px; }}
-h3 {{ color: #34495e; margin-top: 15px; }}
-.meta {{ color: #888; margin-bottom: 15px; }}
-table {{ border-collapse: collapse; width: 100%; margin: 10px 0; background: white; }}
-th, td {{ border: 1px solid #ddd; padding: 8px 12px; text-align: left; }}
-th {{ background: #3498db; color: white; }}
-tr:nth-child(even) {{ background: #f9f9f9; }}
-.info-card {{ background: white; padding: 15px; border-radius: 8px; margin: 10px 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-.badge {{ display: inline-block; padding: 4px 12px; border-radius: 12px; color: white; font-weight: bold; font-size: 14px; }}
-.score-bar {{ height: 20px; border-radius: 10px; background: linear-gradient(to right, #e74c3c, #f1c40f, #27ae60); position: relative; margin: 10px 0; }}
-.score-marker {{ position: absolute; top: -4px; width: 4px; height: 28px; background: #2c3e50; border-radius: 2px; }}
-.danger-alert {{ border-left: 4px solid #e74c3c; background: #ffeaea; padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 13px; }}
-.opportunity-alert {{ border-left: 4px solid #27ae60; background: #eafaf1; padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 13px; }}
-.quadrant-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }}
-.quadrant-cell {{ padding: 8px; text-align: center; border-radius: 4px; font-size: 12px; }}
-@media (prefers-color-scheme: dark) {{
-    body {{ background: #1a1a2e; color: #e0e0e0; }}
-    .info-card {{ background: #16213e; box-shadow: 0 1px 3px rgba(255,255,255,0.05); }}
-    h1 {{ border-bottom-color: #4a90d9; }}
-    h2 {{ color: #e0e0e0; border-left-color: #4a90d9; }}
-    th {{ background: #2c3e6b; }}
-    td {{ border-color: #3a3a5c; }}
-    table {{ background: #16213e; }}
-    tr:nth-child(even) {{ background: #1a2744; }}
-    .meta {{ color: #888; }}
-    .danger-alert {{ background: #3d1f1f; }}
-    .opportunity-alert {{ background: #1f3d2a; }}
-}}
-</style></head><body>
-<h1>{stock_name} ({code}) - 技术面扫描</h1>
-<div class="meta">扫描日期: {latest_date} | 数据行数: {len(df)} | 数据源: {self.env}</div>
-{chart_html}
+        # --- Build template context ---
+        ctx = {
+            'code': code,
+            'stock_name': stock_name,
+            'latest_date': latest_date,
+            'env': self.env,
+            'df_len': len(df),
+            'chart_html': chart_html,
+            'score_result': {
+                'score': score_result.score,
+                'trend_label': score_result.trend_label,
+                'action_advice': score_result.action_advice,
+                'breakdown': bd,
+            },
+            'ma_pattern': {
+                'name': ma_pattern.name,
+                'color': ma_pattern.color,
+                'description': ma_pattern.description,
+            },
+            'macd_interp': macd_interp,
+            'rsi_interp': rsi_interp,
+            'rsi_display': rsi_display,
+            'rsi_bar_html': rsi_bar_html,
+            'kdj_interp': kdj_interp_dict,
+            'kdj_signals': kdj_signal_dicts,
+            'boll_interp': boll_interp,
+            'vp_quadrant': {
+                'label': vp.label,
+                'color': vp.color,
+                'description': vp.description,
+                'color_mapped': vp_c,
+            },
+            'divergence': divergence,
+            'alerts': alerts,
+            'supports': support_dicts,
+            'resistances': resistance_dicts,
+            'recent_features': recent_features,
+            'recent_rows': recent_rows,
+            'ma_rows': ma_rows,
+            'sl_rows': sl_rows,
+            'rps_html': rps_html,
+            'turnover_html': turnover_html,
+            'vp_grid_html': vp_grid_html,
+            'close_display': close_display,
+            'pct': pct,
+            'prev_close': prev_close,
+            'sl_atr_display': sl_atr_display,
+            'sl_ma_display': sl_ma_display,
+            'badge_color': badge_color,
+            'pattern_color': pattern_color,
+            'score_pct': score_pct,
+            'generated_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'n_recent': n_recent,
+            'volume': latest.get('volume', 0),
+            'vol_ma5': latest.get('vol_ma5', 0),
+            'volume_ratio': latest.get('volume_ratio', 0),
+        }
 
-<!-- Section 1: Comprehensive Conclusion -->
-<div class="info-card" style="border:2px solid {badge_color}">
-<h2>综合结论</h2>
-<table style="border:none;margin:0">
-<tr style="border:none"><td style="border:none;width:120px"><b>评分:</b> {score_result.score}/10</td><td style="border:none">
-<div class="score-bar"><div class="score-marker" style="left:{score_pct}%"></div></div>
-</td></tr>
-</table>
-<p style="margin:5px 0;font-size:12px;color:#888">MA: {bd.get("ma", 0):.1f} | MACD: {bd.get("macd", 0):.1f} | KDJ: {bd.get("kdj", 0):.1f} | RSI: {bd.get("rsi", 0):.1f} | Vol-Price: {bd.get("vol_price", 0):.1f}</p>
-<p style="margin:10px 0"><span class="badge" style="background:{badge_color}">{score_result.trend_label}</span>
-<span class="badge" style="background:{pattern_color};margin-left:8px">{ma_pattern.name}</span>{rps_html}</p>
-<p style="margin:8px 0"><b>操作建议:</b> {score_result.action_advice}</p>
-<p style="margin:8px 0"><b>当前价:</b> {close_display} | <b>止损参考:</b> {sl_atr_display} (ATR) | {sl_ma_display} (MA20)</p>
-{alerts_html}
-</div>
-
-<!-- Section 2: Trend Analysis -->
-<div class="info-card">
-<h2>趋势分析</h2>
-<p style="margin:5px 0;color:#666">{ma_pattern.description}</p>
-<table><tr><th>均线</th><th>价格</th><th>偏离度</th><th>位置</th><th>解读</th></tr>
-<tr><td>Close</td><td>{close_display}</td><td colspan="2">昨收: {prev_close:.2f} | 涨跌: <span style="color:{'#e74c3c' if pct >= 0 else '#27ae60'}">{pct:+.2f}%</span></td><td>昨日收盘 {prev_close:.2f}, 今日 {pct:+.2f}%</td></tr>
-{ma_rows}</table>
-</div>
-
-<!-- Section 3: Momentum -->
-<div class="info-card">
-<h2>动量分析</h2>
-<h3>MACD (12,26,9)</h3>
-<table><tr><th>DIF</th><th>DEA</th><th>Histogram</th><th>Status</th></tr>
-<tr><td>{macd_interp["dif"]:.3f}</td><td>{macd_interp["dea"]:.3f}</td><td>{macd_interp["hist"]:.3f}</td><td>{macd_interp["status"]}</td></tr></table>
-<p style="margin:5px 0;color:#666;font-size:13px">柱状图: {macd_interp["hist_trend"]}</p>
-{div_html}
-
-<h3>KDJ (9,3,3)</h3>
-<table><tr><th>K</th><th>D</th><th>J</th><th>Status</th><th>Zone</th></tr>
-<tr><td>{kdj_k_display}</td><td>{kdj_d_display}</td><td>{kdj_j_display}</td><td>{kdj_interp["status"]}</td><td>{kdj_interp["zone"]}</td></tr></table>
-<p style="margin:5px 0;color:#666;font-size:13px">{kdj_interp["desc"]}</p>
-{kdj_sig_html}
-</div>
-
-<!-- Section 4: Overbought/Oversold -->
-<div class="info-card">
-<h2>超买超卖分析</h2>
-<h3>RSI (14)</h3>
-<p style="margin:5px 0"><b>RSI: {rsi_display}</b> -> <span style="color:{rsi_interp["color"]}">{rsi_interp["zone"]}</span></p>
-{rsi_bar_html}
-<p style="margin:5px 0;color:#666;font-size:13px">{rsi_interp["desc"]}</p>
-{boll_html}
-</div>
-
-<!-- Section 5: Volume-Price -->
-<div class="info-card">
-<h2>量价分析</h2>
-<table><tr><th>成交量</th><th>5日均量</th><th>量比</th><th>换手率</th></tr>
-<tr><td>{latest.get("volume", 0):.0f}</td><td>{latest.get("vol_ma5", 0):.0f}</td><td>{latest.get("volume_ratio", 0):.2f}</td>{turnover_html}</tr></table>
-<p style="margin:10px 0"><b>量价信号:</b> <span class="badge" style="background:{vp_c}">{vp.label}</span> - {vp.description}</p>
-{vp_grid}
-</div>
-
-<!-- Section 6: Key Levels -->
-<div class="info-card">
-<h2>关键价位</h2>
-<table><tr><th>来源</th><th>价格</th><th>类型</th><th>强度</th></tr>
-{sr_rows}</table>
-<h3>止损参考</h3>
-<table><tr><th>方法</th><th>价格</th><th>说明</th></tr>
-{sl_rows}</table>
-</div>
-
-<!-- Section 7: Recent Days -->
-<div class="info-card">
-<h2>近{n}日走势</h2>
-{f'<p style="margin:5px 0;color:#666;font-size:13px">[INFO] {features_html}</p>' if features_html else ''}
-<table><tr><th>日期</th><th>收盘价</th><th>涨跌幅</th><th>成交量</th></tr>
-{recent_rows}</table>
-</div>
-
-<p style="color:#aaa;text-align:center;margin-top:30px">Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} | Tech Scan v2.0</p>
-<div class="disclaimer" style="margin-top:20px;padding:12px;background:#fff8e1;border-radius:6px;font-size:12px;color:#666;text-align:center;border:1px solid #ffe082">
-<b>Disclaimer:</b> This report is auto-generated by AI/program. Data may be delayed or contain errors. For technical analysis and learning purposes only -- does NOT constitute any investment advice. Stock market has risks, trade with caution.
-</div>
-</body></html>'''
-        return html
+        # --- Load and render Jinja2 template ---
+        template_dir = os.path.join(os.path.dirname(__file__), 'templates')
+        env = Environment(loader=FileSystemLoader(template_dir), autoescape=False)
+        template = env.get_template('report_v2.html')
+        return template.render(**ctx)
 
     def _generate_markdown_report(self, code: str, stock_name: str, df: pd.DataFrame, latest: pd.Series, latest_date: str, chart_path: str = None) -> str:
         """Generate Markdown report with optional chart."""
