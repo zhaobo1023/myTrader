@@ -10,6 +10,7 @@ CLI:
     DB_ENV=online python -m strategist.tech_scan.single_scanner --stock 688386.SH --lookback 300
 """
 import argparse
+import json
 import sys
 import os
 import numpy as np
@@ -71,9 +72,22 @@ class SingleStockScanner:
             return f'[RED] No data found for {code} in {self.env} DB.'
 
         df = self.calculator.calculate_all(df)
+
+        # Fetch RPS data
+        try:
+            rps_df = self.fetcher.fetch_rps_data([code])
+            if not rps_df.empty:
+                rps_cols = ['stock_code', 'trade_date']
+                for col in ['rps_120', 'rps_250', 'rps_slope']:
+                    if col in rps_df.columns:
+                        rps_cols.append(col)
+                df = df.merge(rps_df[rps_cols], on=['stock_code', 'trade_date'], how='left')
+        except Exception:
+            pass  # RPS is optional, don't fail if unavailable
+
         latest = df.iloc[-1]
         latest_date = latest['trade_date'].strftime('%Y-%m-%d')
-        
+
         # Fetch stock name if not provided
         if stock_name is None:
             stock_name = self._fetch_stock_name(code)
@@ -109,6 +123,11 @@ class SingleStockScanner:
         supports, resistances = engine.calc_key_levels(latest, df)
         recent_features = engine.analyze_recent_pattern(df)
 
+        # Extract RPS values from latest row
+        rps_120 = latest.get('rps_120')
+        rps_250 = latest.get('rps_250')
+        rps_slope = latest.get('rps_slope')
+
         if output_format == 'html':
             return self._generate_html_report(
                 code, stock_name, df, latest, latest_date, chart_path,
@@ -118,7 +137,8 @@ class SingleStockScanner:
                 vp_quadrant=vp_quadrant, divergence=divergence,
                 kdj_signals=kdj_signals, alerts=alerts,
                 supports=supports, resistances=resistances,
-                recent_features=recent_features
+                recent_features=recent_features,
+                rps_120=rps_120, rps_250=rps_250, rps_slope=rps_slope
             )
         elif output_format == 'markdown':
             return self._generate_markdown_report(code, stock_name, df, latest, latest_date, chart_path)
@@ -328,7 +348,8 @@ class SingleStockScanner:
                               rsi_interp=None, kdj_interp=None, boll_interp=None,
                               vp_quadrant=None, divergence=None, kdj_signals=None,
                               alerts=None, supports=None, resistances=None,
-                              recent_features=None):
+                              recent_features=None,
+                              rps_120=None, rps_250=None, rps_slope=None):
         """Generate HTML report v2.0 with scoring, interpretation, and structured analysis."""
         import base64
         from pathlib import Path
@@ -369,6 +390,12 @@ class SingleStockScanner:
             resistances = []
         if recent_features is None:
             recent_features = []
+        if rps_120 is None:
+            rps_120 = latest.get('rps_120')
+        if rps_250 is None:
+            rps_250 = latest.get('rps_250')
+        if rps_slope is None:
+            rps_slope = latest.get('rps_slope')
 
         # --- Build MA rows ---
         ma_rows = ''
@@ -502,6 +529,26 @@ class SingleStockScanner:
         rsi_display = f'{rsi_val:.1f}' if rsi_val is not None and not np.isnan(rsi_val) else 'N/A'
         close_display = f'{latest["close"]:.2f}'
 
+        # --- RPS display ---
+        rps_html = ''
+        if rps_250 is not None and not pd.isna(rps_250):
+            rps_val = float(rps_250)
+            rps_color = '#e74c3c' if rps_val >= 90 else ('#f39c12' if rps_val >= 80 else '#95a5a6')
+            rps_bg = '#ffeaea' if rps_val >= 90 else ('#fff8e1' if rps_val >= 80 else '#f5f5f5')
+            rps_html = f'<span class="badge" style="background:{rps_color};margin-left:8px">RPS250: {rps_val:.0f}</span>'
+            if rps_val >= 90:
+                rps_html += ' <span style="font-size:11px;color:#e74c3c">[强势]</span>'
+            elif rps_val >= 80:
+                rps_html += ' <span style="font-size:11px;color:#f39c12">[偏强]</span>'
+            elif rps_val >= 50:
+                rps_html += ' <span style="font-size:11px;color:#888">[中性]</span>'
+            else:
+                rps_html += ' <span style="font-size:11px;color:#888">[偏弱]</span>'
+        elif rps_120 is not None and not pd.isna(rps_120):
+            rps_val = float(rps_120)
+            rps_color = '#e74c3c' if rps_val >= 90 else ('#f39c12' if rps_val >= 80 else '#95a5a6')
+            rps_html = f'<span class="badge" style="background:{rps_color};margin-left:8px">RPS120: {rps_val:.0f}</span>'
+
         html = f'''<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>{code} {stock_name} - Technical Scan v2.0</title>
 <style>
@@ -550,7 +597,7 @@ tr:nth-child(even) {{ background: #f9f9f9; }}
 </table>
 <p style="margin:5px 0;font-size:12px;color:#888">MA: {bd.get("ma", 0):.1f} | MACD: {bd.get("macd", 0):.1f} | KDJ: {bd.get("kdj", 0):.1f} | RSI: {bd.get("rsi", 0):.1f} | Vol-Price: {bd.get("vol_price", 0):.1f}</p>
 <p style="margin:10px 0"><span class="badge" style="background:{badge_color}">{score_result.trend_label}</span>
-<span class="badge" style="background:{pattern_color};margin-left:8px">{ma_pattern.name}</span></p>
+<span class="badge" style="background:{pattern_color};margin-left:8px">{ma_pattern.name}</span>{rps_html}</p>
 <p style="margin:8px 0"><b>操作建议:</b> {score_result.action_advice}</p>
 <p style="margin:8px 0"><b>当前价:</b> {close_display} | <b>止损参考:</b> {sl_atr_display} (ATR) | {sl_ma_display} (MA20)</p>
 {alerts_html}
