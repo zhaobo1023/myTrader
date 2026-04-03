@@ -2,7 +2,7 @@
 """
 技术指标计算器
 
-计算 MA、MACD、RSI 等技术指标
+计算 MA、MACD、RSI、KDJ、BOLL 等技术指标
 """
 import pandas as pd
 import numpy as np
@@ -109,7 +109,30 @@ class IndicatorCalculator:
         df['prev_ma20'] = df['ma20'].shift(1)
         df['prev_macd_dif'] = df['macd_dif'].shift(1)
         df['prev_macd_dea'] = df['macd_dea'].shift(1)
-        
+        df['prev_macd_hist'] = df['macd_hist'].shift(1)
+
+        # 10. KDJ (9, 3, 3) - pandas EWM 实现，符合东方财富惯例
+        kdj_n = 9
+        low_n = df['low'].rolling(window=kdj_n, min_periods=kdj_n).min()
+        high_n = df['high'].rolling(window=kdj_n, min_periods=kdj_n).max()
+        rsv = (close - low_n) / (high_n - low_n) * 100
+        df['kdj_k'] = rsv.ewm(com=2, adjust=False).mean()
+        df['kdj_d'] = df['kdj_k'].ewm(com=2, adjust=False).mean()
+        df['kdj_j'] = 3 * df['kdj_k'] - 2 * df['kdj_d']
+        df['prev_kdj_k'] = df['kdj_k'].shift(1)
+        df['prev_kdj_d'] = df['kdj_d'].shift(1)
+
+        # 11. BOLL (20, 2)
+        boll_window = 20
+        boll_std_mult = 2
+        boll_middle = close.rolling(window=boll_window, min_periods=boll_window).mean()
+        boll_std = close.rolling(window=boll_window, min_periods=boll_window).std()
+        df['boll_upper'] = boll_middle + boll_std_mult * boll_std
+        df['boll_middle'] = boll_middle
+        df['boll_lower'] = boll_middle - boll_std_mult * boll_std
+        df['boll_pctb'] = (close - df['boll_lower']) / (df['boll_upper'] - df['boll_lower'])
+        df['boll_bandwidth'] = (df['boll_upper'] - df['boll_lower']) / df['boll_middle']
+
         return df
     
     def _calc_rsi(self, close: pd.Series, period: int = 14) -> pd.Series:
