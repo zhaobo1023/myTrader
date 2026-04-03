@@ -27,7 +27,7 @@ class IndicatorCalculator:
     def calc_rps(price_df: pd.DataFrame, window: int = 250) -> pd.DataFrame:
         """
         计算 RPS (Relative Price Strength) - 截面排名分位
-        
+
         RPS = 过去 window 个交易日涨幅，在当日全市场A股中的排名百分位（0～100）
         """
         print(f"计算 RPS (window={window})...")
@@ -35,9 +35,18 @@ class IndicatorCalculator:
         price_df = price_df.copy()
         price_df = price_df.sort_values(['stock_code', 'trade_date'])
 
+        # 确保 close 列为 float 类型，避免 Decimal 类型问题
+        price_df['close'] = price_df['close'].astype(float)
+
         # 正确计算 window 日涨幅（直接用 pct_change(periods=window)）
+        # 处理除零错误：当价格为0或接近0时，返回 NaN
+        def safe_pct_change(x, periods):
+            x = x.astype(float)
+            result = x.pct_change(periods=periods)
+            return result
+
         price_df['rolling_return'] = price_df.groupby('stock_code')['close'].transform(
-            lambda x: x.pct_change(periods=window)
+            lambda x: safe_pct_change(x, window)
         )
 
         # 每个交易日对所有股票的滚动收益率进行截面排名
@@ -172,7 +181,7 @@ class IndicatorCalculator:
     def calc_return_rank(price_df: pd.DataFrame, window: int = 60) -> pd.DataFrame:
         """
         计算 N 日涨幅的截面排名分位
-        
+
         用于动量筛选：近60日涨幅排名前30%
         """
         print(f"计算 {window} 日涨幅排名...")
@@ -180,9 +189,17 @@ class IndicatorCalculator:
         price_df = price_df.copy()
         price_df = price_df.sort_values(['stock_code', 'trade_date'])
 
-        # 计算 N 日涨幅
+        # 确保 close 列为 float 类型
+        price_df['close'] = price_df['close'].astype(float)
+
+        # 计算 N 日涨幅，处理除零错误
+        def safe_pct_change(x, periods):
+            x = x.astype(float)
+            result = x.pct_change(periods=periods)
+            return result
+
         price_df['return_n'] = price_df.groupby('stock_code')['close'].transform(
-            lambda x: x.pct_change(periods=window)
+            lambda x: safe_pct_change(x, window)
         )
 
         # 截面排名（百分位）

@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS trade_stock_daily_basic (
     pe_ttm DECIMAL(10,4) COMMENT '市盈率TTM',
     pb DECIMAL(10,4) COMMENT '市净率',
     ps_ttm DECIMAL(10,4) COMMENT '市销率TTM',
+    dv_ttm DECIMAL(10,4) COMMENT '股息率TTM(%)',
     total_share DECIMAL(18,4) COMMENT '总股本(万股)',
     circ_share DECIMAL(18,4) COMMENT '流通股本(万股)',
     turnover_rate DECIMAL(8,4) COMMENT '换手率(%)',

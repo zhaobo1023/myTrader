@@ -6,7 +6,6 @@
   - 数据拉取（QMT/Tushare/AKShare）
   - 数据清洗
   - 技术指标计算
+
+注意：子模块按需导入，避免在 Mac 上因缺少 xtquant 等包导致整个模块无法加载。
 """
-from .fetchers.qmt_fetcher import download_and_save, get_existing_latest_dates
-from .fetchers.tushare_fetcher import fetch_recent_data, get_pro
-from .indicators.technical import TechnicalIndicatorCalculator

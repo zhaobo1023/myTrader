@@ -80,6 +80,20 @@ ICIR_THRESHOLD = 0.4  # ICIR阈值
 # 数据加载
 # ============================================================
 
+def normalize_stock_code(code: str) -> str:
+    """
+    标准化股票代码格式
+    将 000001.SZ 转换为 000001 格式
+    """
+    if pd.isna(code):
+        return code
+    code = str(code)
+    # 去掉后缀 (.SZ, .SH 等)
+    if '.' in code:
+        return code.split('.')[0]
+    return code
+
+
 def load_valuation_factors(start_date: str, end_date: str) -> pd.DataFrame:
     """
     从数据库加载估值因子数据
@@ -98,6 +112,9 @@ def load_valuation_factors(start_date: str, end_date: str) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     df['trade_date'] = pd.to_datetime(df['trade_date'])
+
+    # 标准化股票代码
+    df['stock_code'] = df['stock_code'].apply(normalize_stock_code)
 
     # 转换数值
     for col in ['pe_ttm', 'pb', 'ps_ttm', 'market_cap', 'circ_market_cap']:
@@ -126,6 +143,9 @@ def load_price_data(start_date: str, end_date: str) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     df['trade_date'] = pd.to_datetime(df['trade_date'])
     df['close_price'] = pd.to_numeric(df['close_price'], errors='coerce')
+
+    # 标准化股票代码
+    df['stock_code'] = df['stock_code'].apply(normalize_stock_code)
 
     df = df.set_index(['trade_date', 'stock_code'])
     return df
