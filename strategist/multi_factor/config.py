@@ -92,3 +92,7 @@ FILTER_MIN_PRICE = 1.0        # 最低价格过滤
 FILTER_EXCLUDE_ST = True       # 排除 ST / *ST
 FILTER_MIN_LIST_DAYS = 250     # 上市至少250个交易日(约1年)
 FILTER_EXCLUDE_KCBJ = True     # 排除科创板(688)和北交所(8/4)
+
+# 行业权重上限 (Plan B: 行业分散)
+INDUSTRY_MAX_WEIGHT = 0.20     # 单一行业最多占 Top N 的 20%
+INDUSTRY_CAP_ENABLED = True    # 是否启用行业权重上限

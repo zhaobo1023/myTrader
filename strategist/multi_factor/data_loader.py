@@ -261,6 +261,33 @@ def _add_composite_factors(df: pd.DataFrame):
             logger.info(f"  composite factor {name}: {n_valid:,} valid values")
 
 
+def load_industry_map() -> dict:
+    """
+    从 trade_stock_basic 表加载股票 -> 行业映射。
+
+    Returns:
+        dict: {stock_code: industry_name, ...}
+    """
+    industry_map = {}
+    conn = get_connection()
+    try:
+        import pandas as pd
+        df = pd.read_sql(
+            "SELECT stock_code, industry FROM trade_stock_basic "
+            "WHERE industry IS NOT NULL AND industry != ''",
+            conn
+        )
+        if not df.empty:
+            industry_map = dict(zip(df['stock_code'], df['industry']))
+            logger.info(f"  industry map: {len(industry_map)} stocks loaded")
+        else:
+            logger.warning("  industry map: no industry data in trade_stock_basic, "
+                           "run python -m strategist.multi_factor.industry_fetcher first")
+    finally:
+        conn.close()
+    return industry_map
+
+
 def load_stock_filter() -> set:
     """
     加载股票过滤黑名单。

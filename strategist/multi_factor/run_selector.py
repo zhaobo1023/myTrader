@@ -30,7 +30,7 @@ from strategist.multi_factor.config import (
     FACTORS, FACTOR_LABELS, FACTOR_DIRECTIONS, DEFAULT_TOP_N,
     DEFAULT_REBALANCE_FREQ, IC_FORWARD_PERIOD,
 )
-from strategist.multi_factor.data_loader import load_factor_panel, load_forward_returns, load_stock_filter
+from strategist.multi_factor.data_loader import load_factor_panel, load_forward_returns, load_stock_filter, load_industry_map
 from strategist.multi_factor.scorer import FactorSelector, calc_backtest_returns
 from strategist.multi_factor.evaluator import (
     evaluate_all_factors, evaluate_single_factor,
@@ -215,9 +215,14 @@ def mode_select(args):
     n_after = len(df_day_filtered)
     logger.info(f"  after filter: {n_after}/{n_before} stocks")
 
+    # 加载行业映射
+    logger.info("\n[0b] Loading industry map...")
+    industry_map = load_industry_map()
+
     # 1) 等权合成选股
     logger.info(f"\n[1] Equal-weight composite selection (Top {top_n})...")
-    top_stocks = selector.select_top_n(df_day, top_n=top_n, blacklist=blacklist)
+    top_stocks = selector.select_top_n(df_day, top_n=top_n, blacklist=blacklist,
+                                        industry_map=industry_map)
     scores = selector.score_cross_section(df_day)
 
     # 加载股票名称
@@ -233,20 +238,36 @@ def mode_select(args):
 
     print(f"\n## Top {top_n} Stocks (Equal-Weight Composite)")
     print(f"Date: {closest_date.strftime('%Y-%m-%d')}")
-    print(f"Universe: {n_after} stocks (after filtering)\n")
-    print(f"| Rank | Code | Name | Score | PB | PE | MktCap | Vol20 | Price | ROE |")
-    print(f"|------|------|------|-------|----|----|--------|-------|-------|-----|")
+    print(f"Universe: {n_after} stocks (after filtering)")
+    from strategist.multi_factor.config import INDUSTRY_CAP_ENABLED, INDUSTRY_MAX_WEIGHT
+    if INDUSTRY_CAP_ENABLED and industry_map:
+        print(f"Industry cap: max {int(top_n * INDUSTRY_MAX_WEIGHT)}/industry ({INDUSTRY_MAX_WEIGHT:.0%})")
+    print()
+    print(f"| Rank | Code | Name | Industry | Score | PB | PE | MktCap | Vol20 | Price | ROE |")
+    print(f"|------|------|------|----------|-------|----|----|--------|-------|-------|-----|")
 
     for i, code in enumerate(top_stocks, 1):
         row = df_day.loc[code]
         name = name_map.get(code, '')
+        industry = industry_map.get(code, '-')
         mktcap = row.get('market_cap', 0)
         print(
-            f"| {i} | {code} | {name} | {scores[code]:.3f} | "
+            f"| {i} | {code} | {name} | {industry} | {scores[code]:.3f} | "
             f"{row.get('pb', 0):.2f} | {row.get('pe_ttm', 0):.2f} | "
             f"{mktcap:.2f} | {row.get('volatility_20', 0):.4f} | "
             f"{row.get('close', 0):.2f} | {row.get('roe_ttm', 0):.2f} |"
         )
+
+    # 行业分布统计
+    if industry_map:
+        industry_dist = {}
+        for code in top_stocks:
+            ind = industry_map.get(code, 'unknown')
+            industry_dist[ind] = industry_dist.get(ind, 0) + 1
+        print(f"\n### Industry Distribution\n")
+        for ind, cnt in sorted(industry_dist.items(), key=lambda x: -x[1]):
+            bar = '#' * cnt
+            print(f"  {ind}: {cnt} {bar}")
 
     # 2) 单因子 Top 10
     print("\n\n## Single Factor Top 10\n")
