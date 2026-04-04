@@ -18,6 +18,7 @@ from .signal_detector import (
     Signal, SignalLevel, SignalSeverity, SignalTag, SignalDetector,
     get_sector
 )
+from .chart_generator import ChartGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +43,14 @@ class ReportGenerator:
     # 极度危险阈值：亏损 > 8% 且有破位信号
     DANGER_PNL_THRESHOLD = -8.0
 
-    def __init__(self, output_dir: str):
+    def __init__(self, output_dir: str, generate_charts: bool = True):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.detector = SignalDetector()
+        self.generate_charts = generate_charts
+        self.chart_dir = self.output_dir / "charts"
+        if generate_charts:
+            self.chart_generator = ChartGenerator(str(self.chart_dir))
 
     def generate(
         self,
@@ -53,7 +58,8 @@ class ReportGenerator:
         positions: List[Any],
         scan_date: Optional[datetime] = None,
         prev_report_path: Optional[str] = None,
-        index_status: Optional[Dict] = None
+        index_status: Optional[Dict] = None,
+        full_df: Optional[pd.DataFrame] = None
     ) -> str:
         """
         生成扫描报告
@@ -64,6 +70,7 @@ class ReportGenerator:
             scan_date: 扫描日期
             prev_report_path: 前一天报告路径
             index_status: 指数状态 {'name': str, 'code': str, 'trend': str, 'pct': float}
+            full_df: 完整历史数据（用于图表生成）
         """
         if scan_date is None:
             scan_date = datetime.now()
@@ -181,6 +188,26 @@ class ReportGenerator:
         # 极度危险列表
         danger_list = [r for r in analysis_results if r['is_danger']]
 
+        # 生成图表
+        chart_paths = {}
+        if self.generate_charts and full_df is not None and not full_df.empty:
+            logger.info("生成技术分析图表...")
+            for r in analysis_results:
+                try:
+                    chart_path = self.chart_generator.generate_chart(
+                        df=full_df,
+                        stock_code=r['code'],
+                        stock_name=r['name'],
+                        analysis_result=r,
+                        scan_date=scan_date
+                    )
+                    if chart_path:
+                        chart_paths[r['code']] = chart_path
+                except Exception as e:
+                    logger.warning(f"生成 {r['code']} 图表失败: {e}")
+
+            logger.info(f"图表生成完成: {len(chart_paths)} 张")
+
         # 生成报告
         report = self._build_report(
             scan_date=scan_date,
@@ -194,7 +221,8 @@ class ReportGenerator:
             slope_transitions=slope_transitions,
             danger_list=danger_list,
             prev_status=prev_status,
-            index_status=index_status
+            index_status=index_status,
+            chart_paths=chart_paths
         )
 
         filename = f"TechScan_{scan_date.strftime('%Y%m%d')}.md"
@@ -240,7 +268,8 @@ class ReportGenerator:
         slope_transitions: List[Dict],
         danger_list: List[Dict],
         prev_status: Dict[str, str],
-        index_status: Optional[Dict]
+        index_status: Optional[Dict],
+        chart_paths: Optional[Dict[str, str]] = None
     ) -> str:
         """构建报告内容"""
         lines = []
@@ -457,6 +486,13 @@ class ReportGenerator:
             row = r['row']
             lines.append(f"### {r['code']} {r['name']}")
             lines.append("")
+
+            # 嵌入图表
+            if chart_paths and r['code'] in chart_paths:
+                chart_file = Path(chart_paths[r['code']]).name
+                lines.append(f"![技术分析图](charts/{chart_file})")
+                lines.append("")
+
             lines.append(f"- **趋势**: {r['trend']}")
             lines.append(f"- **板块**: {r['sector']}")
 
