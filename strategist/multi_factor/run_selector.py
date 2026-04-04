@@ -30,7 +30,7 @@ from strategist.multi_factor.config import (
     FACTORS, FACTOR_LABELS, FACTOR_DIRECTIONS, DEFAULT_TOP_N,
     DEFAULT_REBALANCE_FREQ, IC_FORWARD_PERIOD,
 )
-from strategist.multi_factor.data_loader import load_factor_panel, load_forward_returns
+from strategist.multi_factor.data_loader import load_factor_panel, load_forward_returns, load_stock_filter, load_industry_map
 from strategist.multi_factor.scorer import FactorSelector, calc_backtest_returns
 from strategist.multi_factor.evaluator import (
     evaluate_all_factors, evaluate_single_factor,
@@ -127,8 +127,16 @@ def mode_ic(args):
 
     corr_cols = [c for c in factor_cols_available if c in panel_with_score.columns]
     if corr_cols:
-        # 取最近一个交易日的截面计算相关性
-        last_date = panel_with_score.index.get_level_values(0).max()
+        # 取最近一个数据完整的交易日截面计算相关性
+        all_dates = panel_with_score.index.get_level_values(0).unique().sort_values(ascending=False)
+        last_date = None
+        for dt in all_dates:
+            df_try = panel_with_score.loc[dt]
+            if isinstance(df_try, pd.DataFrame) and df_try[corr_cols].notna().mean().min() > 0.8:
+                last_date = dt
+                break
+        if last_date is None:
+            last_date = all_dates[0]
         df_last = panel_with_score.loc[last_date]
         if isinstance(df_last, pd.DataFrame):
             corr = df_last[corr_cols].corr()
@@ -225,24 +233,67 @@ def mode_select(args):
 
     selector = FactorSelector()
 
+    # 加载黑名单
+    logger.info("\n[0] Loading stock filter...")
+    blacklist = load_stock_filter()
+    n_before = len(df_day)
+    df_day_filtered = df_day[~df_day.index.isin(blacklist)]
+    n_after = len(df_day_filtered)
+    logger.info(f"  after filter: {n_after}/{n_before} stocks")
+
+    # 加载行业映射
+    logger.info("\n[0b] Loading industry map...")
+    industry_map = load_industry_map()
+
     # 1) 等权合成选股
     logger.info(f"\n[1] Equal-weight composite selection (Top {top_n})...")
-    top_stocks = selector.select_top_n(df_day, top_n=top_n)
+    top_stocks = selector.select_top_n(df_day, top_n=top_n, blacklist=blacklist,
+                                        industry_map=industry_map)
     scores = selector.score_cross_section(df_day)
 
+    # 加载股票名称
+    from config.db import get_connection
+    conn = get_connection()
+    try:
+        name_df = pd.read_sql(
+            "SELECT stock_code, stock_name FROM trade_stock_basic", conn
+        )
+        name_map = dict(zip(name_df['stock_code'], name_df['stock_name']))
+    finally:
+        conn.close()
+
     print(f"\n## Top {top_n} Stocks (Equal-Weight Composite)")
-    print(f"Date: {closest_date.strftime('%Y-%m-%d')}\n")
-    print(f"| Rank | Stock | Score | PB | PE | MktCap | Vol20 | Price | ROE |")
-    print(f"|------|-------|-------|----|----|--------|-------|-------|-----|")
+    print(f"Date: {closest_date.strftime('%Y-%m-%d')}")
+    print(f"Universe: {n_after} stocks (after filtering)")
+    from strategist.multi_factor.config import INDUSTRY_CAP_ENABLED, INDUSTRY_MAX_WEIGHT
+    if INDUSTRY_CAP_ENABLED and industry_map:
+        print(f"Industry cap: max {int(top_n * INDUSTRY_MAX_WEIGHT)}/industry ({INDUSTRY_MAX_WEIGHT:.0%})")
+    print()
+    print(f"| Rank | Code | Name | Industry | Score | PB | PE | MktCap | Vol20 | Price | ROE |")
+    print(f"|------|------|------|----------|-------|----|----|--------|-------|-------|-----|")
 
     for i, code in enumerate(top_stocks, 1):
         row = df_day.loc[code]
+        name = name_map.get(code, '')
+        industry = industry_map.get(code, '-')
+        mktcap = row.get('market_cap', 0)
         print(
-            f"| {i} | {code} | {scores[code]:.3f} | "
+            f"| {i} | {code} | {name} | {industry} | {scores[code]:.3f} | "
             f"{row.get('pb', 0):.2f} | {row.get('pe_ttm', 0):.2f} | "
-            f"{row.get('market_cap', 0):.1f} | {row.get('volatility_20', 0):.4f} | "
+            f"{mktcap:.2f} | {row.get('volatility_20', 0):.4f} | "
             f"{row.get('close', 0):.2f} | {row.get('roe_ttm', 0):.2f} |"
         )
+
+    # 行业分布统计
+    if industry_map:
+        industry_dist = {}
+        for code in top_stocks:
+            ind = industry_map.get(code, 'unknown')
+            industry_dist[ind] = industry_dist.get(ind, 0) + 1
+        print(f"\n### Industry Distribution\n")
+        for ind, cnt in sorted(industry_dist.items(), key=lambda x: -x[1]):
+            bar = '#' * cnt
+            print(f"  {ind}: {cnt} {bar}")
 
     # 2) 单因子 Top 10
     print("\n\n## Single Factor Top 10\n")

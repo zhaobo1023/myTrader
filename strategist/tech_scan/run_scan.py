@@ -21,6 +21,7 @@ from .indicator_calculator import IndicatorCalculator
 from .signal_detector import SignalDetector, SignalLevel, SignalTag
 from .report_generator import ReportGenerator
 from .backlog_manager import BacklogManager
+from .chart_generator import ChartGenerator
 
 
 # 上证指数代码
@@ -290,7 +291,8 @@ def run_daily_scan(
     report_path, analysis_results = report_gen.generate(
         latest_df, positions, scan_date,
         prev_report_path=prev_report_path,
-        index_status=index_status
+        index_status=index_status,
+        full_df=df  # 传递完整历史数据用于图表生成
     )
 
     # 9. 保存 Daily Summary
@@ -315,8 +317,17 @@ def main():
     parser.add_argument('--env', type=str, default='online', choices=['local', 'online'], help='数据库环境')
     parser.add_argument('--portfolio', type=str, help='持仓文件路径')
     parser.add_argument('--output', type=str, help='输出目录')
+    parser.add_argument('--stock', type=str, help='single stock scan, e.g. 688386')
 
     args = parser.parse_args()
+
+    # Single stock mode: delegate to SingleStockScanner
+    if args.stock:
+        from .single_scanner import SingleStockScanner
+        scanner = SingleStockScanner(env=args.env)
+        report = scanner.scan(args.stock)
+        print(report)
+        return
 
     config = ScanConfig()
     if args.env:

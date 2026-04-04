@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(python:*)",
+      "Bash(git add:*)",
+      "Bash(strategist/xgboost_strategy/paper_trading/__init__.py )",
+      "Bash(strategist/xgboost_strategy/paper_trading/config.py )",
+      "Bash(strategist/xgboost_strategy/paper_trading/db_schema.py )",
+      "Bash(strategist/xgboost_strategy/paper_trading/position_manager.py )",
+      "Bash(strategist/xgboost_strategy/paper_trading/signal_generator.py )",
+      "Bash(strategist/xgboost_strategy/paper_trading/settlement.py )",
+      "Bash(strategist/xgboost_strategy/paper_trading/evaluator.py )",
+      "Bash(strategist/xgboost_strategy/paper_trading/scheduler.py )",
+      "Bash(strategist/xgboost_strategy/paper_trading/run_paper_trading.py )",
+      "Bash(strategist/xgboost_strategy/paper_trading/test_paper_trading.py )",
+      "Bash(strategist/xgboost_strategy/paper_trading/PAPER_TRADING_SYSTEM.md )",
+      "Bash(strategist/xgboost_strategy/model_trainer.py )",
+      "Bash(strategist/xgboost_strategy/backtest.py )",
+      "Bash(strategist/xgboost_strategy/data_loader.py )",
+      "Bash(strategist/xgboost_strategy/evaluator.py )",
+      "Bash(strategist/xgboost_strategy/predictor.py )",
+      "Bash(strategist/xgboost_strategy/preprocessor.py )",
+      "Bash(strategist/xgboost_strategy/test_strategy.py )",
+      "Bash(strategist/xgboost_strategy/visualizer.py )",
+      "Bash(strategist/xgboost_strategy/batch_run.py )",
+      "Bash(strategist/xgboost_strategy/PAPER_TRADING_SYSTEM.md)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nfeat: 添加Paper Trading实盘验证系统，修复XGBoost策略已知bug\n\n新增 paper_trading 模块，消除回测 look-ahead bias，用真实时序验证策略有效性：\n- signal_generator: 调用XGBoost生成选股信号，严格防止数据泄露\n- position_manager: 轮次创建、持仓管理、交易日历查询\n- settlement: T+1买入价填充、T+N卖出结算、Spearman IC计算\n- evaluator: IC/ICIR/夏普/胜率/累计超额收益等指标\n- scheduler: 每日调度器 + 历史回放功能\n- run_paper_trading: CLI入口，支持init/signal/settle/report/auto/status/replay\n- db_schema: pt_rounds/pt_positions/pt_benchmark 三张表\n\n同时修复XGBoost策略模块已知bug，ModelTrainer新增predict_on_date方法。\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git push:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

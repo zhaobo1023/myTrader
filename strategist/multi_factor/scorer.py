@@ -14,7 +14,10 @@ import logging
 import numpy as np
 import pandas as pd
 
-from .config import FACTOR_DEFS, FACTOR_DIRECTIONS, FACTOR_LABELS, FACTOR_GROUPS, DEFAULT_TOP_N
+from .config import (
+    FACTOR_DEFS, FACTOR_DIRECTIONS, FACTOR_LABELS, FACTOR_GROUPS, DEFAULT_TOP_N,
+    INDUSTRY_MAX_WEIGHT, INDUSTRY_CAP_ENABLED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +129,11 @@ class FactorSelector:
             scores = self.score_cross_section(df_day)
             if scores.empty:
                 continue
+            # attach trade_date as outer index level
+            scores.index = pd.MultiIndex.from_tuples(
+                [(dt, code) for code in scores.index],
+                names=['trade_date', 'stock_code']
+            )
             scores.name = 'composite_score'
             # 保留 trade_date 作为 index 的一层
             scores = scores.to_frame()
@@ -140,7 +148,9 @@ class FactorSelector:
         return result[['composite_score']]
 
     def select_top_n(self, df: pd.DataFrame, top_n: int = DEFAULT_TOP_N,
-                     min_price: float = 1.0) -> list:
+                     min_price: float = 1.0, blacklist: set = None,
+                     industry_map: dict = None,
+                     industry_max_weight: float = INDUSTRY_MAX_WEIGHT) -> list:
         """
         从单日横截面选出 Top N 股票。
 
@@ -148,23 +158,29 @@ class FactorSelector:
             df: DataFrame, index=stock_code, columns include factor names + close_price
             top_n: number of stocks to select
             min_price: filter out stocks with price below this
+            blacklist: set of stock_code to exclude (ST, newly listed, etc.)
+            industry_map: dict {stock_code: industry_name} for industry cap
+            industry_max_weight: max fraction of top_n per industry (e.g. 0.20 = 20%)
 
         Returns:
             list of stock_code
         """
-        # 价格过滤 (使用 close 或 close_price 列)
-        price_col = 'close_price' if 'close_price' in df.columns else 'close'
-        if price_col in df.columns:
-            mask = df[price_col].notna() & (df[price_col] >= min_price)
-            df_filtered = df[mask]
-        else:
-            df_filtered = df
+        df_filtered = df
+
+        # 黑名单过滤
+        if blacklist:
+            df_filtered = df_filtered[~df_filtered.index.isin(blacklist)]
 
         # 因子值过滤: 至少有一半因子非空
         factor_cols = [f for f in self.factors if f in df_filtered.columns]
         if factor_cols:
             valid_mask = df_filtered[factor_cols].notna().sum(axis=1) >= len(factor_cols) / 2
             df_filtered = df_filtered[valid_mask]
+
+        # 基本面过滤: PB > 0, PE > 0 (排除亏损公司)
+        for neg_filter_col in ('pb', 'pe_ttm'):
+            if neg_filter_col in df_filtered.columns:
+                df_filtered = df_filtered[df_filtered[neg_filter_col] > 0]
 
         if len(df_filtered) < top_n:
             logger.warning(f"Only {len(df_filtered)} stocks after filtering, requested {top_n}")
@@ -174,11 +190,71 @@ class FactorSelector:
             return []
 
         scores = self.score_cross_section(df_filtered)
-        top_stocks = scores.nlargest(top_n).index.tolist()
+
+        # 按得分降序排列
+        ranked = scores.sort_values(ascending=False)
+
+        if INDUSTRY_CAP_ENABLED and industry_map:
+            top_stocks = self._apply_industry_cap(
+                ranked, top_n, industry_map, industry_max_weight
+            )
+        else:
+            top_stocks = ranked.head(top_n).index.tolist()
+
         return top_stocks
 
+    def _apply_industry_cap(self, ranked: pd.Series, top_n: int,
+                            industry_map: dict,
+                            max_weight: float) -> list:
+        """
+        行业权重上限: 限制每个行业最多占 top_n 的 max_weight。
+
+        算法:
+        1. 按得分降序遍历所有股票
+        2. 跟踪每个行业已入选数量
+        3. 当某行业已满时跳过该行业的后续股票
+        4. 当选满 top_n 时停止
+
+        Args:
+            ranked: Series, index=stock_code, values=composite_score, 已降序排列
+            top_n: 目标选股数
+            industry_map: {stock_code: industry_name}
+            max_weight: 单行业最大占比 (0.0 ~ 1.0)
+
+        Returns:
+            list of stock_code
+        """
+        industry_cap = max(1, int(top_n * max_weight))
+        industry_count = {}
+        selected = []
+
+        for code in ranked.index:
+            industry = industry_map.get(code)
+            if industry is None:
+                # 无行业数据的股票单独计数, 不受行业上限限制
+                selected.append(code)
+                if len(selected) >= top_n:
+                    break
+                continue
+
+            count = industry_count.get(industry, 0)
+            if count < industry_cap:
+                selected.append(code)
+                industry_count[industry] = count + 1
+                if len(selected) >= top_n:
+                    break
+
+        # 统计
+        if industry_count:
+            top_industries = sorted(industry_count.items(), key=lambda x: -x[1])[:5]
+            logger.info(f"  industry cap: max {industry_cap}/industry "
+                        f"(top: {', '.join(f'{k}={v}' for k, v in top_industries)})")
+
+        return selected
+
     def select_panel(self, panel: pd.DataFrame, top_n: int = DEFAULT_TOP_N,
-                     rebalance_freq: int = 20, min_price: float = 1.0) -> pd.DataFrame:
+                     rebalance_freq: int = 20, min_price: float = 1.0,
+                     blacklist: set = None, industry_map: dict = None) -> pd.DataFrame:
         """
         面板回测选股: 按调仓频率定期选股。
 
@@ -200,7 +276,8 @@ class FactorSelector:
             if isinstance(df_day, pd.Series):
                 continue
 
-            top_stocks = self.select_top_n(df_day, top_n=top_n, min_price=min_price)
+            top_stocks = self.select_top_n(df_day, top_n=top_n, min_price=min_price,
+                                           blacklist=blacklist, industry_map=industry_map)
             if not top_stocks:
                 continue
 

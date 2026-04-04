@@ -510,6 +510,214 @@ class SignalDetector:
 
         return {}
 
+    def detect_macd_divergence(self, df: pd.DataFrame, window: int = 60) -> Dict:
+        """
+        检测 MACD 柱状图背驰
+
+        将 macd_hist 按零轴穿越分段，比较最后两段同号柱状图面积：
+        - 顶背驰: 最后一段为正，价格创新高但柱状图面积缩小 (< 80%)
+        - 底背驰: 最后一段为负，价格创新低但柱状图面积缩小 (< 80%)
+
+        Args:
+            df: 单只股票的 DataFrame，需包含 macd_hist 和 close 列
+            window: 回溯窗口天数
+
+        Returns:
+            {'type': '顶背驰'|'底背驰'|'无背驰', 'confidence': '高'|'中'|'低', 'description': str}
+        """
+        result = {'type': '无背驰', 'confidence': '低', 'description': '数据不足或无法判断'}
+
+        if df is None or len(df) < 2:
+            return result
+
+        recent = df.tail(window).copy()
+        if 'macd_hist' not in recent.columns or 'close' not in recent.columns:
+            return result
+
+        histograms = recent['macd_hist'].values
+        closes = recent['close'].values
+
+        # 按 zero crossing 分段
+        segments = []
+        current_sign = None
+        current_values = []
+        current_indices = []
+
+        for i, h in enumerate(histograms):
+            if pd.isna(h):
+                continue
+            sign = 'positive' if h >= 0 else 'negative'
+            if current_sign is None:
+                current_sign = sign
+                current_values = [h]
+                current_indices = [i]
+            elif sign == current_sign:
+                current_values.append(h)
+                current_indices.append(i)
+            else:
+                segments.append({
+                    'type': current_sign,
+                    'histograms': current_values,
+                    'indices': current_indices
+                })
+                current_sign = sign
+                current_values = [h]
+                current_indices = [i]
+
+        # 不要遗漏最后一段
+        if current_values:
+            segments.append({
+                'type': current_sign,
+                'histograms': current_values,
+                'indices': current_indices
+            })
+
+        # 至少需要 2 段才能比较
+        if len(segments) < 2:
+            return result
+
+        last_seg = segments[-1]
+        prev_seg = segments[-2]
+
+        # 只比较同号段
+        if last_seg['type'] != prev_seg['type']:
+            return result
+
+        # 计算面积（绝对值求和）
+        last_area = sum(abs(h) for h in last_seg['histograms'])
+        prev_area = sum(abs(h) for h in prev_seg['histograms'])
+
+        if prev_area == 0:
+            return result
+
+        area_ratio = last_area / prev_area
+
+        # 获取价格范围
+        last_price_max = max(closes[idx] for idx in last_seg['indices'])
+        last_price_min = min(closes[idx] for idx in last_seg['indices'])
+        prev_price_max = max(closes[idx] for idx in prev_seg['indices'])
+        prev_price_min = min(closes[idx] for idx in prev_seg['indices'])
+
+        if last_seg['type'] == 'positive':
+            # 顶背驰: 价格创新高但柱面积缩小
+            if last_price_max > prev_price_max and area_ratio < 0.8:
+                confidence = '高' if area_ratio < 0.6 else '中'
+                result = {
+                    'type': '顶背驰',
+                    'confidence': confidence,
+                    'description': (
+                        f"价格创新高({last_price_max:.2f}>{prev_price_max:.2f}) "
+                        f"但MACD柱面积缩小至{area_ratio:.0%}，顶背驰"
+                    )
+                }
+            else:
+                result = {'type': '无背驰', 'confidence': '低', 'description': '无明显顶背驰'}
+        else:
+            # 底背驰: 价格创新低但柱面积缩小
+            if last_price_min < prev_price_min and area_ratio < 0.8:
+                confidence = '高' if area_ratio < 0.6 else '中'
+                result = {
+                    'type': '底背驰',
+                    'confidence': confidence,
+                    'description': (
+                        f"价格创新低({last_price_min:.2f}<{prev_price_min:.2f}) "
+                        f"但MACD柱面积缩小至{area_ratio:.0%}，底背驰"
+                    )
+                }
+            else:
+                result = {'type': '无背驰', 'confidence': '低', 'description': '无明显底背驰'}
+
+        return result
+
+    def detect_kdj_signals(self, latest: pd.Series) -> List[Signal]:
+        """
+        检测 KDJ 信号
+
+        检测规则:
+        - KDJ金叉: K上穿D -> GREEN/WARNING
+        - KDJ死叉: K下穿D -> RED/WARNING
+        - KDJ超买: J > 90 -> YELLOW/WARNING
+        - KDJ偏买: J > 80 -> YELLOW/WARNING
+        - KDJ超卖: J < 10 -> YELLOW/WARNING
+        - KDJ偏卖: J < 20 -> INFO/WARNING
+        - KDJ底部钝化: J<20 AND K<20 AND D<20 -> GREEN/WARNING
+
+        Args:
+            latest: df.iloc[-1]，需包含 kdj_k, kdj_d, kdj_j, prev_kdj_k, prev_kdj_d
+
+        Returns:
+            Signal 列表
+        """
+        signals = []
+
+        kdj_k = latest.get('kdj_k')
+        kdj_d = latest.get('kdj_d')
+        kdj_j = latest.get('kdj_j')
+        prev_kdj_k = latest.get('prev_kdj_k')
+        prev_kdj_d = latest.get('prev_kdj_d')
+
+        # 任一关键值为 None 或 NaN，返回空列表
+        required = [kdj_k, kdj_d, kdj_j, prev_kdj_k, prev_kdj_d]
+        if any(v is None or pd.isna(v) for v in required):
+            return signals
+
+        # KDJ 金叉/死叉
+        if kdj_k > kdj_d and prev_kdj_k <= prev_kdj_d:
+            signals.append(Signal(
+                name="KDJ金叉",
+                level=SignalLevel.GREEN,
+                description=f"K={kdj_k:.1f}上穿D={kdj_d:.1f}",
+                severity=SignalSeverity.WARNING
+            ))
+        elif kdj_k < kdj_d and prev_kdj_k >= prev_kdj_d:
+            signals.append(Signal(
+                name="KDJ死叉",
+                level=SignalLevel.RED,
+                description=f"K={kdj_k:.1f}下穿D={kdj_d:.1f}",
+                severity=SignalSeverity.WARNING
+            ))
+
+        # KDJ 超买/超卖 (J 值)
+        if kdj_j > 90:
+            signals.append(Signal(
+                name="KDJ超买",
+                level=SignalLevel.YELLOW,
+                description=f"J={kdj_j:.1f} > 90，注意超买风险",
+                severity=SignalSeverity.WARNING
+            ))
+        elif kdj_j > 80:
+            signals.append(Signal(
+                name="KDJ偏买",
+                level=SignalLevel.YELLOW,
+                description=f"J={kdj_j:.1f} > 80，偏买区域",
+                severity=SignalSeverity.WARNING
+            ))
+        elif kdj_j < 10:
+            signals.append(Signal(
+                name="KDJ超卖",
+                level=SignalLevel.YELLOW,
+                description=f"J={kdj_j:.1f} < 10，严重超卖",
+                severity=SignalSeverity.WARNING
+            ))
+        elif kdj_j < 20:
+            signals.append(Signal(
+                name="KDJ偏卖",
+                level=SignalLevel.INFO,
+                description=f"J={kdj_j:.1f} < 20，偏卖区域",
+                severity=SignalSeverity.WARNING
+            ))
+
+        # KDJ 底部钝化
+        if kdj_j < 20 and kdj_k < 20 and kdj_d < 20:
+            signals.append(Signal(
+                name="KDJ底部钝化",
+                level=SignalLevel.GREEN,
+                description=f"K={kdj_k:.1f}, D={kdj_d:.1f}, J={kdj_j:.1f} 均低于20，底部钝化",
+                severity=SignalSeverity.WARNING
+            ))
+
+        return signals
+
 
 def detect_signals(row: pd.Series) -> List[Signal]:
     """便捷函数：检测信号"""
