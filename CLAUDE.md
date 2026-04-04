@@ -50,31 +50,119 @@ myTrader/
 │   └── settings.py            # 全局配置
 │
 ├── data_analyst/              # 数据分析师模块
-│   ├── fetchers/              # 数据拉取器
-│   │   ├── qmt_fetcher.py     # QMT数据拉取 (全量A股)
-│   │   └── tushare_fetcher.py # Tushare数据拉取
-│   ├── processors/            # 数据清洗
-│   └── indicators/            # 技术指标计算
-│       └── technical.py       # MA/MACD/RSI/KDJ/BOLL/ATR
+│   ├── fetchers/              # 数据拉取器 (QMT/Tushare/AKShare)
+│   ├── financial_fetcher/     # 财务数据拉取
+│   ├── factors/               # 因子计算与存储
+│   ├── indicators/            # 技术指标计算 (MA/MACD/RSI/KDJ/BOLL/ATR)
+│   ├── market_monitor/        # SVD 市场状态监控
+│   ├── services/              # 数据监控、报警、定时任务
+│   └── sw_rotation/           # 申万行业轮动分析
 │
 ├── strategist/                # 策略师模块
-│   ├── backtest/              # 回测框架
-│   ├── signals/               # 信号生成
-│   ├── doctor_tao/            # 陶博士策略
-│   └── xgboost_strategy/      # XGBoost截面预测策略 (NEW)
+│   ├── backtest/              # 通用回测框架
+│   ├── doctor_tao/            # 陶博士策略（RPS+动量）
+│   ├── xgboost_strategy/      # XGBoost 截面预测策略
+│   │   └── paper_trading/     # 模拟交易
+│   ├── tech_scan/             # 持仓技术面扫描
+│   ├── multi_factor/          # 多因子选股
+│   ├── log_bias/              # 对数偏差策略
+│   └── universe_scanner/      # 全市场扫描
 │
 ├── risk_manager/              # 风控师模块
-│   └── 风控规则实现
-│
 ├── executor/                  # 交易员模块
-│   ├── qmt/                   # QMT交易接口
-│   └── orders/                # 订单管理
+├── investment_rag/            # 投研 RAG 系统
+├── research/                  # 研究脚本（因子验证、ETF 回测等）
+├── scripts/                   # 运维脚本
+├── docs/                      # 文档与设计稿
 │
-├── utils/                     # 通用工具
+├── output/                    # 统一输出目录（git ignored）
+│   ├── doctor_tao/            # 陶博士策略产出
+│   ├── xgboost/               # XGBoost 策略产出
+│   ├── multi_factor/          # 多因子选股产出
+│   ├── single_scan/           # 个股扫描产出
+│   ├── svd_monitor/           # SVD 监控产出
+│   ├── sw_rotation/           # 申万轮动产出
+│   └── research/              # 研究脚本产出
+│
 ├── .env                       # 环境配置 (不提交)
 ├── .env.example               # 环境配置模板
 └── requirements.txt           # Python依赖
 ```
+
+## 目录规范
+
+### output 统一输出目录
+
+所有模块的生成产物统一放到项目根目录的 `output/` 下，按模块分子目录。`output/` 已加入 `.gitignore`，不纳入版本控制。
+
+```
+output/
+├── doctor_tao/       # strategist/doctor_tao/ 产出
+├── xgboost/          # strategist/xgboost_strategy/ 产出
+├── multi_factor/     # strategist/multi_factor/ 产出
+├── single_scan/      # strategist/tech_scan/ 个股扫描产出
+├── svd_monitor/      # data_analyst/market_monitor/ 产出
+├── sw_rotation/      # data_analyst/sw_rotation/ 产出
+├── log_bias/         # strategist/log_bias/ 产出
+├── universe_scan/    # strategist/universe_scanner/ 产出
+└── research/         # research/ 脚本产出
+```
+
+**路径写法规范**：
+
+```python
+import os
+import sys
+
+# 1. 在文件头部定义 ROOT（通过 __file__ 回溯到项目根目录）
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+# 2. output 路径使用 ROOT 拼接
+output_dir = os.path.join(ROOT, 'output', '<module_name>')
+os.makedirs(output_dir, exist_ok=True)
+```
+
+**禁止事项**：
+- 禁止使用 `os.path.join(os.path.dirname(__file__), 'output')` 在模块目录下创建 output
+- 禁止使用裸相对路径如 `'output/xxx.png'`（依赖 CWD，不可移植）
+- 禁止在 `strategist/`、`data_analyst/` 等子目录下创建 output 子目录
+- 禁止将 output 下的文件提交到 git
+
+### 包结构规范
+
+每个 Python 子模块目录必须包含 `__init__.py`，确保可被正常 import。
+
+```
+data_analyst/
+├── __init__.py
+├── fetchers/__init__.py
+├── indicators/__init__.py
+├── factors/__init__.py
+├── services/__init__.py
+├── financial_fetcher/__init__.py
+├── market_monitor/__init__.py
+└── sw_rotation/__init__.py
+
+strategist/
+├── __init__.py
+├── backtest/__init__.py
+├── doctor_tao/__init__.py
+├── xgboost_strategy/__init__.py
+├── tech_scan/__init__.py
+├── multi_factor/__init__.py
+├── log_bias/__init__.py
+└── universe_scanner/__init__.py
+```
+
+### 新模块添加清单
+
+添加新模块时需完成以下步骤：
+
+1. 创建模块目录及 `__init__.py`
+2. output 路径使用 `os.path.join(ROOT, 'output', '<module_name>')`
+3. 如需新的 output 子目录，在上方目录树和 `.gitignore` 的 `output/` 条目中补充说明（`output/` 通配符已覆盖所有子目录，无需额外添加）
+4. 更新本文件的项目结构树
 
 ## 架构要点
 
@@ -401,13 +489,13 @@ python -m strategist.xgboost_strategy.run_strategy
 ```
 
 **输出结果**：
-- `output/signals.csv` - 每日预测信号
-- `output/portfolio_returns.csv` - 组合收益
-- `output/factor_ic.csv` - 因子 IC 统计
-- `output/ic_analysis.png` - IC 时序图和分布
-- `output/portfolio_performance.png` - 组合表现
-- `output/factor_ic.png` - 因子 IC 排名
-- `output/strategy_report.md` - 策略报告
+- `output/xgboost/signals.csv` - 每日预测信号
+- `output/xgboost/portfolio_returns.csv` - 组合收益
+- `output/xgboost/factor_ic.csv` - 因子 IC 统计
+- `output/xgboost/ic_analysis.png` - IC 时序图和分布
+- `output/xgboost/portfolio_performance.png` - 组合表现
+- `output/xgboost/factor_ic.png` - 因子 IC 排名
+- `output/xgboost/strategy_report.md` - 策略报告
 
 **预期效果**：
 - IC: 0.03~0.05

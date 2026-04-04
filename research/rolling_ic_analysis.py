@@ -18,7 +18,8 @@ from typing import Tuple
 import pandas as pd
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 from config.db import execute_query
 
 # 尝试导入可视化库
@@ -395,8 +396,8 @@ def main():
     # 5. 可视化
     if HAS_PLOT:
         print("\n生成可视化...")
-        os.makedirs('output', exist_ok=True)
-        save_path = f'output/rolling_ic_{etf_code}_{factor_code}_{window}.png'
+        os.makedirs(os.path.join(ROOT, 'output', 'research'), exist_ok=True)
+        save_path = os.path.join(ROOT, 'output', 'research', f'rolling_ic_{etf_code}_{factor_code}_{window}.png')
         plot_rolling_ic(rolling_ic, split_date, factor_code, etf_name, save_path)
 
     print("\n" + "=" * 70)

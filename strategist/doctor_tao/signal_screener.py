@@ -16,7 +16,8 @@ from dataclasses import dataclass
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT)
 
 from strategist.doctor_tao.data_fetcher import DoctorTaoDataFetcher
 from strategist.doctor_tao.indicators import IndicatorCalculator
@@ -430,7 +431,7 @@ class SignalScreener:
 
         # 10. 输出 CSV
         if output_csv and len(result) > 0:
-            output_dir = os.path.join(os.path.dirname(__file__), 'output')
+            output_dir = os.path.join(ROOT, 'output', 'doctor_tao')
             os.makedirs(output_dir, exist_ok=True)
 
             output_file = os.path.join(

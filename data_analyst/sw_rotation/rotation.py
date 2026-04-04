@@ -499,7 +499,7 @@ def main():
     RISING_WINDOW = 3           # 连续上升检测窗口（周）
 
     # 输出目录
-    OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+    OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output", "sw_rotation")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     # ──────────────────────────────────────────────────────────
 

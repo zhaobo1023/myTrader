@@ -13,7 +13,8 @@ import logging
 import pandas as pd
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, ROOT)
 
 from strategist.xgboost_strategy.config import StrategyConfig
 from strategist.xgboost_strategy.data_loader import DataLoader
@@ -27,7 +28,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BASE_OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
+BASE_OUTPUT_DIR = os.path.join(ROOT, 'output', 'xgboost')
 
 
 def load_index_constituents(index_code):

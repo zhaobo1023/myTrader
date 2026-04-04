@@ -9,7 +9,8 @@ import os
 import pandas as pd
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT)
 
 from strategist.backtest import BacktestEngine, BacktestConfig, ReportGenerator
 from strategist.doctor_tao.data_fetcher import DoctorTaoDataFetcher
@@ -139,7 +140,7 @@ def main():
 
     # 6. 生成报告
     print("\n生成回测报告...")
-    output_dir = os.path.join(os.path.dirname(__file__), 'output')
+    output_dir = os.path.join(ROOT, 'output', 'doctor_tao')
 
     ReportGenerator.generate_full_report(
         result=result,

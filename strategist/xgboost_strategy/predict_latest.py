@@ -17,7 +17,8 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, ROOT)
 
 from strategist.xgboost_strategy.config import StrategyConfig
 from strategist.xgboost_strategy.data_loader import DataLoader
@@ -194,7 +195,7 @@ def main():
 
     # 5. 保存结果
     logger.info("\n[4/4] 保存结果...")
-    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
+    output_dir = os.path.join(ROOT, 'output', 'xgboost')
     os.makedirs(output_dir, exist_ok=True)
 
     # 保存预测信号

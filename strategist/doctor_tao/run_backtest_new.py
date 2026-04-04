@@ -8,7 +8,8 @@ import sys
 import os
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT)
 
 from strategist.backtest import BacktestEngine, BacktestConfig, ReportGenerator
 from strategist.doctor_tao.data_fetcher import DoctorTaoDataFetcher
@@ -53,7 +54,7 @@ def main():
     end_date = '2026-03-25'
     
     # 从CSV读取陶博士选出的股票（自动查找最新的信号文件）
-    output_dir = os.path.join(os.path.dirname(__file__), 'output')
+    output_dir = os.path.join(ROOT, 'output', 'doctor_tao')
     signal_files = glob.glob(os.path.join(output_dir, 'signals_*.csv'))
     if not signal_files:
         print("错误：未找到信号文件，请先运行 signal_screener.py 生成信号")
@@ -156,7 +157,7 @@ def main():
     
     # 6. 生成报告
     print("\n生成回测报告...")
-    output_dir = os.path.join(os.path.dirname(__file__), 'output')
+    output_dir = os.path.join(ROOT, 'output', 'doctor_tao')
     
     ReportGenerator.generate_full_report(
         result=result,

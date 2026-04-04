@@ -22,7 +22,9 @@ import seaborn as sns
 from matplotlib import rcParams
 from datetime import datetime
 from scipy import stats
-import json, os, platform
+import json, os, platform, sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ── 字体 ──────────────────────────────────────────────────────
 if platform.system() == "Darwin":
@@ -512,9 +514,11 @@ def main():
                                 hot_thr=HOT_THR, rise_w=RISE_W)
 
     print("\n绘图中...")
-    hm_file = f"sw_heatmap_{TODAY}.png"
-    qd_file = f"sw_quadrant_{TODAY}.png"
-    html_file = f"sw_weekly_report_{TODAY}.html"
+    OUTPUT_DIR = os.path.join(ROOT, "output", "sw_rotation")
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    hm_file = os.path.join(OUTPUT_DIR, f"sw_heatmap_{TODAY}.png")
+    qd_file = os.path.join(OUTPUT_DIR, f"sw_quadrant_{TODAY}.png")
+    html_file = os.path.join(OUTPUT_DIR, f"sw_weekly_report_{TODAY}.html")
 
     plot_heatmap(weekly_hist, sig_df, hm_file)
     plot_quadrant(sig_df, qd_file)
@@ -523,7 +527,7 @@ def main():
     gen_html_report(sig_df, hm_file, qd_file, html_file)
 
     # CSV
-    csv_file = f"sw_scores_{TODAY}.csv"
+    csv_file = os.path.join(OUTPUT_DIR, f"sw_scores_{TODAY}.csv")
     sig_df.reset_index().to_csv(csv_file, index=False, encoding="utf-8-sig")
     print(f"  CSV：{csv_file}")
 

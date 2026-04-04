@@ -36,7 +36,7 @@ class PaperTradingConfig:
 
     # ========== 报告输出 ==========
     output_dir: str = field(default_factory=lambda: os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), 'output'
+        os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'output', 'xgboost'
     ))
     report_min_rounds: int = 4        # 至少几轮才生成评估报告
 

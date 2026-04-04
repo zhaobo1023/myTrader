@@ -4,7 +4,8 @@
 """
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT)
 
 from data_fetcher import DoctorTaoDataFetcher
 from indicators import IndicatorCalculator
@@ -113,7 +114,7 @@ if len(momentum_df) > 0 or len(reversal_df) > 0:
     signals_df = pd.concat(signals_list, ignore_index=True)
 
     # 保存结果
-    output_dir = os.path.join(os.path.dirname(__file__), 'output')
+    output_dir = os.path.join(ROOT, 'output', 'doctor_tao')
     os.makedirs(output_dir, exist_ok=True)
 
     signal_file = os.path.join(output_dir, f"signals_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")

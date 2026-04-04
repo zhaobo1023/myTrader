@@ -10,7 +10,10 @@
     python research/rolling_ic_analysis_demo.py
 """
 import os
+import sys
 from datetime import datetime, timedelta
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 import pandas as pd
 import numpy as np
@@ -280,8 +283,8 @@ def main():
     # 4. 可视化
     if HAS_PLOT:
         print("\n生成可视化...")
-        os.makedirs('output', exist_ok=True)
-        save_path = f'output/rolling_ic_{etf_code}_{factor_code}_demo.png'
+        os.makedirs(os.path.join(ROOT, 'output', 'research'), exist_ok=True)
+        save_path = os.path.join(ROOT, 'output', 'research', f'rolling_ic_{etf_code}_{factor_code}_demo.png')
         plot_rolling_ic(rolling_ic, split_date, factor_code, etf_name, save_path)
 
     # 5. 实际应用建议

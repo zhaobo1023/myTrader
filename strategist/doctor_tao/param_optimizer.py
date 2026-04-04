@@ -11,7 +11,8 @@ from datetime import datetime
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT)
 
 from backtest import BacktestEngine
 
@@ -92,7 +93,7 @@ class ParamOptimizer:
             results_df = results_df.sort_values('胜率(%)', ascending=False)
 
         # 保存结果
-        output_dir = os.path.join(os.path.dirname(__file__), 'output')
+        output_dir = os.path.join(ROOT, 'output', 'doctor_tao')
         os.makedirs(output_dir, exist_ok=True)
 
         output_file = os.path.join(output_dir, f"param_search_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")

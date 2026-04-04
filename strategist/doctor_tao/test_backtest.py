@@ -4,7 +4,8 @@ Step 4 单元测试 - 验证回测模块
 """
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT)
 
 from backtest import BacktestEngine
 import pandas as pd
@@ -42,7 +43,7 @@ try:
         print(f"  最大单笔亏损: {metrics.get('最大单笔亏损(%)', 'N/A')}")
 
         # 保存结果
-        output_dir = os.path.join(os.path.dirname(__file__), 'output')
+        output_dir = os.path.join(ROOT, 'output', 'doctor_tao')
         os.makedirs(output_dir, exist_ok=True)
         output_file = os.path.join(output_dir, f"test_backtest_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv")
         backtest_df.to_csv(output_file, index=False, encoding='utf-8-sig')

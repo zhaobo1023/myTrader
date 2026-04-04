@@ -16,7 +16,8 @@ from typing import Dict, List, Optional, Tuple
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT)
 
 from data_fetcher import DoctorTaoDataFetcher
 from indicators import IndicatorCalculator
@@ -377,7 +378,7 @@ if __name__ == '__main__':
 
     if len(backtest_df) > 0:
         # 保存结果
-        output_dir = os.path.join(os.path.dirname(__file__), 'output')
+        output_dir = os.path.join(ROOT, 'output', 'doctor_tao')
         os.makedirs(output_dir, exist_ok=True)
 
         output_file = os.path.join(output_dir, f"backtest_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")

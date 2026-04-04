@@ -68,5 +68,5 @@ htmlcov/
 *.key
 secrets/
 
-# Output (generated artifacts)
-data_analyst/output/
+# Output (all generated artifacts)
+output/

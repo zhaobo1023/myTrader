@@ -12,7 +12,8 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, ROOT)
 
 warnings.filterwarnings('ignore')
 
@@ -282,7 +283,7 @@ def main():
         print()
 
     # 保存结果
-    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
+    output_dir = os.path.join(ROOT, 'output', 'xgboost')
     os.makedirs(output_dir, exist_ok=True)
 
     for index_name, result in results.items():
