@@ -1,0 +1,25 @@
+# 05_strategy.yaml - Strategy-related tasks
+
+tasks:
+  - id: calc_factor_ic_monitor
+    name: "Factor IC monitoring"
+    module: research.factor_monitor
+    func: run_monitor
+    tags: [strategy, daily]
+    schedule: "after_gate"
+    depends_on:
+      - calc_basic_factor
+      - calc_extended_factor
+      - calc_valuation_factor
+      - calc_quality_factor
+    params: {}
+
+  - id: settle_paper_trading
+    name: "Settle paper trading"
+    module: scheduler.adapters
+    func: run_paper_trading_settle
+    tags: [strategy, daily]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+    params: {}

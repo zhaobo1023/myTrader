@@ -1,0 +1,55 @@
+# 06_maintenance.yaml - Manual / periodic maintenance tasks
+# These are NOT triggered automatically in prod; run by hand.
+
+tasks:
+  - id: update_industry_classify
+    name: "Update industry classification"
+    module: scheduler.adapters
+    func: run_industry_update
+    tags: [maintenance, manual]
+    schedule: manual
+    depends_on: []
+    params: {}
+    env:
+      prod:
+        enabled: false
+
+  - id: fetch_financial_statements
+    name: "Fetch financial statements"
+    module: data_analyst.financial_fetcher.run_fetcher
+    func: main
+    tags: [maintenance, manual]
+    schedule: manual
+    depends_on: []
+    params: {}
+    env:
+      prod:
+        enabled: false
+
+  - id: validate_factors
+    name: "Validate factor effectiveness"
+    module: data_analyst.factors.factor_validator
+    func: main
+    tags: [maintenance, manual]
+    schedule: manual
+    depends_on:
+      - calc_basic_factor
+      - calc_extended_factor
+      - calc_valuation_factor
+      - calc_quality_factor
+    params: {}
+    env:
+      prod:
+        enabled: false
+
+  - id: backfill_basic_factor
+    name: "Backfill basic factors"
+    module: data_analyst.factors.backfill_factors
+    func: main
+    tags: [maintenance, manual]
+    schedule: manual
+    depends_on: []
+    params: {}
+    env:
+      prod:
+        enabled: false

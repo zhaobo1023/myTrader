@@ -1,0 +1,67 @@
+# 03_factors_basic.yaml - Factor calculation tasks (run after daily data is ready)
+# All depend on _gate_daily_price
+
+tasks:
+  - id: _gate_daily_price
+    name: "Gate: wait for daily data"
+    module: scheduler.readiness
+    func: wait_for_daily_data
+    tags: [gate, daily]
+    schedule: "17:45"
+    depends_on: []
+    params:
+      timeout_min: 60
+    retry:
+      max_attempts: 1
+    timeout_seconds: 3600
+
+  - id: calc_basic_factor
+    name: "Calculate basic factors"
+    module: data_analyst.factors.basic_factor_calculator
+    func: calculate_and_save_factors
+    tags: [factor, daily]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+    params: {}
+
+  - id: calc_extended_factor
+    name: "Calculate extended factors"
+    module: data_analyst.factors.extended_factor_calculator
+    func: main
+    tags: [factor, daily]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+      - calc_basic_factor
+    params: {}
+
+  - id: calc_valuation_factor
+    name: "Calculate valuation factors"
+    module: data_analyst.factors.valuation_factor_calculator
+    func: main
+    tags: [factor, daily]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+    params: {}
+
+  - id: calc_quality_factor
+    name: "Calculate quality factors"
+    module: data_analyst.factors.quality_factor_calculator
+    func: main
+    tags: [factor, daily]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+    params: {}
+
+  - id: calc_technical_factor
+    name: "Calculate technical factors"
+    module: data_analyst.factors.factor_calculator
+    func: calculate_factors_for_date
+    tags: [factor, daily]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+    params: {}
