@@ -1,0 +1,18 @@
+# _base.yaml - Global defaults and environment-specific overrides
+# This file is loaded first; all task YAML files merge these defaults.
+
+defaults:
+  retry:
+    max_attempts: 2
+    delay_seconds: 30
+  timeout_seconds: 1800      # 30 minutes
+  enabled: true
+  dry_run: false
+
+environments:
+  local:
+    enabled: true
+    dry_run: false
+  prod:
+    enabled: true
+    dry_run: false

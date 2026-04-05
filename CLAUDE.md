@@ -15,6 +15,8 @@ myTrader 是一个 Python 量化交易助手项目，分为四大核心模块：
 3. **风控师 (risk_manager)** - 持仓风控管理、止损止盈、仓位控制
 4. **交易员 (executor)** - QMT量化交易接口、订单管理
 
+另有统一任务调度器 `scheduler/`，通过 YAML 定义 DAG 任务依赖关系，替代散落在各处的定时脚本。
+
 ## 常用命令
 
 ```bash
@@ -36,9 +38,34 @@ python -c "from data_analyst.indicators.technical import TechnicalIndicatorCalcu
 # 测试数据库连接
 python -c "from config.db import test_connection; print(test_connection())"
 
+# ============================================================
+# API 服务 (FastAPI)
+# ============================================================
+
+# 本地启动 API 服务
+make api-local
+
+# Docker 启动全部服务 (Redis + API + Nginx)
+make dev
+
+# 数据库迁移
+make migrate
+
+# 创建新迁移
+make migrate-create msg="add xxx table"
+
 # XGBoost 截面预测策略
 python -m strategist.xgboost_strategy.test_strategy  # 测试模块
 python -m strategist.xgboost_strategy.run_strategy   # 运行策略
+
+# 任务调度器
+python -m scheduler list                              # 列出所有任务
+python -m scheduler list --tag daily                  # 按标签过滤
+python -m scheduler run all --dry-run                 # 全量 dry-run
+python -m scheduler run fetch_macro_data --dry-run    # 单任务 dry-run
+python -m scheduler run all --tag daily               # 运行所有 daily 任务
+python -m scheduler status fetch_macro_data           # 查看任务最近运行状态
+python -m scheduler summary                           # 查看今日执行摘要
 ```
 
 ## 项目结构
@@ -48,6 +75,35 @@ myTrader/
 ├── config/                    # 配置模块
 │   ├── db.py                  # 数据库连接工具（支持双环境）
 │   └── settings.py            # 全局配置
+│
+├── api/                       # FastAPI Web API
+│   ├── main.py                # FastAPI 应用入口
+│   ├── config.py              # Pydantic Settings 配置管理
+│   ├── dependencies.py        # 数据库连接池、Redis 客户端
+│   ├── routers/               # API 路由
+│   │   ├── health.py          # GET /health 健康检查
+│   │   ├── auth.py            # POST /api/auth/* 注册/登录/刷新
+│   │   ├── market.py          # GET /api/market/* K线/指标/因子/RPS
+│   │   └── analysis.py        # GET /api/analysis/* 技术面/基本面分析
+│   ├── middleware/            # 中间件
+│   │   ├── auth.py            # JWT 认证依赖
+│   │   ├── rate_limit.py      # Redis 滑动窗口限流
+│   │   └── quota.py           # Free tier 配额管理
+│   ├── models/                # SQLAlchemy ORM 模型
+│   │   ├── user.py            # 用户表
+│   │   ├── subscription.py    # 订阅表
+│   │   ├── usage_log.py       # 用量日志表
+│   │   ├── api_key.py         # API Key 表
+│   │   ├── strategy.py        # 策略表
+│   │   └── backtest_job.py    # 回测任务表
+│   ├── schemas/               # Pydantic 请求/响应模型
+│   ├── services/              # 业务逻辑层
+│   ├── core/                  # 安全工具 (JWT/bcrypt)
+│   └── tasks/                 # Celery 异步任务
+│
+├── alembic/                   # 数据库迁移
+│   ├── env.py                 # Alembic 配置（使用 api.config）
+│   └── versions/              # 迁移脚本
 │
 ├── data_analyst/              # 数据分析师模块
 │   ├── fetchers/              # 数据拉取器 (QMT/Tushare/AKShare)
@@ -72,6 +128,23 @@ myTrader/
 ├── executor/                  # 交易员模块
 ├── investment_rag/            # 投研 RAG 系统
 ├── research/                  # 研究脚本（因子验证、ETF 回测等）
+├── scheduler/                 # 统一任务调度器
+│   ├── cli.py                 # CLI 入口 (list/run/status/summary)
+│   ├── loader.py              # YAML 任务加载与环境合并
+│   ├── dag.py                 # DAG 依赖解析与拓扑排序
+│   ├── executor.py            # 任务执行器（重试/超时/dry_run）
+│   ├── state.py               # task_runs 表状态持久化
+│   ├── readiness.py           # 数据就绪探测（轮询 DB）
+│   ├── alert.py               # Webhook 报警通知
+│   ├── adapters.py            # 模块适配器（无简单入口的模块包装）
+│   └── tests/                 # 单元测试与集成测试
+├── tasks/                     # YAML 任务定义文件
+│   ├── _base.yaml             # 全局默认值与环境配置
+│   ├── 02_macro.yaml          # 宏观数据拉取与因子计算
+│   ├── 03_factors_basic.yaml  # 因子计算（含数据就绪 gate）
+│   ├── 04_indicators.yaml     # 技术指标（RPS/SVD/LogBias）
+│   ├── 05_strategy.yaml       # 策略相关（IC 监控/模拟交易）
+│   └── 06_maintenance.yaml    # 维护任务（手动触发）
 ├── scripts/                   # 运维脚本
 ├── docs/                      # 文档与设计稿
 │

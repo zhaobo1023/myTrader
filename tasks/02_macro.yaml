@@ -1,0 +1,22 @@
+# 02_macro.yaml - Macro data fetching and factor calculation
+# Schedule: runs before market data gate
+
+tasks:
+  - id: fetch_macro_data
+    name: "Fetch macro indicators"
+    module: data_analyst.fetchers.macro_fetcher
+    func: fetch_all_indicators
+    tags: [macro, daily]
+    schedule: "17:30"
+    depends_on: []
+    params: {}
+
+  - id: calc_macro_factors
+    name: "Calculate macro factors"
+    module: data_analyst.factors.macro_factor_calculator
+    func: incremental_update
+    tags: [macro, factor, daily]
+    schedule: "after_gate"
+    depends_on:
+      - fetch_macro_data
+    params: {}

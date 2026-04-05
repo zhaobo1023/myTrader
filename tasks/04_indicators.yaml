@@ -1,0 +1,44 @@
+# 04_indicators.yaml - Technical indicators, RPS, SVD, LogBias
+# These run after the daily data gate
+
+tasks:
+  - id: calc_rps
+    name: "Calculate RPS (Relative Price Strength)"
+    module: data_analyst.indicators.rps_calculator
+    func: rps_daily_update
+    tags: [indicator, daily]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+    params:
+      env: online
+
+  - id: calc_svd_monitor
+    name: "SVD market state monitor"
+    module: data_analyst.market_monitor.run_monitor
+    func: run_daily_monitor
+    tags: [indicator, daily]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+    params: {}
+
+  - id: calc_log_bias
+    name: "Log bias signal detection"
+    module: scheduler.adapters
+    func: run_log_bias
+    tags: [indicator, daily]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+    params: {}
+
+  - id: calc_technical_indicator
+    name: "Technical indicators (MA/MACD/RSI/KDJ)"
+    module: scheduler.adapters
+    func: run_technical_indicator_scan
+    tags: [indicator, daily]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+    params: {}
