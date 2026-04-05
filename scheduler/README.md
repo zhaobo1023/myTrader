@@ -316,12 +316,49 @@ python -m scheduler run calc_basic_factor --dry-run
 
 `run` 命令会自动拉取依赖链。如果不想要 gate，可以在 YAML 中临时移除 `depends_on` 中的 `_gate_daily_price`，或用 `--dry-run` 跳过实际执行。
 
-### Q: 如何在 cron 中使用？
+### Q: 如何配置定时自动执行？
+
+推荐使用 crontab，一条命令覆盖整个 daily 流水线（DAG 内部自动处理依赖和 gate 轮询）：
 
 ```bash
-# crontab 示例：每天 18:00 运行全部 daily 任务
-0 18 * * 1-5 cd /path/to/myTrader && python -m scheduler run all --tag daily >> /path/to/scheduler.log 2>&1
+crontab -e
 ```
+
+```cron
+# myTrader 每日定时任务 (周一到周五)
+
+# 宏观数据 17:30 执行（不依赖日线数据，可以早跑）
+0 17 * * 1-5 cd /path/to/myTrader && /usr/bin/python3 -m scheduler run fetch_macro_data >> /path/to/myTrader/output/scheduler/cron.log 2>&1
+
+# 18:00 启动完整 daily 流水线（含 gate 轮询，最多等 60 分钟数据就绪）
+0 18 * * 1-5 cd /path/to/myTrader && /usr/bin/python3 -m scheduler run all --tag daily --env online >> /path/to/myTrader/output/scheduler/cron.log 2>&1
+```
+
+要点：
+
+- **一条 cron 搞定全部 daily 任务**：不需要为每个任务单独配 cron，DAG 自动保证依赖顺序
+- **gate 轮询替代固定时间**：18:00 启动后 `_gate_daily_price` 会每 5 分钟检查 DB，数据就绪才继续
+- **宏观数据提前跑**：`fetch_macro_data` 不依赖日线，17:30 就可以开始
+- **日志输出**：`>> cron.log 2>&1` 合并 stdout/stderr，`2>&1` 不可省略
+- **维护任务不配 cron**：manual 类任务按需手动执行
+
+维护任务手动执行示例：
+
+```bash
+# 更新行业分类（频率低，数据源变化时手动跑）
+python -m scheduler run update_industry_classify --env online
+
+# 拉取财报数据（季度更新）
+python -m scheduler run fetch_financial_statements --env online
+
+# 验证因子有效性（调整因子后手动跑）
+python -m scheduler run validate_factors --env online
+
+# 回填基础因子（新增股票或数据缺失时）
+python -m scheduler run backfill_basic_factor --env online
+```
+
+Mac 用户也可以用 launchd 替代 crontab（支持休眠唤醒、日志管理），配置文件放在 `~/Library/LaunchAgents/` 下，详见 macOS 文档。
 
 ### Q: manual 任务在 prod 环境下会被跳过吗？
 

@@ -38,6 +38,22 @@ python -c "from data_analyst.indicators.technical import TechnicalIndicatorCalcu
 # 测试数据库连接
 python -c "from config.db import test_connection; print(test_connection())"
 
+# ============================================================
+# API 服务 (FastAPI)
+# ============================================================
+
+# 本地启动 API 服务
+make api-local
+
+# Docker 启动全部服务 (Redis + API + Nginx)
+make dev
+
+# 数据库迁移
+make migrate
+
+# 创建新迁移
+make migrate-create msg="add xxx table"
+
 # XGBoost 截面预测策略
 python -m strategist.xgboost_strategy.test_strategy  # 测试模块
 python -m strategist.xgboost_strategy.run_strategy   # 运行策略
@@ -59,6 +75,35 @@ myTrader/
 ├── config/                    # 配置模块
 │   ├── db.py                  # 数据库连接工具（支持双环境）
 │   └── settings.py            # 全局配置
+│
+├── api/                       # FastAPI Web API
+│   ├── main.py                # FastAPI 应用入口
+│   ├── config.py              # Pydantic Settings 配置管理
+│   ├── dependencies.py        # 数据库连接池、Redis 客户端
+│   ├── routers/               # API 路由
+│   │   ├── health.py          # GET /health 健康检查
+│   │   ├── auth.py            # POST /api/auth/* 注册/登录/刷新
+│   │   ├── market.py          # GET /api/market/* K线/指标/因子/RPS
+│   │   └── analysis.py        # GET /api/analysis/* 技术面/基本面分析
+│   ├── middleware/            # 中间件
+│   │   ├── auth.py            # JWT 认证依赖
+│   │   ├── rate_limit.py      # Redis 滑动窗口限流
+│   │   └── quota.py           # Free tier 配额管理
+│   ├── models/                # SQLAlchemy ORM 模型
+│   │   ├── user.py            # 用户表
+│   │   ├── subscription.py    # 订阅表
+│   │   ├── usage_log.py       # 用量日志表
+│   │   ├── api_key.py         # API Key 表
+│   │   ├── strategy.py        # 策略表
+│   │   └── backtest_job.py    # 回测任务表
+│   ├── schemas/               # Pydantic 请求/响应模型
+│   ├── services/              # 业务逻辑层
+│   ├── core/                  # 安全工具 (JWT/bcrypt)
+│   └── tasks/                 # Celery 异步任务
+│
+├── alembic/                   # 数据库迁移
+│   ├── env.py                 # Alembic 配置（使用 api.config）
+│   └── versions/              # 迁移脚本
 │
 ├── data_analyst/              # 数据分析师模块
 │   ├── fetchers/              # 数据拉取器 (QMT/Tushare/AKShare)
