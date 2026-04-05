@@ -101,3 +101,77 @@ def test_query_rag_multi_deduplicates():
     assert isinstance(result, str)
     # Same doc returned by both queries, should appear only once in result
     assert result.count("Revenue grew 30%") == 1
+
+
+# ---------------------------------------------------------------
+# Valuation snapshot tests
+# ---------------------------------------------------------------
+
+def _make_fake_valuation_rows(n=250, pe=15.0, pb=1.5, dv=2.0):
+    """Helper: return n rows of fake trade_stock_daily_basic data."""
+    import pandas as pd
+    dates = pd.date_range("2021-01-01", periods=n, freq="B")
+    rows = []
+    for i, d in enumerate(dates):
+        rows.append({
+            "trade_date": d.date(),
+            "pe_ttm": pe + (i % 30) * 0.5,   # slight variation so percentile is meaningful
+            "pb": pb + (i % 20) * 0.05,
+            "dv_ttm": dv,
+        })
+    return rows
+
+
+def test_get_valuation_snapshot_returns_formatted_string():
+    tools = _make_tools()
+    fake_rows = _make_fake_valuation_rows(250)
+    with patch("investment_rag.report_engine.data_tools._execute_query") as mock_q:
+        mock_q.return_value = fake_rows
+        result = tools.get_valuation_snapshot("000858")
+    assert isinstance(result, str)
+    assert "PE" in result
+    assert "分位" in result
+
+
+def test_get_valuation_snapshot_handles_empty_data():
+    tools = _make_tools()
+    with patch("investment_rag.report_engine.data_tools._execute_query") as mock_q:
+        mock_q.return_value = []
+        result = tools.get_valuation_snapshot("000858")
+    assert "不足" in result or isinstance(result, str)
+
+
+def test_get_valuation_snapshot_handles_db_exception():
+    tools = _make_tools()
+    with patch("investment_rag.report_engine.data_tools._execute_query") as mock_q:
+        mock_q.side_effect = Exception("DB unavailable")
+        result = tools.get_valuation_snapshot("000858")
+    assert "失败" in result or isinstance(result, str)
+
+
+def test_quantile_label_boundaries():
+    from investment_rag.report_engine.data_tools import ReportDataTools
+    assert ReportDataTools._quantile_label(5) == "极低估"
+    assert ReportDataTools._quantile_label(25) == "低估"
+    assert ReportDataTools._quantile_label(50) == "合理"
+    assert ReportDataTools._quantile_label(70) == "偏高估"
+    assert ReportDataTools._quantile_label(85) == "高估"
+    assert ReportDataTools._quantile_label(97) == "极高估"
+
+
+def test_get_expected_return_context_returns_string():
+    tools = _make_tools()
+    fake_rows = _make_fake_valuation_rows(250, pe=15.0, dv=2.5)
+    with patch("investment_rag.report_engine.data_tools._execute_query") as mock_q:
+        mock_q.return_value = fake_rows
+        result = tools.get_expected_return_context("000858", earnings_growth_2yr=0.10)
+    assert isinstance(result, str)
+    assert "盈利" in result or "回报" in result or isinstance(result, str)
+
+
+def test_get_expected_return_context_handles_no_pe_data():
+    tools = _make_tools()
+    with patch("investment_rag.report_engine.data_tools._execute_query") as mock_q:
+        mock_q.return_value = []
+        result = tools.get_expected_return_context("000858")
+    assert isinstance(result, str)

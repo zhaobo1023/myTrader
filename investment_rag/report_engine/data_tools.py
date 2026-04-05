@@ -29,6 +29,23 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# DB access for valuation data -- imported at module level to allow test mocking
+try:
+    from config.db import execute_query as _execute_query
+except ImportError:
+    _execute_query = None  # allows import in environments without DB config
+
+
+def _safe_float(val) -> "float | None":
+    """Safely convert a DB value (possibly Decimal/None/NaN) to float."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        return None if f != f else f  # NaN check
+    except (TypeError, ValueError):
+        return None
+
 
 class ReportDataTools:
     """Unified data collection tools for research report generation."""
@@ -171,6 +188,183 @@ class ReportDataTools:
             logger.warning("[ReportDataTools] Financial data error: %s", result["error"])
         summary = result.get("summary", "")
         return summary if summary else f"[Financial Data] {clean_code} no data available"
+
+    # ----------------------------------------------------------
+    # 4. Valuation Historical Percentile (capital cycle integration)
+    # ----------------------------------------------------------
+
+    def get_valuation_snapshot(self, stock_code: str, years: int = 5) -> str:
+        """
+        Query trade_stock_daily_basic for historical PE/PB/dv_ttm, compute {years}-year percentile.
+
+        Data table: trade_stock_daily_basic
+        Stock code format: supports "000858" or "000858.SZ" (auto-extracts numeric part)
+
+        Returns:
+            Formatted text with current PE/PB/dv_ttm and historical percentile labels
+        """
+        clean_code = stock_code.split(".")[0]
+
+        if _execute_query is None:
+            return f"[Valuation Data] DB module not loaded, skipping"
+
+        from datetime import date, timedelta
+
+        start_date = (date.today() - timedelta(days=int(years * 365))).isoformat()
+        sql = """
+            SELECT trade_date, pe_ttm, pb, dv_ttm
+            FROM trade_stock_daily_basic
+            WHERE SUBSTRING_INDEX(stock_code, '.', 1) = %s
+              AND trade_date >= %s
+            ORDER BY trade_date ASC
+        """
+        try:
+            rows = _execute_query(sql, params=(clean_code, start_date), env=self._db_env)
+        except Exception as e:
+            logger.warning("[ReportDataTools] Valuation query failed for %s: %s", stock_code, e)
+            return f"[估值数据] {clean_code} 查询失败: {e}"
+
+        if not rows or len(rows) < 20:
+            return f"[估值数据] {clean_code} 数据不足（{len(rows) if rows else 0} 行，需 >= 20）"
+
+        df = pd.DataFrame(rows)
+        latest = df.iloc[-1]
+        date_range = f"{df['trade_date'].iloc[0]} 至 {df['trade_date'].iloc[-1]}"
+        lines = [f"[估值历史分位] {clean_code}，{years}年数据范围: {date_range}（{len(df)} 个交易日）"]
+
+        # PE(TTM) -- exclude negatives (loss periods)
+        pe_series = df["pe_ttm"].dropna()
+        pe_series = pe_series[pe_series > 0]
+        pe_current = _safe_float(latest.get("pe_ttm"))
+        if pe_current and pe_current > 0 and len(pe_series) >= 20:
+            pe_pct = float((pe_series < pe_current).mean() * 100)
+            lines.append(
+                f"PE(TTM): {pe_current:.1f}x，历史分位 {pe_pct:.0f}%，"
+                f"估值水平: {self._quantile_label(pe_pct)}"
+            )
+        else:
+            lines.append("PE(TTM): 无效（亏损或数据不足）")
+
+        # PB
+        pb_series = df["pb"].dropna()
+        pb_series = pb_series[pb_series > 0]
+        pb_current = _safe_float(latest.get("pb"))
+        if pb_current and pb_current > 0 and len(pb_series) >= 20:
+            pb_pct = float((pb_series < pb_current).mean() * 100)
+            lines.append(
+                f"PB: {pb_current:.2f}x，历史分位 {pb_pct:.0f}%，"
+                f"估值水平: {self._quantile_label(pb_pct)}"
+            )
+
+        # Dividend yield (TTM)
+        dv_series = df["dv_ttm"].dropna()
+        dv_current = _safe_float(latest.get("dv_ttm")) or 0.0
+        if len(dv_series) >= 20:
+            dv_pct = float((dv_series < dv_current).mean() * 100) if dv_current > 0 else 0.0
+            lines.append(f"股息率(TTM): {dv_current:.2f}%，历史分位 {dv_pct:.0f}%")
+
+        return "\n".join(lines)
+
+    def get_expected_return_context(
+        self,
+        stock_code: str,
+        earnings_growth_2yr: float = 0.0,
+        target_pe_quantile: float = 0.40,
+        years: int = 5,
+    ) -> str:
+        """
+        Compute 2-year expected return (3-part decomposition: earnings + valuation reversion + dividend).
+
+        Formula:
+          earnings_contribution = (1 + earnings_growth_2yr)^2 - 1
+          target_pe = PE historical series at target_pe_quantile
+          valuation_contribution = (target_pe / current_pe - 1) * (1 + earnings_growth_2yr)
+          dividend_contribution = dv_ttm% * 2
+          total = earnings + valuation + dividend
+
+        Args:
+            stock_code: Stock code
+            earnings_growth_2yr: 2-year net profit CAGR estimate (e.g. 0.10 = 10%/year)
+                                  Default 0.0 (conservative, no growth)
+            target_pe_quantile: Valuation reversion target percentile (default 40%, conservative)
+            years: Historical data years
+
+        Returns:
+            Formatted text with 3-part breakdown and total expected return
+        """
+        clean_code = stock_code.split(".")[0]
+
+        if _execute_query is None:
+            return "[预期回报] DB module not loaded, skipping"
+
+        from datetime import date, timedelta
+
+        start_date = (date.today() - timedelta(days=int(years * 365))).isoformat()
+        sql = """
+            SELECT pe_ttm, dv_ttm
+            FROM trade_stock_daily_basic
+            WHERE SUBSTRING_INDEX(stock_code, '.', 1) = %s
+              AND trade_date >= %s
+              AND pe_ttm > 0
+            ORDER BY trade_date ASC
+        """
+        try:
+            rows = _execute_query(sql, params=(clean_code, start_date), env=self._db_env)
+        except Exception as e:
+            logger.warning("[ReportDataTools] Expected return query failed for %s: %s", stock_code, e)
+            return f"[预期回报] {clean_code} 数据查询失败: {e}"
+
+        if not rows or len(rows) < 20:
+            return f"[预期回报] {clean_code} 历史数据不足，无法计算"
+
+        df = pd.DataFrame(rows)
+        pe_series = df["pe_ttm"].dropna()
+        pe_series = pe_series[pe_series > 0]
+        current_pe = _safe_float(df.iloc[-1].get("pe_ttm"))
+        current_dv = _safe_float(df.iloc[-1].get("dv_ttm")) or 0.0
+
+        if not current_pe or current_pe <= 0:
+            return "[预期回报] 当前 PE 无效（亏损），无法计算"
+
+        # 3-part decomposition
+        earnings_contribution = (1 + earnings_growth_2yr) ** 2 - 1
+        target_pe = float(pe_series.quantile(target_pe_quantile))
+        pe_change = target_pe / current_pe - 1
+        valuation_contribution = pe_change * (1 + earnings_growth_2yr)
+        dividend_contribution = (current_dv / 100) * 2  # dv_ttm is percentage, x2 years
+        total = earnings_contribution + valuation_contribution + dividend_contribution
+
+        lines = [
+            "[预期回报测算] 2年预期总回报分解（PE回归至历史{}%分位）：".format(
+                int(target_pe_quantile * 100)
+            ),
+            f"  盈利贡献（净利润增速 {earnings_growth_2yr*100:.0f}%/年）: "
+            f"{earnings_contribution*100:+.1f}%",
+            f"  估值贡献（PE {current_pe:.1f}x -> {target_pe:.1f}x）: "
+            f"{valuation_contribution*100:+.1f}%",
+            f"  股息贡献（{current_dv:.2f}% x 2年）: "
+            f"{dividend_contribution*100:+.1f}%",
+            f"  ------------------------------------------",
+            f"  2年预期总回报: {total*100:+.1f}%",
+            f"  注：盈利增速假设 {earnings_growth_2yr*100:.0f}%/年，为保守估计；"
+            f"实际需结合管理层指引及一致预期调整。",
+        ]
+        return "\n".join(lines)
+
+    @staticmethod
+    def _quantile_label(pct: float) -> str:
+        """Map historical percentile (0~100) to valuation label."""
+        if pct < 20:
+            return "极低估"
+        if pct < 40:
+            return "低估"
+        if pct < 60:
+            return "合理"
+        if pct < 80:
+            return "偏高估"
+        if pct < 95:
+            return "高估"
+        return "极高估"
 
     # ----------------------------------------------------------
     # 3. Technical Analysis
