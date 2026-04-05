@@ -124,6 +124,9 @@ STEP3_PROMPT = """## Task: Expectation Gap Analysis (Step 3)
 **Financial Data Context**:
 {financial_context}
 
+**Valuation Historical Percentile**:
+{valuation_context}
+
 **Instructions**:
 Build comparison between consensus expectations and reality, quantify expectation gap:
 1. Summarize market consensus expectations for core metrics (revenue/net profit/gross margin/ROE)
@@ -210,6 +213,12 @@ STEP5_PROMPT = """## Task: Comprehensive Conclusion (Step 5)
 
 **Technical Data**:
 {technical_context}
+
+**Valuation Historical Percentile**:
+{valuation_context}
+
+**Expected Return Estimate**:
+{expected_return_context}
 
 **Instructions**:
 Synthesize all four previous steps into actionable investment conclusion:
@@ -298,6 +307,7 @@ class StepConfig:
     rag_queries: List[str] = field(default_factory=list)
     needs_financial: bool = False
     needs_technical: bool = False
+    needs_valuation: bool = False
 
 
 FIVE_STEP_CONFIG: List[StepConfig] = [
@@ -320,6 +330,7 @@ FIVE_STEP_CONFIG: List[StepConfig] = [
         prompt_template=STEP3_PROMPT,
         rag_queries=STEP3_RAG_QUERIES,
         needs_financial=True,
+        needs_valuation=True,
     ),
     StepConfig(
         step_id="step4",
@@ -333,5 +344,6 @@ FIVE_STEP_CONFIG: List[StepConfig] = [
         prompt_template=STEP5_PROMPT,
         rag_queries=[],
         needs_technical=True,
+        needs_valuation=True,
     ),
 ]
