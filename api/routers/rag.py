@@ -4,13 +4,20 @@ RAG router - SSE streaming RAG query
 """
 import json
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 
 from api.middleware.auth import get_current_user
 from api.models.user import User
-from api.schemas.rag import RAGQueryRequest, RAGQueryResponse
+from api.schemas.rag import (
+    RAGQueryRequest,
+    RAGQueryResponse,
+    ReportGenerateRequest,
+    ReportListItem,
+    ReportListResponse,
+)
 
 logger = logging.getLogger('myTrader.api')
 router = APIRouter(prefix='/api/rag', tags=['rag'])
@@ -201,3 +208,132 @@ async def rag_query_sync(
         sources=rag_results,
         sql_results=sql_results,
     )
+
+
+@router.post('/report/generate')
+async def report_generate(
+    req: ReportGenerateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    SSE 流式生成智能研报。
+
+    SSE event types:
+      {type: "plan",       sections: [...]}
+      {type: "step_start", step: "step1", name: "信息差"}
+      {type: "step_done",  step: "step1", name: "信息差", content: "..."}
+      {type: "done",       report_id: "...", content: "..."}
+      {type: "error",      message: "..."}
+    """
+    async def event_generator():
+        try:
+            from investment_rag.report_engine.five_step import FiveStepAnalyzer
+            from investment_rag.report_engine.report_builder import ReportBuilder
+            from investment_rag.report_engine.report_store import ReportStore
+            from investment_rag.report_engine.prompts import FIVE_STEP_CONFIG
+        except ImportError as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Module unavailable: {exc}'})}\n\n"
+            return
+
+        # 1. Plan
+        sections = []
+        if req.report_type in ('fundamental', 'comprehensive'):
+            sections.extend([c.name for c in FIVE_STEP_CONFIG])
+        if req.report_type in ('technical', 'comprehensive'):
+            sections.append('技术面')
+
+        yield f"data: {json.dumps({'type': 'plan', 'sections': sections}, ensure_ascii=False)}\n\n"
+
+        analyzer = FiveStepAnalyzer(db_env='online')
+        builder = ReportBuilder()
+        store = ReportStore()
+        fundamental_results = {}
+        tech_section = ''
+
+        # 2. Fundamental steps (step1..step5)
+        if req.report_type in ('fundamental', 'comprehensive'):
+            for step_config in FIVE_STEP_CONFIG:
+                yield f"data: {json.dumps({'type': 'step_start', 'step': step_config.step_id, 'name': step_config.name}, ensure_ascii=False)}\n\n"
+
+                prev_analysis = '\n\n---\n\n'.join(fundamental_results.values())
+                step_result = analyzer._run_single_step(
+                    step_config=step_config,
+                    stock_code=req.stock_code,
+                    stock_name=req.stock_name,
+                    prev_analysis=prev_analysis,
+                    collection=req.collection,
+                )
+                fundamental_results[step_config.step_id] = step_result
+
+                yield f"data: {json.dumps({'type': 'step_done', 'step': step_config.step_id, 'name': step_config.name, 'content': step_result}, ensure_ascii=False)}\n\n"
+
+        # 3. Technical section
+        if req.report_type in ('technical', 'comprehensive'):
+            yield f"data: {json.dumps({'type': 'step_start', 'step': 'tech', 'name': '技术面'}, ensure_ascii=False)}\n\n"
+            tech_section = analyzer.generate_tech_section(req.stock_code, req.stock_name)
+            yield f"data: {json.dumps({'type': 'step_done', 'step': 'tech', 'name': '技术面', 'content': tech_section}, ensure_ascii=False)}\n\n"
+
+        # 4. Assemble
+        if req.report_type == 'comprehensive':
+            final_report = builder.build_comprehensive(
+                stock_code=req.stock_code,
+                stock_name=req.stock_name,
+                fundamental_results=fundamental_results,
+                tech_section=tech_section,
+            )
+        elif req.report_type == 'fundamental':
+            final_report = builder.build_fundamental_only(
+                stock_code=req.stock_code,
+                stock_name=req.stock_name,
+                fundamental_results=fundamental_results,
+            )
+        else:  # technical
+            final_report = f"# {req.stock_name}（{req.stock_code}）技术面分析\n\n{tech_section}"
+
+        report_id = store.save(
+            stock_code=req.stock_code,
+            stock_name=req.stock_name,
+            report_type=req.report_type,
+            content=final_report,
+        )
+
+        yield f"data: {json.dumps({'type': 'done', 'report_id': report_id, 'content': final_report}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
+@router.get('/report/list', response_model=ReportListResponse)
+async def report_list(
+    stock_code: Optional[str] = None,
+    limit: int = 20,
+    current_user: User = Depends(get_current_user),
+):
+    """列举已保存研报（按创建时间倒序）"""
+    from investment_rag.report_engine.report_store import ReportStore
+    store = ReportStore()
+    reports = store.list_reports(stock_code=stock_code, limit=limit)
+    items = [ReportListItem(**r) for r in reports]
+    return ReportListResponse(reports=items, total=len(items))
+
+
+@router.get('/report/{report_id}')
+async def report_get(
+    report_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """获取研报 Markdown 内容（Content-Type: text/markdown）"""
+    from investment_rag.report_engine.report_store import ReportStore
+    from fastapi.responses import PlainTextResponse
+    store = ReportStore()
+    content = store.get(report_id)
+    if content is None:
+        raise HTTPException(status_code=404, detail='Report not found')
+    return PlainTextResponse(content=content, media_type='text/markdown; charset=utf-8')
