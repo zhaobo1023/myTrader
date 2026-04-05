@@ -1,4 +1,4 @@
-.PHONY: dev prod build down logs api-test redis-cli mysql-cli clean help
+.PHONY: dev prod build down logs api-test redis-cli mysql-cli clean help api-local api-logs api-errors api-access
 
 # ============================================================
 # myTrader Makefile
@@ -49,8 +49,19 @@ api-only: ## Start API only (requires Redis running)
 # API Development (local, without Docker)
 # ============================================================
 
-api-local: ## Run FastAPI locally with uvicorn
-	uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+api-local: ## Run FastAPI locally (LOG_LEVEL=DEBUG, port 8001)
+	PYTHONPATH=. LOG_LEVEL=$${LOG_LEVEL:-DEBUG} DB_ENV=$${DB_ENV:-online} \
+	uvicorn api.main:app --reload --host 0.0.0.0 --port $${API_PORT:-8001} \
+	--log-level $$(echo $${LOG_LEVEL:-debug} | tr '[:upper:]' '[:lower:]')
+
+api-logs: ## Tail the app log
+	tail -f logs/app.log
+
+api-errors: ## Tail only errors
+	tail -f logs/error.log
+
+api-access: ## Tail the access log
+	tail -f logs/access.log
 
 api-test: ## Run API tests
 	PYTHONPATH=. pytest tests/unit/api/ -v
