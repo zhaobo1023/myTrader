@@ -38,9 +38,10 @@ env/
 .env.local
 .env.*.local
 
-# Logs
+# Logs — track logs/ dir via .gitkeep but ignore actual log files
 *.log
-logs/
+logs/*.log
+logs/*.log.*
 
 # Data files
 *.xlsx
