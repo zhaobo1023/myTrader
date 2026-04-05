@@ -138,7 +138,7 @@ def test_get_valuation_snapshot_handles_empty_data():
     with patch("investment_rag.report_engine.data_tools._execute_query") as mock_q:
         mock_q.return_value = []
         result = tools.get_valuation_snapshot("000858")
-    assert "不足" in result or isinstance(result, str)
+    assert "不足" in result
 
 
 def test_get_valuation_snapshot_handles_db_exception():
@@ -146,7 +146,7 @@ def test_get_valuation_snapshot_handles_db_exception():
     with patch("investment_rag.report_engine.data_tools._execute_query") as mock_q:
         mock_q.side_effect = Exception("DB unavailable")
         result = tools.get_valuation_snapshot("000858")
-    assert "失败" in result or isinstance(result, str)
+    assert "失败" in result
 
 
 def test_quantile_label_boundaries():
@@ -166,7 +166,8 @@ def test_get_expected_return_context_returns_string():
         mock_q.return_value = fake_rows
         result = tools.get_expected_return_context("000858", earnings_growth_2yr=0.10)
     assert isinstance(result, str)
-    assert "盈利" in result or "回报" in result or isinstance(result, str)
+    assert "盈利" in result
+    assert "2年预期总回报" in result
 
 
 def test_get_expected_return_context_handles_no_pe_data():
@@ -174,4 +175,4 @@ def test_get_expected_return_context_handles_no_pe_data():
     with patch("investment_rag.report_engine.data_tools._execute_query") as mock_q:
         mock_q.return_value = []
         result = tools.get_expected_return_context("000858")
-    assert isinstance(result, str)
+    assert "历史数据不足" in result

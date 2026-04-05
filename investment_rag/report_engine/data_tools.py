@@ -255,6 +255,8 @@ class ReportDataTools:
                 f"PB: {pb_current:.2f}x，历史分位 {pb_pct:.0f}%，"
                 f"估值水平: {self._quantile_label(pb_pct)}"
             )
+        else:
+            lines.append("PB: 无效或数据不足")
 
         # Dividend yield (TTM)
         dv_series = df["dv_ttm"].dropna()
@@ -262,6 +264,8 @@ class ReportDataTools:
         if len(dv_series) >= 20:
             dv_pct = float((dv_series < dv_current).mean() * 100) if dv_current > 0 else 0.0
             lines.append(f"股息率(TTM): {dv_current:.2f}%，历史分位 {dv_pct:.0f}%")
+        else:
+            lines.append("股息率(TTM): 数据不足")
 
         return "\n".join(lines)
 
@@ -278,7 +282,7 @@ class ReportDataTools:
         Formula:
           earnings_contribution = (1 + earnings_growth_2yr)^2 - 1
           target_pe = PE historical series at target_pe_quantile
-          valuation_contribution = (target_pe / current_pe - 1) * (1 + earnings_growth_2yr)
+          valuation_contribution = target_pe / current_pe - 1
           dividend_contribution = dv_ttm% * 2
           total = earnings + valuation + dividend
 
@@ -326,11 +330,11 @@ class ReportDataTools:
         if not current_pe or current_pe <= 0:
             return "[预期回报] 当前 PE 无效（亏损），无法计算"
 
-        # 3-part decomposition
+        # 3-part decomposition (simplified additive, no cross-term)
         earnings_contribution = (1 + earnings_growth_2yr) ** 2 - 1
         target_pe = float(pe_series.quantile(target_pe_quantile))
         pe_change = target_pe / current_pe - 1
-        valuation_contribution = pe_change * (1 + earnings_growth_2yr)
+        valuation_contribution = pe_change   # no earnings scaling -- simplified additive
         dividend_contribution = (current_dv / 100) * 2  # dv_ttm is percentage, x2 years
         total = earnings_contribution + valuation_contribution + dividend_contribution
 
