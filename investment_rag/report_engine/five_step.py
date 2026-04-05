@@ -147,16 +147,27 @@ class FiveStepAnalyzer:
         if step_config.needs_technical:
             technical_context = self._tools.get_tech_analysis(stock_code)
 
-        # 4. 渲染 Prompt
+        # 4. 估值历史分位数上下文（资本周期框架）
+        valuation_context = ""
+        expected_return_context = ""
+        if step_config.needs_valuation:
+            valuation_context = self._tools.get_valuation_snapshot(stock_code)
+            expected_return_context = self._tools.get_expected_return_context(stock_code)
+
+        # 5. 渲染 Prompt
+        # Note: str.format() silently ignores extra kwargs, so passing valuation_context
+        # and expected_return_context to prompts without those placeholders is safe.
         prompt = step_config.prompt_template.format(
             stock_name=stock_name,
             rag_context=rag_context or "[无相关研报内容]",
             financial_context=financial_context or "[无财务数据]",
             technical_context=technical_context or "[无技术面数据]",
             prev_analysis=prev_analysis or "[本步骤为第一步，无前期分析]",
+            valuation_context=valuation_context or "[无估值历史数据]",
+            expected_return_context=expected_return_context or "[无预期回报数据]",
         )
 
-        # 5. LLM 生成
+        # 6. LLM 生成
         try:
             return self._llm.generate(
                 prompt=prompt,

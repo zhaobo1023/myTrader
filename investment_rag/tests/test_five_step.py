@@ -10,6 +10,8 @@ def _make_analyzer():
     analyzer._tools.query_rag_multi.return_value = "RAG context text"
     analyzer._tools.get_financial_data.return_value = "Financial context text"
     analyzer._tools.get_tech_analysis.return_value = "Tech context text"
+    analyzer._tools.get_valuation_snapshot.return_value = "Valuation context text"
+    analyzer._tools.get_expected_return_context.return_value = "Expected return text"
     analyzer._llm = MagicMock()
     analyzer._llm.generate.return_value = "## Analysis\nContent..."
     return analyzer
@@ -141,3 +143,61 @@ def test_report_store_list_filters_by_stock(tmp_path, monkeypatch):
     filtered = store.list_reports(stock_code="000858")
     assert len(filtered) == 1
     assert filtered[0]["stock_code"] == "000858"
+
+
+# ---------------------------------------------------------------
+# Valuation context wiring tests
+# ---------------------------------------------------------------
+
+def test_run_single_step_calls_valuation_when_flagged():
+    """When step has needs_valuation=True, get_valuation_snapshot must be called."""
+    from investment_rag.report_engine.prompts import FIVE_STEP_CONFIG
+    analyzer = _make_analyzer()
+    analyzer._tools.get_valuation_snapshot = MagicMock(return_value="Valuation text")
+    analyzer._tools.get_expected_return_context = MagicMock(return_value="Expected return text")
+
+    step3 = next(s for s in FIVE_STEP_CONFIG if s.step_id == "step3")
+    assert step3.needs_valuation, "step3 must have needs_valuation=True for this test to be meaningful"
+
+    analyzer._run_single_step(
+        step_config=step3,
+        stock_code="000858",
+        stock_name="五粮液",
+        prev_analysis="some prior analysis",
+    )
+    analyzer._tools.get_valuation_snapshot.assert_called_once_with("000858")
+
+
+def test_run_single_step_does_not_call_valuation_when_not_flagged():
+    """When step has needs_valuation=False, get_valuation_snapshot must NOT be called."""
+    from investment_rag.report_engine.prompts import FIVE_STEP_CONFIG
+    analyzer = _make_analyzer()
+    analyzer._tools.get_valuation_snapshot = MagicMock(return_value="Valuation text")
+
+    step1 = next(s for s in FIVE_STEP_CONFIG if s.step_id == "step1")
+    assert not step1.needs_valuation, "step1 must have needs_valuation=False for this test"
+
+    analyzer._run_single_step(
+        step_config=step1,
+        stock_code="000858",
+        stock_name="五粮液",
+        prev_analysis="",
+    )
+    analyzer._tools.get_valuation_snapshot.assert_not_called()
+
+
+def test_run_single_step_calls_expected_return_for_step5():
+    """Step5 must also call get_expected_return_context."""
+    from investment_rag.report_engine.prompts import FIVE_STEP_CONFIG
+    analyzer = _make_analyzer()
+    analyzer._tools.get_valuation_snapshot = MagicMock(return_value="Valuation text")
+    analyzer._tools.get_expected_return_context = MagicMock(return_value="Return text")
+
+    step5 = next(s for s in FIVE_STEP_CONFIG if s.step_id == "step5")
+    analyzer._run_single_step(
+        step_config=step5,
+        stock_code="000858",
+        stock_name="五粮液",
+        prev_analysis="all prior analysis",
+    )
+    analyzer._tools.get_expected_return_context.assert_called_once_with("000858")
