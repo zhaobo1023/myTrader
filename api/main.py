@@ -12,11 +12,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import settings
 from api.dependencies import close_redis
+from api.logging_config import setup_logging
 from api.middleware.metrics import MetricsMiddleware, get_metrics
 from api.middleware.rate_limit import RateLimitMiddleware
 from api.routers import health, auth, market, analysis, strategy, rag, portfolio, admin, api_keys, subscription, research
 
 logger = logging.getLogger('myTrader.api')
+
+# ============================================================
+# Logging -- must be configured before any logger is used
+# ============================================================
+setup_logging(log_level=settings.log_level, log_dir=settings.log_dir)
 
 
 @asynccontextmanager

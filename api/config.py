@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     api_debug: bool = Field(default=True, alias='API_DEBUG')
     app_name: str = 'myTrader API'
     app_version: str = '0.1.0'
+    log_level: str = Field(default='INFO', alias='LOG_LEVEL')
+    log_dir: str = Field(default='logs', alias='LOG_DIR')
 
     # ============================================================
     # Database (reuse existing LOCAL_DB_* / ONLINE_DB_* pattern)
