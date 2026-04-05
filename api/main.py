@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.config import settings
 from api.dependencies import close_redis
 from api.middleware.metrics import MetricsMiddleware, get_metrics
+from api.middleware.rate_limit import RateLimitMiddleware
 from api.routers import health, auth, market, analysis, strategy, rag, portfolio, admin, api_keys, subscription
 
 logger = logging.getLogger('myTrader.api')
@@ -66,6 +67,13 @@ app.add_middleware(
 # Metrics Middleware
 # ============================================================
 app.add_middleware(MetricsMiddleware)
+
+# ============================================================
+# Rate Limiting Middleware
+# ============================================================
+# Sliding-window Redis rate limiter. Runs after MetricsMiddleware.
+# Fail-open: requests are allowed through if Redis is unavailable.
+app.add_middleware(RateLimitMiddleware)
 
 # ============================================================
 # Routers

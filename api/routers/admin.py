@@ -6,6 +6,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_db
 from api.middleware.auth import require_admin
@@ -20,23 +21,22 @@ async def list_users(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
 ):
     """List all users with pagination."""
-    db = get_db()
     try:
         offset = (page - 1) * page_size
-        users = db.execute(
+        users_result = await db.execute(
             text(
                 "SELECT id, email, tier, role, is_active, created_at "
                 "FROM users ORDER BY id LIMIT :limit OFFSET :offset"
             ),
             {"limit": page_size, "offset": offset},
         )
-        users = list(users)
+        users = [dict(row) for row in users_result.mappings()]
 
-        total = db.execute(text("SELECT COUNT(*) as cnt FROM users"))
-        total_row = list(total)[0]
-        total_count = total_row['cnt'] if isinstance(total_row, dict) else total_row[0]
+        total_result = await db.execute(text("SELECT COUNT(*) FROM users"))
+        total_count = total_result.scalar()
 
         return {
             'total': total_count,
@@ -53,11 +53,11 @@ async def list_users(
 async def get_user_usage(
     user_id: int,
     current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
 ):
     """Get usage statistics for a specific user."""
-    db = get_db()
     try:
-        usage = db.execute(
+        usage_result = await db.execute(
             text(
                 "SELECT api_endpoint, date, count "
                 "FROM usage_logs WHERE user_id = :uid "
@@ -65,9 +65,9 @@ async def get_user_usage(
             ),
             {"uid": user_id},
         )
-        usage = list(usage)
+        usage = [dict(row) for row in usage_result.mappings()]
 
-        summary = db.execute(
+        summary_result = await db.execute(
             text(
                 "SELECT api_endpoint, SUM(count) as total_count "
                 "FROM usage_logs WHERE user_id = :uid "
@@ -75,7 +75,7 @@ async def get_user_usage(
             ),
             {"uid": user_id},
         )
-        summary = list(summary)
+        summary = [dict(row) for row in summary_result.mappings()]
 
         return {'usage': usage, 'summary': summary}
     except Exception as e:
@@ -88,15 +88,15 @@ async def update_user_tier(
     user_id: int,
     tier: str = Query(..., pattern='^(free|pro)$'),
     current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update user tier (free/pro)."""
-    db = get_db()
     try:
-        db.execute(
+        await db.execute(
             text("UPDATE users SET tier = :tier WHERE id = :uid"),
             {"tier": tier, "uid": user_id},
         )
-        db.commit()
+        await db.commit()
         return {'message': f'User {user_id} tier updated to {tier}'}
     except Exception as e:
         logger.error('[ADMIN] Update tier failed: %s', e)
@@ -108,15 +108,15 @@ async def toggle_user_active(
     user_id: int,
     is_active: bool = Query(...),
     current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
 ):
     """Enable or disable user account."""
-    db = get_db()
     try:
-        db.execute(
+        await db.execute(
             text("UPDATE users SET is_active = :active WHERE id = :uid"),
             {"active": is_active, "uid": user_id},
         )
-        db.commit()
+        await db.commit()
         return {'message': f'User {user_id} {"enabled" if is_active else "disabled"}'}
     except Exception as e:
         logger.error('[ADMIN] Toggle active failed: %s', e)

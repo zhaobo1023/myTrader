@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_db
 from api.middleware.auth import get_current_user
@@ -30,18 +31,18 @@ async def list_plans():
 @router.get('/current')
 async def get_current_subscription(
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Get current user's subscription status."""
-    db = get_db()
     try:
-        sub = db.execute(
+        result = await db.execute(
             text(
                 "SELECT plan, start_date, end_date, stripe_subscription_id "
                 "FROM subscriptions WHERE user_id = :uid ORDER BY id DESC LIMIT 1"
             ),
             {"uid": current_user.id},
         )
-        row = sub.fetchone()
+        row = result.fetchone()
         if not row:
             return {
                 'user_id': current_user.id,
@@ -50,8 +51,12 @@ async def get_current_subscription(
                 'is_expired': False,
             }
 
-        row_dict = row if isinstance(row, dict) else dict(zip(row._fields, row))
-        is_expired = row_dict.get('end_date') and row_dict['end_date'] < str(__import__('datetime').date.today())
+        row_dict = dict(row._mapping)
+        import datetime
+        is_expired = (
+            row_dict.get('end_date') and
+            row_dict['end_date'] < datetime.date.today()
+        )
 
         return {
             'user_id': current_user.id,
@@ -59,7 +64,7 @@ async def get_current_subscription(
             'plan': row_dict.get('plan'),
             'start_date': str(row_dict.get('start_date', '')),
             'end_date': str(row_dict.get('end_date', '')),
-            'is_expired': is_expired,
+            'is_expired': bool(is_expired),
         }
     except Exception as e:
         logger.error('[SUB] Get subscription failed: %s', e)
@@ -70,6 +75,7 @@ async def get_current_subscription(
 async def upgrade_subscription(
     plan: str = Query(..., pattern='^(pro)$'),
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Upgrade to Pro plan. In production, this would integrate with Stripe/WeChat Pay."""
     import datetime
@@ -77,21 +83,20 @@ async def upgrade_subscription(
     if plan not in PLANS:
         raise HTTPException(status_code=400, detail='Invalid plan')
 
-    db = get_db()
     try:
         today = datetime.date.today()
         end_date = today + datetime.timedelta(days=30)
 
         # Upsert subscription
-        existing = db.execute(
+        existing_result = await db.execute(
             text("SELECT id FROM subscriptions WHERE user_id = :uid ORDER BY id DESC LIMIT 1"),
             {"uid": current_user.id},
         )
-        existing_row = existing.fetchone()
+        existing_row = existing_result.fetchone()
 
         if existing_row:
-            sub_id = existing_row['id'] if isinstance(existing_row, dict) else existing_row[0]
-            db.execute(
+            sub_id = existing_row[0]
+            await db.execute(
                 text(
                     "UPDATE subscriptions SET plan = :plan, start_date = :start, end_date = :end "
                     "WHERE id = :sid"
@@ -99,7 +104,7 @@ async def upgrade_subscription(
                 {"plan": plan, "start": str(today), "end": str(end_date), "sid": sub_id},
             )
         else:
-            db.execute(
+            await db.execute(
                 text(
                     "INSERT INTO subscriptions (user_id, plan, start_date, end_date) "
                     "VALUES (:uid, :plan, :start, :end)"
@@ -108,11 +113,11 @@ async def upgrade_subscription(
             )
 
         # Update user tier
-        db.execute(
+        await db.execute(
             text("UPDATE users SET tier = :tier WHERE id = :uid"),
             {"tier": plan, "uid": current_user.id},
         )
-        db.commit()
+        await db.commit()
 
         return {
             'message': f'Upgraded to {PLANS[plan]["name"]}',

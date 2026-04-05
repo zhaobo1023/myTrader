@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Tests for scheduler.readiness module."""
 from datetime import datetime
+from unittest.mock import patch
 from scheduler.readiness import expected_trade_date
 
 
@@ -18,7 +19,9 @@ class TestExpectedTradeDate:
         assert isinstance(expected_trade_date(), str)
 
     def test_dry_run_returns_true(self):
-        """wait_for_daily_data with dry_run=True should return True."""
+        """wait_for_daily_data with dry_run=True should return True without hitting DB."""
         from scheduler.readiness import wait_for_daily_data
-        result = wait_for_daily_data(dry_run=True)
+        # dry_run still calls get_latest_trade_date for logging; mock it to avoid live DB.
+        with patch("scheduler.readiness.get_latest_trade_date", return_value="2026-04-04"):
+            result = wait_for_daily_data(dry_run=True)
         assert result is True
