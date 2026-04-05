@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.config import settings
 from api.dependencies import close_redis
 from api.logging_config import setup_logging
+from api.middleware.access_log import AccessLogMiddleware
 from api.middleware.metrics import MetricsMiddleware, get_metrics
 from api.middleware.rate_limit import RateLimitMiddleware
 from api.routers import health, auth, market, analysis, strategy, rag, portfolio, admin, api_keys, subscription, research
@@ -80,6 +81,13 @@ app.add_middleware(MetricsMiddleware)
 # Sliding-window Redis rate limiter. Runs after MetricsMiddleware.
 # Fail-open: requests are allowed through if Redis is unavailable.
 app.add_middleware(RateLimitMiddleware)
+
+# ============================================================
+# Access Log Middleware
+# ============================================================
+# Added last so it runs outermost -- logs every request including
+# those rejected by rate limiter or auth.
+app.add_middleware(AccessLogMiddleware)
 
 # ============================================================
 # Routers
