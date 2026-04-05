@@ -30,7 +30,6 @@ async def rag_query(
         from investment_rag.retrieval.hybrid_retriever import HybridRetriever
         from investment_rag.retrieval.reranker import Reranker
         from investment_rag.retrieval.text2sql import Text2SQL
-        from investment_rag.llm.llm_client import LLMClient
     except ImportError as e:
         logger.error('[RAG] Import error: %s', e)
         raise HTTPException(
