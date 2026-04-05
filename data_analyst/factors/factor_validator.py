@@ -19,7 +19,7 @@ from scipy.stats import spearmanr
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from config.db import execute_query, get_connection
+from config.db import execute_query, get_connection, get_dual_connections
 
 # 配置日志
 logging.basicConfig(
@@ -306,6 +306,36 @@ def save_validation_results(results):
     conn.commit()
     cursor.close()
     conn.close()
+
+    # Dual-write to secondary (best-effort)
+    conn2 = None
+    try:
+        _, conn2 = get_dual_connections()
+    except Exception:
+        pass
+    if conn2:
+        try:
+            cursor2 = conn2.cursor()
+            cursor2.execute(create_sql)
+            for r in results:
+                cursor2.execute(insert_sql, (
+                    r['factor'],
+                    today,
+                    1 if r['valid'] else 0,
+                    r.get('ic_mean'),
+                    r.get('ic_std'),
+                    r.get('icir'),
+                    r.get('ic_count'),
+                    r.get('positive_ratio'),
+                    r.get('reason', '')
+                ))
+            conn2.commit()
+            cursor2.close()
+        except Exception as e:
+            logger.warning("Dual-write save_validation_results failed: %s", e)
+        finally:
+            conn2.close()
+
     logger.info(f"验证结果已保存到数据库")
 
 

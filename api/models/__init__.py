@@ -1,0 +1,19 @@
+# -*- coding: utf-8 -*-
+"""
+ORM Models - import all models here for Alembic auto-detection
+"""
+from api.models.user import User, UserTier, UserRole
+from api.models.subscription import Subscription
+from api.models.usage_log import UsageLog
+from api.models.api_key import ApiKey
+from api.models.strategy import Strategy
+from api.models.backtest_job import BacktestJob, JobStatus
+
+__all__ = [
+    'User', 'UserTier', 'UserRole',
+    'Subscription',
+    'UsageLog',
+    'ApiKey',
+    'Strategy',
+    'BacktestJob', 'JobStatus',
+]

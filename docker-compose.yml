@@ -1,0 +1,71 @@
+# myTrader Docker Compose - Phase 0
+# Usage: make dev | make prod
+
+services:
+  # ============================================================
+  # Redis - Cache / Message Queue
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: mytrader-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================================
+  # FastAPI - Backend API
+  # ============================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mytrader-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - ./output:/app/output
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # ============================================================
+  # Nginx - Reverse Proxy
+  # ============================================================
+  nginx:
+    image: nginx:alpine
+    container_name: mytrader-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  nginx_logs:

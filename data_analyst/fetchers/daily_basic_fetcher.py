@@ -26,7 +26,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from config.db import get_connection, execute_query
+from config.db import get_connection, execute_query, get_dual_connections, dual_executemany
 from config.settings import settings
 
 try:
@@ -197,13 +197,12 @@ def _bulk_update_dv_ttm(updates: list):
     """Bulk UPDATE dv_ttm for (value, stock_code, trade_date) tuples."""
     if not updates:
         return
-    conn = get_connection()
-    cursor = conn.cursor()
-    sql = "UPDATE trade_stock_daily_basic SET dv_ttm = %s WHERE stock_code = %s AND trade_date = %s"
-    cursor.executemany(sql, updates)
-    conn.commit()
-    cursor.close()
-    conn.close()
+    conn, conn2 = get_dual_connections()
+    try:
+        sql = "UPDATE trade_stock_daily_basic SET dv_ttm = %s WHERE stock_code = %s AND trade_date = %s"
+        dual_executemany(conn, conn2, sql, updates)
+    finally:
+        conn.close()
 
 
 # ============================================================
@@ -243,12 +242,11 @@ def _save_daily_basic_df(df: pd.DataFrame):
             float(row['free_share']) if pd.notna(row.get('free_share')) else None,
         ))
     if records:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.executemany(INSERT_SQL, records)
-        conn.commit()
-        cursor.close()
-        conn.close()
+        conn, conn2 = get_dual_connections()
+        try:
+            dual_executemany(conn, conn2, INSERT_SQL, records)
+        finally:
+            conn.close()
 
 
 def _get_existing_dates() -> set:

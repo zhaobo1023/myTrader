@@ -13,7 +13,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from config.db import execute_query, get_connection
+from config.db import execute_query, get_connection, get_dual_connections
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,24 @@ class LogBiasStorage:
             conn.commit()
             cursor.close()
             conn.close()
+
+            # Dual-write: create table on secondary too
+            conn2 = None
+            try:
+                _, conn2 = get_dual_connections(primary_env=self.env, secondary_env=None)
+            except Exception:
+                pass
+            if conn2:
+                try:
+                    cursor2 = conn2.cursor()
+                    cursor2.execute(DDL)
+                    conn2.commit()
+                    cursor2.close()
+                except Exception as e:
+                    logger.warning("Dual-write init_table failed: %s", e)
+                finally:
+                    conn2.close()
+
         _retry(_do, "init trade_log_bias_daily table")
         logger.info("table trade_log_bias_daily ready")
 
@@ -132,6 +150,23 @@ class LogBiasStorage:
             finally:
                 cursor.close()
                 conn.close()
+
+            # Dual-write to secondary (best-effort)
+            conn2 = None
+            try:
+                _, conn2 = get_dual_connections(primary_env=self.env, secondary_env=None)
+            except Exception:
+                pass
+            if conn2:
+                try:
+                    cursor2 = conn2.cursor()
+                    cursor2.executemany(UPSERT_SQL, batch)
+                    conn2.commit()
+                    cursor2.close()
+                except Exception as e:
+                    logger.warning("Dual-write save to %s failed: %s", 'secondary', e)
+                finally:
+                    conn2.close()
 
         _retry(_do, f"save {len(batch)} rows for {ts_code}")
         logger.info(f"Saved {len(batch)} rows for {ts_code}")

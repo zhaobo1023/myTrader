@@ -16,7 +16,7 @@ from datetime import datetime
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config.db import execute_query, get_connection
+from config.db import execute_query, get_connection, get_dual_connections, dual_executemany, dual_execute
 
 
 from config.settings import settings
@@ -58,15 +58,25 @@ CREATE TABLE IF NOT EXISTS trade_stock_factor (
 
 def create_factor_table():
     """创建因子数据表"""
-    from config.db import get_connection
-
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(CREATE_TABLE_sql)
-    conn.commit()
-    cursor.close()
-    conn.close()
-    print("✅ 因子表创建成功: trade_stock_factor")
+    conn, conn2 = get_dual_connections()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(CREATE_TABLE_sql)
+        conn.commit()
+        cursor.close()
+    finally:
+        conn.close()
+    if conn2:
+        try:
+            cursor2 = conn2.cursor()
+            cursor2.execute(CREATE_TABLE_sql)
+            conn2.commit()
+            cursor2.close()
+        except Exception as e:
+            print(f"[WARN] Dual-write CREATE TABLE failed: {e}")
+        finally:
+            conn2.close()
+    print("Factor table ready: trade_stock_factor")
 
 
 # ============================================================
@@ -95,7 +105,6 @@ def save_factors(factor_df, calc_date):
     ]
 
     conn = get_connection()
-    cursor = conn.cursor()
 
     # 使用 REPLACE INTO 实现 upsert (存在则更新，不存在则插入)
     sql = f"""
@@ -116,6 +125,28 @@ def save_factors(factor_df, calc_date):
     conn.commit()
     cursor.close()
     conn.close()
+
+    # Dual-write to secondary (best-effort, skip if not enabled)
+    conn2 = None
+    try:
+        _, conn2 = get_dual_connections()
+    except Exception:
+        pass
+    if conn2:
+        try:
+            cursor2 = conn2.cursor()
+            for code, row in factor_df.iterrows():
+                try:
+                    values = [code, calc_date] + [row.get(col, None) for col in factor_cols]
+                    cursor2.execute(sql, values)
+                except Exception:
+                    pass
+            conn2.commit()
+            cursor2.close()
+        except Exception as e:
+            print(f"[WARN] Dual-write save_factors failed: {e}")
+        finally:
+            conn2.close()
 
     return success_count
 
@@ -149,6 +180,7 @@ def batch_save_factors(factor_df, calc_date, batch_size=500):
     total = len(factor_df)
     success_count = 0
     batch = []
+    all_batches = []  # collect for secondary write
 
     for i, (code, row) in enumerate(factor_df.iterrows()):
         values = [code, calc_date] + [row.get(col, None) for col in factor_cols]
@@ -159,6 +191,7 @@ def batch_save_factors(factor_df, calc_date, batch_size=500):
                 cursor.executemany(sql, batch)
                 conn.commit()
                 success_count += len(batch)
+                all_batches.append(list(batch))
                 print(f"  保存进度: {success_count}/{total}")
             except Exception as e:
                 print(f"  批量保存失败: {e}")
@@ -170,13 +203,35 @@ def batch_save_factors(factor_df, calc_date, batch_size=500):
             cursor.executemany(sql, batch)
             conn.commit()
             success_count += len(batch)
+            all_batches.append(list(batch))
         except Exception as e:
             print(f"  最后一批保存失败: {e}")
 
     cursor.close()
     conn.close()
 
-    print(f"✅ 保存完成: {success_count}/{total} 条记录")
+    # Dual-write to secondary (best-effort)
+    conn2 = None
+    try:
+        _, conn2 = get_dual_connections()
+    except Exception:
+        pass
+    if conn2:
+        try:
+            cursor2 = conn2.cursor()
+            for b in all_batches:
+                try:
+                    cursor2.executemany(sql, b)
+                    conn2.commit()
+                except Exception:
+                    pass
+            cursor2.close()
+        except Exception as e:
+            print(f"[WARN] Dual-write batch_save failed: {e}")
+        finally:
+            conn2.close()
+
+    print(f"Save complete: {success_count}/{total} records")
     return success_count
 
 
@@ -298,13 +353,25 @@ def get_factor_dates():
 
 def delete_factors_by_date(calc_date):
     """删除指定日期的因子数据"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("delete from trade_stock_factor where calc_date = %s", [calc_date])
-    deleted = cursor.rowcount
-    conn.commit()
-    cursor.close()
-    conn.close()
+    conn, conn2 = get_dual_connections()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("delete from trade_stock_factor where calc_date = %s", [calc_date])
+        deleted = cursor.rowcount
+        conn.commit()
+        cursor.close()
+    finally:
+        conn.close()
+    if conn2:
+        try:
+            cursor2 = conn2.cursor()
+            cursor2.execute("delete from trade_stock_factor where calc_date = %s", [calc_date])
+            conn2.commit()
+            cursor2.close()
+        except Exception as e:
+            print(f"[WARN] Dual-write delete failed: {e}")
+        finally:
+            conn2.close()
     return deleted
 
 

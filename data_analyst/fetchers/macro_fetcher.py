@@ -27,7 +27,7 @@ from typing import Optional, Tuple
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from config.db import get_connection, execute_query, execute_many
+from config.db import get_connection, execute_query, execute_many, execute_dual_many
 
 # 尝试导入 akshare
 try:
@@ -278,7 +278,7 @@ def save_data(indicator: str, df: pd.DataFrame) -> int:
         rows.append((date_str, indicator, value))
 
     if rows:
-        execute_many(INSERT_SQL, rows)
+        execute_dual_many(INSERT_SQL, rows)
 
     return len(rows)
 

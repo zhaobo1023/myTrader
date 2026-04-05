@@ -13,7 +13,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from config.db import execute_query, get_connection
+from config.db import execute_query, get_connection, get_dual_connections
 from .schemas import ALL_DDL
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,25 @@ class FinancialStorage:
             conn.commit()
             cursor.close()
             conn.close()
+
+            # Dual-write: create tables on secondary too
+            conn2 = None
+            try:
+                _, conn2 = get_dual_connections(primary_env=self.env, secondary_env=None)
+            except Exception:
+                pass
+            if conn2:
+                try:
+                    cursor2 = conn2.cursor()
+                    for ddl in ALL_DDL:
+                        cursor2.execute(ddl)
+                    conn2.commit()
+                    cursor2.close()
+                except Exception as e:
+                    logger.warning("Dual-write init_tables failed: %s", e)
+                finally:
+                    conn2.close()
+
         _retry(_do, "init financial tables")
         logger.info("financial tables ready")
 
@@ -74,6 +93,24 @@ class FinancialStorage:
             finally:
                 cursor.close()
                 conn.close()
+
+            # Dual-write to secondary (best-effort)
+            conn2 = None
+            try:
+                _, conn2 = get_dual_connections(primary_env=self.env, secondary_env=None)
+            except Exception:
+                pass
+            if conn2:
+                try:
+                    cursor2 = conn2.cursor()
+                    cursor2.executemany(sql, params_list)
+                    conn2.commit()
+                    cursor2.close()
+                except Exception as e:
+                    logger.warning("Dual-write upsert to %s failed: %s", 'secondary', e)
+                finally:
+                    conn2.close()
+
         count = _retry(_do, f"upsert {len(records)} rows into {table}")
         logger.info(f"Upserted {count} rows into {table}")
         return count

@@ -21,7 +21,7 @@ import logging
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from config.db import execute_query, get_connection
+from config.db import execute_query, get_connection, get_dual_connections, dual_executemany
 
 # 配置日志
 logging.basicConfig(
@@ -183,13 +183,25 @@ CREATE TABLE IF NOT EXISTS trade_stock_basic_factor (
 
 def create_factor_table():
     """创建因子表"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(CREATE_TABLE_SQL)
-    conn.commit()
-    cursor.close()
-    conn.close()
-    logger.info("✅ 因子表创建成功: trade_stock_basic_factor")
+    conn, conn2 = get_dual_connections()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(CREATE_TABLE_SQL)
+        conn.commit()
+        cursor.close()
+    finally:
+        conn.close()
+    if conn2:
+        try:
+            cursor2 = conn2.cursor()
+            cursor2.execute(CREATE_TABLE_SQL)
+            conn2.commit()
+            cursor2.close()
+        except Exception as e:
+            logger.warning("Dual-write CREATE TABLE failed: %s", e)
+        finally:
+            conn2.close()
+    logger.info("Factor table ready: trade_stock_basic_factor")
 
 
 def save_factors_batch(all_factors: dict, batch_size: int = 5000) -> int:
@@ -203,8 +215,7 @@ def save_factors_batch(all_factors: dict, batch_size: int = 5000) -> int:
     Returns:
         int: 保存的记录数
     """
-    conn = get_connection()
-    cursor = conn.cursor()
+    conn, conn2 = get_dual_connections()
 
     sql = """
         REPLACE INTO trade_stock_basic_factor
@@ -237,10 +248,15 @@ def save_factors_batch(all_factors: dict, batch_size: int = 5000) -> int:
 
             if len(batch) >= batch_size:
                 try:
+                    cursor = conn.cursor()
                     cursor.executemany(sql, batch)
                     conn.commit()
+                    cursor.close()
                     total_records += len(batch)
                     logger.info(f"  保存进度: {total_records:,} 条记录")
+                    if conn2:
+                        dual_executemany(conn, conn2, sql, batch, _logger=logger)
+                        conn2 = None  # closed by dual_executemany
                 except Exception as e:
                     logger.error(f"批量保存失败: {e}")
                 batch = []
@@ -248,14 +264,20 @@ def save_factors_batch(all_factors: dict, batch_size: int = 5000) -> int:
     # 保存剩余
     if batch:
         try:
+            cursor = conn.cursor()
             cursor.executemany(sql, batch)
             conn.commit()
+            cursor.close()
             total_records += len(batch)
+            if conn2:
+                dual_executemany(conn, conn2, sql, batch, _logger=logger)
+                conn2 = None
         except Exception as e:
             logger.error(f"保存失败: {e}")
 
-    cursor.close()
     conn.close()
+    if conn2:
+        conn2.close()
 
     return total_records
 

@@ -22,7 +22,7 @@ import requests
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
-from config.db import get_connection
+from config.db import get_connection, get_dual_connections
 
 logging.basicConfig(
     level=logging.INFO,
@@ -139,6 +139,12 @@ def update_db(industry_map: dict, dry_run: bool = False):
         return
 
     conn = get_connection()
+    conn2 = None
+    try:
+        _, conn2 = get_dual_connections()
+    except Exception:
+        pass
+
     try:
         cursor = conn.cursor()
 
@@ -167,6 +173,7 @@ def update_db(industry_map: dict, dry_run: bool = False):
         BATCH_SIZE = 500
         items = list(matched.items())
         total_updated = 0
+        all_batches_sql = []  # collect for secondary write
 
         for i in range(0, len(items), BATCH_SIZE):
             batch = items[i:i + BATCH_SIZE]
@@ -185,6 +192,7 @@ def update_db(industry_map: dict, dry_run: bool = False):
             )
             cursor.execute(sql, params)
             total_updated += cursor.rowcount
+            all_batches_sql.append((sql, params))
 
             if (i + BATCH_SIZE) % 2000 == 0 or i + BATCH_SIZE >= len(items):
                 logger.info(f"  batch progress: {min(i + BATCH_SIZE, len(items))}/{len(items)}")
@@ -193,6 +201,22 @@ def update_db(industry_map: dict, dry_run: bool = False):
         logger.info(f"DB updated: {total_updated} rows in trade_stock_basic.industry")
     finally:
         conn.close()
+
+    # Dual-write to secondary (best-effort)
+    if conn2:
+        try:
+            cursor2 = conn2.cursor()
+            for sql, params in all_batches_sql:
+                try:
+                    cursor2.execute(sql, params)
+                except Exception:
+                    pass
+            conn2.commit()
+            cursor2.close()
+        except Exception as e:
+            logger.warning("Dual-write update_db failed: %s", e)
+        finally:
+            conn2.close()
 
 
 def main():

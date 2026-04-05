@@ -16,7 +16,7 @@ import logging
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from config.db import execute_query, get_connection
+from config.db import execute_query, get_connection, get_dual_connections
 
 # 配置日志
 logging.basicConfig(
@@ -119,8 +119,7 @@ def save_factors_batch(factors_data):
     if not factors_data:
         return 0
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    conn, conn2 = get_dual_connections()
 
     sql = """
         REPLACE INTO trade_stock_basic_factor
@@ -146,8 +145,9 @@ def save_factors_batch(factors_data):
             ))
 
     if not records:
-        cursor.close()
         conn.close()
+        if conn2:
+            conn2.close()
         return 0
 
     # 分批插入
@@ -156,14 +156,29 @@ def save_factors_batch(factors_data):
     for i in range(0, len(records), batch_insert_size):
         batch = records[i:i+batch_insert_size]
         try:
+            cursor = conn.cursor()
             cursor.executemany(sql, batch)
             conn.commit()
+            cursor.close()
             total_saved += len(batch)
         except Exception as e:
             logger.error(f"保存失败: {e}")
 
-    cursor.close()
     conn.close()
+
+    # Secondary write (best-effort)
+    if conn2:
+        try:
+            for i in range(0, len(records), batch_insert_size):
+                batch = records[i:i+batch_insert_size]
+                cursor2 = conn2.cursor()
+                cursor2.executemany(sql, batch)
+                conn2.commit()
+                cursor2.close()
+        except Exception as e:
+            logger.warning("Dual-write to %s failed: %s", 'secondary', e)
+        finally:
+            conn2.close()
 
     return len(records)
 
@@ -189,13 +204,25 @@ def create_factor_table():
         KEY idx_stock_code (stock_code)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='股票基础因子表';
     """
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(sql)
-    conn.commit()
-    cursor.close()
-    conn.close()
-    logger.info("✅ 因子表创建成功")
+    conn, conn2 = get_dual_connections()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(sql)
+        conn.commit()
+        cursor.close()
+    finally:
+        conn.close()
+    if conn2:
+        try:
+            cursor2 = conn2.cursor()
+            cursor2.execute(sql)
+            conn2.commit()
+            cursor2.close()
+        except Exception as e:
+            logger.warning("Dual-write CREATE TABLE failed: %s", e)
+        finally:
+            conn2.close()
+    logger.info("Factor table ready")
 
 
 def main():

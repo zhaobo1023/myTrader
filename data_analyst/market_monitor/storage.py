@@ -9,7 +9,7 @@ from datetime import date
 from typing import List, Optional
 
 import pymysql
-from config.db import execute_query, get_connection, execute_update, ONLINE_DB_CONFIG
+from config.db import execute_query, get_connection, execute_update, execute_dual_update, ONLINE_DB_CONFIG, get_dual_connections
 from .schemas import SVD_MARKET_STATE_DDL, SVDRecord, WindowSVDResult, MarketRegime
 
 logger = logging.getLogger(__name__)
@@ -119,7 +119,7 @@ class SVDStorage:
     @staticmethod
     def save_record(record: SVDRecord):
         _retry_operation(
-            lambda: execute_update(UPSERT_SQL, SVDStorage._record_to_params(record)),
+            lambda: execute_dual_update(UPSERT_SQL, SVDStorage._record_to_params(record)),
             f"保存 SVD 记录 {record.calc_date} w={record.window_size}"
         )
 
@@ -160,6 +160,24 @@ class SVDStorage:
         finally:
             cursor.close()
             conn.close()
+
+        # Dual-write to secondary (best-effort)
+        conn2 = None
+        try:
+            _, conn2 = get_dual_connections()
+        except Exception:
+            pass
+        if conn2:
+            try:
+                cursor2 = conn2.cursor()
+                for record in records:
+                    cursor2.execute(UPSERT_SQL, SVDStorage._record_to_params(record))
+                conn2.commit()
+                cursor2.close()
+            except Exception as e:
+                logger.warning("Dual-write _save_batch_inner failed: %s", e)
+            finally:
+                conn2.close()
 
     @staticmethod
     def load_results(start_date: str = None, end_date: str = None) -> list:

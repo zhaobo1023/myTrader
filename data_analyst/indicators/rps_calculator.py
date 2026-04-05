@@ -27,7 +27,7 @@ from scipy import stats
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from config.db import execute_query, execute_many
+from config.db import execute_query, execute_many, execute_dual_many, get_dual_connections
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +176,23 @@ class RPSStorage:
         conn.commit()
         cursor.close()
         conn.close()
+
+        # Dual-write: create table on secondary too
+        try:
+            _, conn2 = get_dual_connections(primary_env=self.env, secondary_env=None)
+        except Exception:
+            conn2 = None
+        if conn2:
+            try:
+                cursor2 = conn2.cursor()
+                cursor2.execute(TRADE_STOCK_RPS_SQL)
+                conn2.commit()
+                cursor2.close()
+            except Exception as e:
+                logger.warning("Dual-write init_table failed: %s", e)
+            finally:
+                conn2.close()
+
         logger.info("trade_stock_rps 表已就绪")
 
     def save(self, df: pd.DataFrame, batch_size: int = 1000) -> int:
@@ -206,7 +223,7 @@ class RPSStorage:
         total = 0
         for i in range(0, len(records), batch_size):
             batch = records[i:i + batch_size]
-            affected = execute_many(self.UPSERT_SQL, batch, env=self.env)
+            affected = execute_dual_many(self.UPSERT_SQL, batch, env=self.env)
             total += affected
             logger.debug(f"批次 {i // batch_size + 1}: 写入 {affected} 行")
 

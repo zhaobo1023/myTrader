@@ -25,7 +25,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from config.db import get_connection, execute_query, execute_many
+from config.db import get_connection, execute_query, execute_many, execute_dual_many
 
 
 # ============================================================
@@ -313,7 +313,7 @@ def save_factors(factor_code: str, df: pd.DataFrame) -> int:
         rows.append((date_str, factor_code, value))
 
     if rows:
-        execute_many(INSERT_SQL, rows)
+        execute_dual_many(INSERT_SQL, rows)
 
     return len(rows)
 
