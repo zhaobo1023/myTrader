@@ -272,17 +272,15 @@ class FundamentalValuator:
             # 3x3 grid: rev_mult in [0.8, 1.0, 1.2], net_margin in [-0.2, 0, +0.2] relative change
             rev_mults = [0.8, 1.0, 1.2]
             margin_deltas = [-0.2, 0.0, 0.2]   # relative change to current net margin
-            exit_pe_mults = [0.8, 1.0, 1.2]    # relative change to current PE
 
-            # Build 9 scenarios: row = rev_mult, col = margin_delta (with middle exit_pe)
+            # Build 9 scenarios: row = rev_mult, col = margin_delta (exit PE = current PE)
             scenarios = []
             for rev_mult in rev_mults:
                 for margin_delta in margin_deltas:
                     new_margin = current_net_margin * (1 + margin_delta)
                     new_rev = rev_yi * rev_mult
                     new_profit = new_rev * new_margin
-                    # use middle exit_pe (index 1)
-                    exit_pe = current_pe * exit_pe_mults[1]
+                    exit_pe = current_pe
                     fair_mv = new_profit * exit_pe
                     vs = (fair_mv / current_mv_yi - 1) if current_mv_yi > 0 else None
                     scenarios.append({
@@ -380,7 +378,6 @@ class FundamentalValuator:
         Returns None on failure.
         """
         try:
-            from investment_rag.ingest.loaders.akshare_loader import AKShareLoader  # lazy import
             import akshare as ak
 
             # Use akshare stock_financial_abstract for TTM data
