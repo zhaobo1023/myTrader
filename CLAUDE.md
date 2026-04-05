@@ -66,6 +66,11 @@ python -m scheduler run fetch_macro_data --dry-run    # 单任务 dry-run
 python -m scheduler run all --tag daily               # 运行所有 daily 任务
 python -m scheduler status fetch_macro_data           # 查看任务最近运行状态
 python -m scheduler summary                           # 查看今日执行摘要
+
+# 智能研报生成 (report_engine)
+DB_ENV=online python -m investment_rag.run_report --code 000858 --name 五粮液 --type technical      # 技术面报告（快速）
+DB_ENV=online python -m investment_rag.run_report --code 000858 --name 五粮液 --type fundamental    # 纯基本面五步法报告
+DB_ENV=online python -m investment_rag.run_report --code 000858 --name 五粮液 --type comprehensive  # 综合研报（默认）
 ```
 
 ## 项目结构
@@ -134,6 +139,17 @@ myTrader/
 ├── risk_manager/              # 风控师模块
 ├── executor/                  # 交易员模块
 ├── investment_rag/            # 投研 RAG 系统
+│   ├── report_engine/         # 研报生成引擎（五步法 + 技术面）
+│   │   ├── prompts.py         # 五步法 + 技术面 Prompt 模板
+│   │   ├── data_tools.py      # 数据收集（RAG / AKShare / tech_scan）
+│   │   ├── five_step.py       # 五步法顺序分析链
+│   │   ├── report_builder.py  # Markdown 研报组装
+│   │   └── report_store.py    # 研报持久化（output/rag/reports/）
+│   ├── ingest/                # 文档摄入管道
+│   │   └── loaders/           # AKShareLoader 等数据加载器
+│   ├── retrieval/             # 混合检索（ChromaDB + BM25 + Reranker）
+│   ├── embeddings/            # LLMClient / EmbeddingClient（DashScope）
+│   └── run_report.py          # CLI 研报生成入口
 ├── research/                  # 研究脚本（因子验证、ETF 回测等）
 ├── scheduler/                 # 统一任务调度器
 │   ├── cli.py                 # CLI 入口 (list/run/status/summary)
@@ -192,6 +208,8 @@ myTrader/
 │   ├── single_scan/           # 个股扫描产出
 │   ├── svd_monitor/           # SVD 监控产出
 │   ├── sw_rotation/           # 申万轮动产出
+│   ├── rag/                   # 研报产出
+│   │   └── reports/           # 生成的 Markdown 研报 + index.json
 │   └── research/              # 研究脚本产出
 │
 ├── .env                       # 环境配置 (不提交)
