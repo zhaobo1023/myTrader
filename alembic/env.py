@@ -28,6 +28,18 @@ target_metadata = Base.metadata
 # configparser interpolation issues with % in URL-encoded passwords
 DATABASE_URL = settings.sync_database_url
 
+# Only include tables that are registered in our ORM models.
+# This prevents Alembic from generating DROP TABLE for production tables
+# that exist in the DB but are not managed by this ORM.
+_managed_tables = set(target_metadata.tables.keys())
+
+
+def include_object(obj, name, type_, reflected, compare_to):
+    """Filter: only manage tables/indexes that belong to our ORM models."""
+    if type_ == 'table':
+        return name in _managed_tables
+    return True
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
@@ -36,6 +48,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -51,7 +64,9 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            include_object=include_object,
         )
 
         with context.begin_transaction():

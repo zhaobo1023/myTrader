@@ -8,6 +8,9 @@ from api.models.usage_log import UsageLog
 from api.models.api_key import ApiKey
 from api.models.strategy import Strategy
 from api.models.backtest_job import BacktestJob, JobStatus
+from api.models.watchlist import UserWatchlist
+from api.models.scan_result import UserScanResult
+from api.models.notification_config import UserNotificationConfig
 
 __all__ = [
     'User', 'UserTier', 'UserRole',
@@ -16,4 +19,7 @@ __all__ = [
     'ApiKey',
     'Strategy',
     'BacktestJob', 'JobStatus',
+    'UserWatchlist',
+    'UserScanResult',
+    'UserNotificationConfig',
 ]
