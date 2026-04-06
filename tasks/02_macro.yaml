@@ -20,3 +20,13 @@ tasks:
     depends_on:
       - fetch_macro_data
     params: {}
+
+  - id: calc_market_overview
+    name: "Compute market overview signals"
+    module: data_analyst.market_overview.calculator
+    func: compute_all
+    tags: [macro, market_overview, daily]
+    schedule: "after_gate"
+    depends_on:
+      - fetch_macro_data
+    params: {}

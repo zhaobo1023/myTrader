@@ -80,3 +80,67 @@ export const marketApi = {
   search: (query: string) =>
     apiClient.get<StockSearchResult[]>('/api/market/search', { params: { query } }),
 };
+
+// ============================================================
+// Market Overview types
+// ============================================================
+
+export interface SeriesPoint {
+  date: string;
+  value?: number;
+  [key: string]: number | string | null | undefined;
+}
+
+export interface SignalSection {
+  available: boolean;
+  last_date?: string;
+  signal?: string;
+  signal_text?: string;
+  series?: SeriesPoint[];
+  [key: string]: unknown;
+}
+
+export interface TriPrismSection {
+  available: boolean;
+  last_date?: string;
+  signals?: { boll: number; ma5y: number; momentum40d: number };
+  total?: number;
+  direction?: string;
+  strength?: string;
+  name_a?: string;
+  name_b?: string;
+  series?: SeriesPoint[];
+}
+
+export interface MacroPulse {
+  qvix?: { value: number | null; signal: string; signal_text: string };
+  north_flow?: { today: number | null; sum_5d: number | null; signal: string };
+  m2_yoy?: { value: number | null };
+  pmi_mfg?: { value: number | null; signal: string; signal_text: string };
+  ah_premium?: { value: number | null; signal: string; signal_text: string };
+  available?: boolean;
+}
+
+export interface MarketOverviewSummary {
+  updated_at: string;
+  anchor_5y: SignalSection;
+  stock_bond_spread: SignalSection;
+  scale_rotation: TriPrismSection;
+  style_rotation: TriPrismSection;
+  dividend: SignalSection & {
+    yield_spread?: SignalSection;
+    rel_return_40d?: SignalSection;
+    ah_rel_return_40d?: SignalSection;
+  };
+  equity_fund_rolling: SignalSection;
+  macro_pulse: MacroPulse;
+  market_turnover: SignalSection;
+  error?: string;
+}
+
+export const marketOverviewApi = {
+  summary: () =>
+    apiClient.get<MarketOverviewSummary>('/api/market-overview/summary'),
+  invalidateCache: () =>
+    apiClient.delete('/api/market-overview/cache'),
+};
