@@ -1,10 +1,10 @@
 import json
-import random
+import secrets
 import string
-from datetime import datetime
+from datetime import datetime, timezone
 import redis.asyncio as aioredis
 
-CODE_TTL = 300
+CODE_TTL = 5 * 60  # 5 minutes
 CODE_PREFIX = "skill:device:"
 
 
@@ -13,15 +13,16 @@ class DeviceAuthService:
         self.redis = redis
 
     def _make_code(self) -> str:
-        return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        alphabet = string.ascii_uppercase + string.digits
+        return "".join(secrets.choice(alphabet) for _ in range(6))
 
     async def create_code(self) -> dict:
         code = self._make_code()
-        payload = json.dumps({"user_id": None, "created_at": datetime.utcnow().isoformat()})
+        payload = json.dumps({"user_id": None, "created_at": datetime.now(timezone.utc).isoformat()})
         await self.redis.setex(f"{CODE_PREFIX}{code}", CODE_TTL, payload)
         return {"code": code, "expires_in": CODE_TTL}
 
-    async def poll_code(self, code: str):
+    async def poll_code(self, code: str) -> int | None:
         raw = await self.redis.get(f"{CODE_PREFIX}{code}")
         if raw is None:
             return None
@@ -30,13 +31,17 @@ class DeviceAuthService:
 
     async def verify_code(self, code: str, user_id: int) -> bool:
         key = f"{CODE_PREFIX}{code}"
-        raw = await self.redis.get(key)
-        if raw is None:
-            return False
-        data = json.loads(raw)
-        if data["user_id"] is not None:
-            return False
-        data["user_id"] = user_id
-        ttl = await self.redis.ttl(key)
-        await self.redis.setex(key, max(ttl, 1), json.dumps(data))
-        return True
+        lua = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local ok, data = pcall(cjson.decode, raw)
+if not ok then return 0 end
+if data['user_id'] ~= cjson.null and data['user_id'] ~= false then return 0 end
+data['user_id'] = tonumber(ARGV[1])
+local ttl = redis.call('TTL', KEYS[1])
+if ttl <= 0 then ttl = 1 end
+redis.call('SETEX', KEYS[1], ttl, cjson.encode(data))
+return 1
+"""
+        result = await self.redis.eval(lua, 1, key, str(user_id))
+        return bool(result)
