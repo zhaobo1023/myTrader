@@ -17,7 +17,7 @@ from api.models.user import User, UserRole
 from api.services.llm_quota import LLMQuotaService, QuotaExceeded
 from api.services.skill_permissions import PermissionDenied, SkillPermissions
 from api.services.skill_actions import stock_query, tech_scan
-from api.services.skill_router import SkillRouter
+from api.services.skill_router import CURRENT_GATEWAY_VERSION, MIN_SUPPORTED_VERSION, SkillRouter
 
 router = APIRouter(prefix="/api/skill", tags=["skill-gateway"])
 
@@ -42,7 +42,6 @@ _ACTION_HANDLERS: dict[tuple[str, str], Any] = {
 class ExecuteRequest(BaseModel):
     skill_id: str
     action: str
-    version: int = 1
     params: dict[str, Any] = {}
 
 
@@ -51,7 +50,7 @@ async def _execute_core(
     current_user: User,
     db: AsyncSession,
     redis: aioredis.Redis,
-):
+) -> dict | JSONResponse:
     """Shared execution logic for v1 and v2."""
     try:
         SkillPermissions.check(current_user, req.skill_id, req.action)
@@ -84,7 +83,6 @@ async def _execute_core(
     return {
         "skill_id": req.skill_id,
         "action": req.action,
-        "version": req.version,
         "data": data,
         "meta": {
             "quota_used": quota_status["used"],
@@ -111,7 +109,18 @@ async def execute_v2(
     redis: aioredis.Redis = Depends(get_redis),
     x_skill_version: int = Header(default=2, alias="X-Skill-Version"),
 ):
-    warnings = _skill_router.get_warnings(x_skill_version, req.skill_id)
+    if not _skill_router.is_supported(x_skill_version):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Client version {x_skill_version} is no longer supported. "
+                   f"Minimum supported version: {MIN_SUPPORTED_VERSION}.",
+        )
+    if x_skill_version > CURRENT_GATEWAY_VERSION + 10:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unrecognized client version {x_skill_version}.",
+        )
+    warnings = _skill_router.get_warnings(x_skill_version)
     result = await _execute_core(req, current_user, db, redis)
     # result could be a JSONResponse (429) - pass through as-is
     if isinstance(result, dict):

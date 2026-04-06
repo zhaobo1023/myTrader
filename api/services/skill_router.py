@@ -11,7 +11,8 @@ class SkillRouter:
     def __init__(self, current_version: int = CURRENT_GATEWAY_VERSION):
         self.current_version = current_version
 
-    def get_warnings(self, client_version: int, skill_id: str) -> list[str]:
+    def get_warnings(self, client_version: int) -> list[str]:
+        # skill_id reserved for future per-skill deprecation policy
         """Return warnings for the client based on version mismatch."""
         if client_version < MIN_SUPPORTED_VERSION:
             return [

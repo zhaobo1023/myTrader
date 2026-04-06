@@ -6,13 +6,13 @@ from api.services.skill_router import SkillRouter
 
 def test_v1_client_gets_outdated_warning():
     router = SkillRouter(current_version=2)
-    warnings = router.get_warnings(client_version=1, skill_id="stock-query")
+    warnings = router.get_warnings(client_version=1)
     assert len(warnings) == 1
     assert "outdated" in warnings[0].lower()
 
 def test_v2_client_no_warnings():
     router = SkillRouter(current_version=2)
-    warnings = router.get_warnings(client_version=2, skill_id="stock-query")
+    warnings = router.get_warnings(client_version=2)
     assert warnings == []
 
 def test_unsupported_version_is_not_supported():
@@ -21,9 +21,9 @@ def test_unsupported_version_is_not_supported():
 
 def test_below_minimum_version_gets_unsupported_warning():
     router = SkillRouter(current_version=2)
-    warnings = router.get_warnings(client_version=0, skill_id="stock-query")
+    warnings = router.get_warnings(client_version=0)
     assert len(warnings) == 1
-    assert "no longer supported" in warnings[0].lower() or "supported" in warnings[0].lower()
+    assert "no longer supported" in warnings[0].lower()
 
 def test_min_supported_version_is_supported():
     router = SkillRouter(current_version=2)
@@ -60,7 +60,7 @@ async def test_v2_execute_includes_warnings_for_old_skill_version():
                         "X-Skill-Version": "1",
                     },
                     json={"skill_id": "stock-query", "action": "search",
-                          "version": 1, "params": {"query": "test"}},
+                          "params": {"query": "test"}},
                 )
     finally:
         app.dependency_overrides.pop(get_current_user, None)
@@ -98,7 +98,7 @@ async def test_v1_endpoint_still_works_and_has_no_warnings():
                     "/api/skill/v1/execute",
                     headers={"Authorization": "Bearer fake"},
                     json={"skill_id": "stock-query", "action": "search",
-                          "version": 1, "params": {"query": "test"}},
+                          "params": {"query": "test"}},
                 )
     finally:
         app.dependency_overrides.pop(get_current_user, None)
@@ -137,7 +137,7 @@ async def test_v2_current_version_client_no_warnings():
                         "X-Skill-Version": "2",
                     },
                     json={"skill_id": "stock-query", "action": "search",
-                          "version": 2, "params": {"query": "test"}},
+                          "params": {"query": "test"}},
                 )
     finally:
         app.dependency_overrides.pop(get_current_user, None)
@@ -145,3 +145,37 @@ async def test_v2_current_version_client_no_warnings():
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("warnings", []) == []
+
+
+@pytest.mark.asyncio
+async def test_v2_unsupported_version_returns_400():
+    """X-Skill-Version: 0 must be rejected with HTTP 400."""
+    from httpx import AsyncClient, ASGITransport
+    from unittest.mock import MagicMock
+    from api.main import app
+    from api.middleware.auth import get_current_user
+    from api.models.user import User, UserTier, UserRole
+
+    pro_user = MagicMock(spec=User)
+    pro_user.id = 1
+    pro_user.email = "pro@example.com"
+    pro_user.tier = UserTier.PRO
+    pro_user.role = UserRole.USER
+    pro_user.is_active = True
+
+    app.dependency_overrides[get_current_user] = lambda: pro_user
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post(
+                "/api/skill/v2/execute",
+                headers={
+                    "Authorization": "Bearer fake",
+                    "X-Skill-Version": "0",
+                },
+                json={"skill_id": "stock-query", "action": "search", "params": {"query": "test"}},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert resp.status_code == 400
+    assert "no longer supported" in resp.json()["detail"].lower()
