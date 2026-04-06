@@ -12,6 +12,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+# Allow Next.js source lib directories
+!web/src/lib/
 parts/
 sdist/
 var/
@@ -64,10 +66,11 @@ htmlcov/
 # QMT
 *.qmt
 
-# Secrets
+# Secrets & TLS certs (generated per machine)
 *.pem
 *.key
 secrets/
+certs/
 
 # Output (all generated artifacts)
 output/

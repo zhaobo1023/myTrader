@@ -30,9 +30,9 @@ logger = logging.getLogger('myTrader.api')
 router = APIRouter(prefix='/api/auth', tags=['auth'])
 
 
-@router.post('/register', response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post('/register', response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    """Register a new user."""
+    """Register a new user and return JWT tokens (auto-login after register)."""
     # Check if email already exists
     result = await db.execute(select(User).where(User.email == req.email))
     existing = result.scalar_one_or_none()
@@ -53,8 +53,16 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     await db.flush()
     await db.refresh(user)
 
+    # Issue tokens immediately (register = create + auto-login)
+    token_data = {'sub': str(user.id), 'email': user.email, 'tier': user.tier.value}
+    access_token = create_access_token(token_data)
+    refresh_token = create_refresh_token(token_data)
+
     logger.info('[AUTH] New user registered: id=%s email=%s', user.id, user.email)
-    return _user_to_response(user)
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+    )
 
 
 @router.post('/login', response_model=TokenResponse)

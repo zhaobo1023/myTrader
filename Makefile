@@ -1,4 +1,4 @@
-.PHONY: dev prod build down logs api-test redis-cli mysql-cli clean help api-local api-logs api-errors api-access
+.PHONY: dev prod build down logs api-test redis-cli mysql-cli clean help api-local api-https gen-cert trust-cert api-logs api-errors api-access
 
 # ============================================================
 # myTrader Makefile
@@ -53,6 +53,27 @@ api-local: ## Run FastAPI locally (LOG_LEVEL=DEBUG, port 8001)
 	PYTHONPATH=. LOG_LEVEL=$${LOG_LEVEL:-DEBUG} DB_ENV=$${DB_ENV:-online} \
 	uvicorn api.main:app --reload --host 0.0.0.0 --port $${API_PORT:-8001} \
 	--log-level $$(echo $${LOG_LEVEL:-debug} | tr '[:upper:]' '[:lower:]')
+
+api-https: ## Run FastAPI locally with HTTPS (requires certs/localhost.key + certs/localhost.crt)
+	@test -f certs/localhost.key || (echo "Run 'make gen-cert' first"; exit 1)
+	PYTHONPATH=. LOG_LEVEL=$${LOG_LEVEL:-DEBUG} DB_ENV=$${DB_ENV:-local} \
+	uvicorn api.main:app --reload --host 0.0.0.0 --port $${API_PORT:-8443} \
+	--ssl-keyfile certs/localhost.key --ssl-certfile certs/localhost.crt \
+	--log-level $$(echo $${LOG_LEVEL:-debug} | tr '[:upper:]' '[:lower:]')
+
+gen-cert: ## Generate self-signed TLS cert for localhost (valid 825 days)
+	@mkdir -p certs
+	openssl req -x509 -nodes -days 825 -newkey rsa:2048 \
+	  -keyout certs/localhost.key -out certs/localhost.crt \
+	  -subj "/CN=localhost/O=myTrader Dev" \
+	  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+	@echo "cert generated: certs/localhost.crt"
+
+trust-cert: ## Add self-signed cert to macOS system trust store (requires sudo)
+	@test -f certs/localhost.crt || (echo "Run 'make gen-cert' first"; exit 1)
+	sudo security add-trusted-cert -d -r trustRoot \
+	  -k /Library/Keychains/System.keychain certs/localhost.crt
+	@echo "cert trusted. Restart browser to take effect."
 
 api-logs: ## Tail the app log
 	tail -f logs/app.log
