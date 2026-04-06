@@ -8,28 +8,30 @@ class PermissionDenied(Exception):
 # skill_id -> {action -> min_tier}
 SKILL_ACL: dict[str, dict[str, str]] = {
     "stock-query": {
-        "search": "free",
+        "search": UserTier.FREE.value,
     },
     "market-overview": {
-        "daily": "free",
+        "daily": UserTier.FREE.value,
     },
     "tech-scan": {
-        "run": "pro",
+        "run": UserTier.PRO.value,
     },
     "fundamental-report": {
-        "generate": "pro",
+        "generate": UserTier.PRO.value,
     },
 }
 
+# For admin users (role == ADMIN), quota is unlimited (-1).
+# Callers should check role before calling TIER_LLM_QUOTA.get(user.tier.value, 0).
 # tier -> monthly LLM call quota (-1 = unlimited)
 TIER_LLM_QUOTA: dict[str, int] = {
-    "free": 0,
-    "pro": 100,
-    "admin": -1,
+    UserTier.FREE.value: 0,
+    UserTier.PRO.value: 100,
 }
 
-_TIER_RANK = {UserTier.FREE: 0, UserTier.PRO: 1}
-_TIER_BY_STR = {"free": UserTier.FREE, "pro": UserTier.PRO}
+# Build tier ranking dynamically from enum order to stay in sync with UserTier changes
+_TIER_RANK: dict[UserTier, int] = {tier: i for i, tier in enumerate(UserTier)}
+_TIER_BY_STR: dict[str, UserTier] = {tier.value: tier for tier in UserTier}
 
 
 class SkillPermissions:
@@ -44,8 +46,13 @@ class SkillPermissions:
         if action not in actions:
             raise PermissionDenied(f"Unknown action '{action}' for skill '{skill_id}'")
         required_str = actions[action]
-        required = _TIER_BY_STR[required_str]
-        if _TIER_RANK[user.tier] < _TIER_RANK[required]:
+        try:
+            required = _TIER_BY_STR[required_str]
+            user_rank = _TIER_RANK[user.tier]
+            required_rank = _TIER_RANK[required]
+        except KeyError as e:
+            raise PermissionDenied(f"Unknown tier in permission check: {e}") from e
+        if user_rank < required_rank:
             raise PermissionDenied(
                 f"Skill '{skill_id}:{action}' requires tier '{required_str}', "
                 f"user has '{user.tier.value}'"
