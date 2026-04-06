@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_db, get_redis
 from api.middleware.auth import get_current_user
-from api.models.user import User
+from api.models.user import User, UserRole
+from api.services.llm_quota import LLMQuotaService
 from api.services.skill_permissions import PermissionDenied, SkillPermissions
 from api.services.skill_actions import stock_query
 
@@ -59,10 +60,19 @@ async def execute_v1(
     ctx = ExecuteContext(params=req.params, db=db, user=current_user, redis=redis)
     data = await handler(ctx)
 
+    quota_svc = LLMQuotaService(redis)
+    effective_tier = current_user.tier.value
+    quota_status = await quota_svc.get_status(current_user.id, effective_tier)
+    if current_user.role == UserRole.ADMIN:
+        quota_status = {"used": quota_status["used"], "limit": -1, "remaining": -1}
+
     return {
         "skill_id": req.skill_id,
         "action": req.action,
         "version": req.version,
         "data": data,
-        "meta": {"quota_used": None, "quota_remaining": None},
+        "meta": {
+            "quota_used": quota_status["used"],
+            "quota_remaining": quota_status["remaining"],
+        },
     }
