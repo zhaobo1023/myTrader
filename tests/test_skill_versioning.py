@@ -19,6 +19,12 @@ def test_unsupported_version_is_not_supported():
     router = SkillRouter(current_version=2)
     assert not router.is_supported(0)
 
+def test_below_minimum_version_gets_unsupported_warning():
+    router = SkillRouter(current_version=2)
+    warnings = router.get_warnings(client_version=0, skill_id="stock-query")
+    assert len(warnings) == 1
+    assert "no longer supported" in warnings[0].lower() or "supported" in warnings[0].lower()
+
 def test_min_supported_version_is_supported():
     router = SkillRouter(current_version=2)
     assert router.is_supported(1)
