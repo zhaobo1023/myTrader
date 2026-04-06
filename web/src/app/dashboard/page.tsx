@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import axios from 'axios';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/lib/store';
 import Navbar from '@/components/layout/Navbar';
@@ -70,6 +71,7 @@ function StockCard({
             onClick={() => onRemove(item.stock_code)}
             className="text-gray-300 hover:text-red-400 transition-colors text-xs ml-2 mt-0.5"
             title="Remove from watchlist"
+            aria-label={`Remove ${item.stock_name} from watchlist`}
           >
             x
           </button>
@@ -128,7 +130,7 @@ function SearchBar({ onAdd }: { onAdd: (code: string, name: string) => Promise<v
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setQuery(val);
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -149,9 +151,9 @@ function SearchBar({ onAdd }: { onAdd: (code: string, name: string) => Promise<v
         setSearching(false);
       }
     }, 300);
-  };
+  }, []); // no external deps - timerRef is stable, setters are stable
 
-  const handleAdd = async (stock: StockSearchResult) => {
+  const handleAdd = useCallback(async (stock: StockSearchResult) => {
     setAdding(stock.stock_code);
     try {
       await onAdd(stock.stock_code, stock.stock_name);
@@ -161,7 +163,7 @@ function SearchBar({ onAdd }: { onAdd: (code: string, name: string) => Promise<v
     } finally {
       setAdding(null);
     }
-  };
+  }, [onAdd]);
 
   return (
     <div ref={containerRef} className="relative w-full max-w-xl">
@@ -237,15 +239,15 @@ export default function DashboardPage() {
   });
 
   // Build scan result map keyed by stock_code
-  const scanMap: Record<string, ScanResult> = {};
-  if (scanResults) {
-    for (const r of scanResults) {
-      scanMap[r.stock_code] = r;
-    }
-  }
+  const scanMap = useMemo<Record<string, ScanResult>>(() => {
+    if (!scanResults) return {};
+    return Object.fromEntries(scanResults.map((r) => [r.stock_code, r]));
+  }, [scanResults]);
 
   // Latest scan date
-  const latestScanDate = scanResults?.[0]?.scan_date;
+  const latestScanDate = scanResults && scanResults.length > 0
+    ? scanResults.reduce((max, r) => r.scan_date > max ? r.scan_date : max, scanResults[0].scan_date)
+    : undefined;
 
   // Add to watchlist mutation
   const addMutation = useMutation({
@@ -267,10 +269,11 @@ export default function DashboardPage() {
     try {
       await addMutation.mutateAsync({ code, name });
     } catch (err: unknown) {
-      const e = err as { response?: { status?: number } };
-      if (e?.response?.status === 409) {
+      if (axios.isAxiosError(err) && err.response?.status === 409) {
         // Already in watchlist - silently ignore
+        return;
       }
+      throw err;
     }
   }, [addMutation]);
 
