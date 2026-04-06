@@ -12,7 +12,11 @@ const navItems = [
   { href: '/strategy', label: 'Strategy' },
 ];
 
-export default function Navbar() {
+interface NavbarProps {
+  searchBar?: React.ReactNode;
+}
+
+export default function Navbar({ searchBar }: NavbarProps) {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
 
@@ -40,6 +44,10 @@ export default function Navbar() {
               ))}
             </div>
           </div>
+
+          {searchBar && (
+            <div className="flex-1 max-w-xl mx-4">{searchBar}</div>
+          )}
 
           <div className="flex items-center space-x-4">
             {user && (

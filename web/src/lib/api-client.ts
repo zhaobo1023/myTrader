@@ -32,3 +32,51 @@ apiClient.interceptors.response.use(
 );
 
 export default apiClient;
+
+// Types (export for use in pages)
+export interface WatchlistItem {
+  id: number;
+  stock_code: string;
+  stock_name: string;
+  note?: string;
+  added_at: string;
+}
+
+export interface ScanResult {
+  id: number;
+  stock_code: string;
+  stock_name: string;
+  scan_date: string;
+  score: number | null;
+  score_label: string | null;
+  max_severity: string;
+  signals: Array<{ type: string; severity: string }> | null;
+  dimension_scores: Record<string, number> | null;
+  notified: boolean;
+  created_at: string;
+}
+
+export interface StockSearchResult {
+  stock_code: string;
+  stock_name: string;
+  market?: string;
+  industry?: string;
+}
+
+export const watchlistApi = {
+  list: () => apiClient.get<{ items: WatchlistItem[]; total: number }>('/api/watchlist'),
+  add: (stock_code: string, stock_name: string, note?: string) =>
+    apiClient.post<WatchlistItem>('/api/watchlist', { stock_code, stock_name, note }),
+  remove: (stock_code: string) =>
+    apiClient.delete(`/api/watchlist/${stock_code}`),
+};
+
+export const scanResultsApi = {
+  list: (params?: { scan_date?: string; severity?: string }) =>
+    apiClient.get<ScanResult[]>('/api/scan-results', { params }),
+};
+
+export const marketApi = {
+  search: (query: string) =>
+    apiClient.get<StockSearchResult[]>('/api/market/search', { params: { query } }),
+};
