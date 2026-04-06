@@ -86,6 +86,10 @@ def search_announcements(stock_code: str, stock_name: str,
                 continue
             if ann_type == "半年报" and "半年度报告" not in title:
                 continue
+            if ann_type == "一季报" and "第一季度报告" not in title:
+                continue
+            if ann_type == "三季报" and "第三季度报告" not in title:
+                continue
 
             adjunct_url = ann.get("adjunctUrl", "")
             if not adjunct_url:
