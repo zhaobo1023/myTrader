@@ -15,27 +15,34 @@ async def test_create_device_code_returns_6_char_code():
 
 @pytest.mark.asyncio
 async def test_poll_code_returns_none_when_pending():
+    """Key exists but user_id is None - Lua returns {0, raw_json}."""
     redis = AsyncMock()
-    redis.get = AsyncMock(return_value=json.dumps({"user_id": None, "created_at": "2026-04-06T00:00:00"}))
+    raw_json = json.dumps({"user_id": None, "created_at": "2026-04-06T00:00:00"})
+    # Lua returns [0, raw_json] when pending
+    redis.eval = AsyncMock(return_value=[0, raw_json])
     svc = DeviceAuthService(redis)
     result = await svc.poll_code("ABC123")
     assert result is None
 
 @pytest.mark.asyncio
 async def test_poll_code_returns_user_id_when_verified():
+    """Key exists with user_id set - Lua returns {1, "42"} and deletes key."""
     redis = AsyncMock()
-    redis.get = AsyncMock(return_value=json.dumps({"user_id": 42, "created_at": "2026-04-06T00:00:00"}))
+    # Lua returns [1, "42"] when verified (key deleted atomically)
+    redis.eval = AsyncMock(return_value=[1, "42"])
     svc = DeviceAuthService(redis)
     result = await svc.poll_code("ABC123")
     assert result == 42
 
 @pytest.mark.asyncio
-async def test_poll_code_returns_none_when_expired():
+async def test_poll_code_returns_missing_when_expired():
+    """Key does not exist - Lua returns {0, ""} indicating missing."""
     redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
+    # Lua returns [0, ""] when key is missing
+    redis.eval = AsyncMock(return_value=[0, ""])
     svc = DeviceAuthService(redis)
     result = await svc.poll_code("ZZZZZZ")
-    assert result is None
+    assert result == "missing"
 
 @pytest.mark.asyncio
 async def test_verify_code_returns_true_on_success():

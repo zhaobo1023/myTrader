@@ -22,12 +22,42 @@ class DeviceAuthService:
         await self.redis.setex(f"{CODE_PREFIX}{code}", CODE_TTL, payload)
         return {"code": code, "expires_in": CODE_TTL}
 
-    async def poll_code(self, code: str) -> int | None:
-        raw = await self.redis.get(f"{CODE_PREFIX}{code}")
-        if raw is None:
-            return None
-        data = json.loads(raw)
-        return data.get("user_id")
+    async def poll_code(self, code: str):
+        """
+        Atomically check and conditionally delete a device code.
+
+        Returns:
+            "missing" - code does not exist (expired or invalid)
+            None      - code exists but not yet verified (pending)
+            int       - user_id after verification (key is deleted atomically)
+        """
+        key = f"{CODE_PREFIX}{code}"
+        # Lua script: get the key; if not found return {0, ""}.
+        # If found but user_id is null/false (pending), return {0, raw_json}.
+        # If found and user_id is a number, delete the key and return {1, user_id_string}.
+        lua = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+    return {0, ''}
+end
+local ok, data = pcall(cjson.decode, raw)
+if not ok then
+    return {0, ''}
+end
+local uid = data['user_id']
+if uid == cjson.null or uid == false or uid == nil then
+    return {0, raw}
+end
+redis.call('DEL', KEYS[1])
+return {1, tostring(uid)}
+"""
+        result = await self.redis.eval(lua, 1, key)
+        found, value = result[0], result[1]
+        if not found:
+            if not value:
+                return "missing"  # key did not exist
+            return None  # key exists but pending
+        return int(value)  # verified, key deleted atomically
 
     async def verify_code(self, code: str, user_id: int) -> bool:
         key = f"{CODE_PREFIX}{code}"
