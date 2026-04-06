@@ -131,3 +131,8 @@ class Settings(BaseSettings):
 
 # Singleton instance
 settings = Settings()
+
+
+def get_settings() -> Settings:
+    """Return the singleton settings instance."""
+    return settings

@@ -26,3 +26,17 @@ celery_app.conf.update(
 
 # Auto-discover tasks
 celery_app.autodiscover_tasks(['api.tasks'])
+
+from celery.schedules import crontab
+
+celery_app.conf.beat_schedule = {
+    'daily-watchlist-scan': {
+        'task': 'watchlist_scan.scan_all_users',
+        'schedule': crontab(hour=16, minute=30, day_of_week='1-5'),
+    },
+    'daily-expire-subscriptions': {
+        'task': 'expire_subscriptions',
+        'schedule': crontab(hour=0, minute=5),
+    },
+}
+celery_app.conf.timezone = 'Asia/Shanghai'

@@ -66,6 +66,39 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ============================================================
+  # Celery Worker - Async Task Execution
+  # ============================================================
+  celery-worker:
+    build: .
+    command: celery -A api.tasks.celery_app worker -l info -c 4 -Q default
+    env_file: .env
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - ./output:/app/output
+    restart: unless-stopped
+
+  # ============================================================
+  # Celery Beat - Periodic Task Scheduler
+  # ============================================================
+  celery-beat:
+    build: .
+    command: celery -A api.tasks.celery_app beat -l info --scheduler celery.beat.PersistentScheduler
+    env_file: .env
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    restart: unless-stopped
+
 volumes:
   redis_data:
   nginx_logs:
