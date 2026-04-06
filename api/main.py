@@ -17,6 +17,8 @@ from api.middleware.access_log import AccessLogMiddleware
 from api.middleware.metrics import MetricsMiddleware, get_metrics
 from api.middleware.rate_limit import RateLimitMiddleware
 from api.routers import health, auth, market, analysis, strategy, rag, portfolio, admin, api_keys, subscription, research
+from api.routers.watchlist import router as watchlist_router
+from api.routers.notification import router as notification_router
 
 logger = logging.getLogger('myTrader.api')
 
@@ -103,6 +105,8 @@ app.include_router(admin.router)
 app.include_router(api_keys.router)
 app.include_router(subscription.router)
 app.include_router(research.router)
+app.include_router(watchlist_router)
+app.include_router(notification_router)
 
 
 @app.get('/')
