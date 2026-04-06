@@ -7,15 +7,16 @@ from typing import Any
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_db, get_redis
 from api.middleware.auth import get_current_user
 from api.models.user import User, UserRole
-from api.services.llm_quota import LLMQuotaService
+from api.services.llm_quota import LLMQuotaService, QuotaExceeded
 from api.services.skill_permissions import PermissionDenied, SkillPermissions
-from api.services.skill_actions import stock_query
+from api.services.skill_actions import stock_query, tech_scan
 
 router = APIRouter(prefix="/api/skill", tags=["skill-gateway"])
 
@@ -31,6 +32,7 @@ class ExecuteContext:
 # Registry: (skill_id, action) -> handler(ctx) -> dict
 _ACTION_HANDLERS: dict[tuple[str, str], Any] = {
     ("stock-query", "search"): lambda ctx: stock_query.search(ctx.params, ctx.db),
+    ("tech-scan", "run"): lambda ctx: tech_scan.run(ctx.params, ctx.db, ctx.user, ctx.redis),
 }
 
 
@@ -58,7 +60,17 @@ async def execute_v1(
         raise HTTPException(404, f"No handler for {req.skill_id}:{req.action}")
 
     ctx = ExecuteContext(params=req.params, db=db, user=current_user, redis=redis)
-    data = await handler(ctx)
+    try:
+        data = await handler(ctx)
+    except QuotaExceeded as e:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "quota_exceeded",
+                "detail": str(e),
+                "reset_at": e.reset_at,
+            },
+        )
 
     quota_svc = LLMQuotaService(redis)
     effective_tier = current_user.tier.value

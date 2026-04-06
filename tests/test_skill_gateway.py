@@ -4,7 +4,7 @@ Tests for /api/skill/v1/execute gateway endpoint.
 """
 import pytest
 from httpx import AsyncClient, ASGITransport
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from api.main import app
 from api.middleware.auth import get_current_user
@@ -101,3 +101,39 @@ async def test_execute_v1_unknown_skill_returns_404():
         app.dependency_overrides.clear()
 
     assert resp.status_code in (403, 404)
+
+
+@pytest.mark.asyncio
+async def test_execute_v1_returns_429_when_quota_exceeded():
+    """Pro user hits LLM quota -> 429 with quota_exceeded error."""
+    from api.middleware.auth import get_current_user as real_get_current_user
+    from api.services.llm_quota import QuotaExceeded
+
+    pro_user = make_mock_user(UserTier.PRO)
+    app.dependency_overrides[real_get_current_user] = lambda: pro_user
+    try:
+        with patch(
+            "api.services.skill_actions.tech_scan.LLMQuotaService"
+        ) as MockQuota:
+            instance = MockQuota.return_value
+            instance.check_and_increment = AsyncMock(
+                side_effect=QuotaExceeded("pro", 100, "2026-05-01")
+            )
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                resp = await ac.post(
+                    "/api/skill/v1/execute",
+                    headers={"Authorization": "Bearer fake-token"},
+                    json={
+                        "skill_id": "tech-scan",
+                        "action": "run",
+                        "version": 1,
+                        "params": {"code": "000001"},
+                    },
+                )
+    finally:
+        app.dependency_overrides.pop(real_get_current_user, None)
+
+    assert resp.status_code == 429
+    body = resp.json()
+    assert body["error"] == "quota_exceeded"
+    assert body["reset_at"] == "2026-05-01"
