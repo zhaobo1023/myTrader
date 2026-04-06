@@ -249,6 +249,7 @@ class DataFetcher:
         
         # 尝试从不同表获取名称
         possible_queries = [
+            f"SELECT stock_code, stock_name FROM trade_stock_basic WHERE stock_code IN ({placeholders})",
             f"SELECT stock_code, stock_name FROM trade_stock_info WHERE stock_code IN ({placeholders})",
             f"SELECT stock_code, name as stock_name FROM stock_basic WHERE stock_code IN ({placeholders})",
             f"SELECT stock_code, stock_name FROM trade_stock_daily WHERE stock_code IN ({placeholders}) AND stock_name IS NOT NULL GROUP BY stock_code ORDER BY trade_date DESC",

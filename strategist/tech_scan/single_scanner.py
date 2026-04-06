@@ -325,9 +325,19 @@ window.addEventListener('resize', function() {{ myChart.resize(); }});
 '''
 
         return f'''<div id="kline_chart" style="width:100%;height:600px;margin-bottom:20px;border:1px solid #ddd;border-radius:4px;"></div>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="https://cdn.bootcdn.net/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
 <script>
+if (typeof echarts === 'undefined') {{
+    var s = document.createElement('script');
+    s.src = 'https://unpkg.com/echarts@5/dist/echarts.min.js';
+    s.onload = function() {{ initChart(); }};
+    document.head.appendChild(s);
+}} else {{
+    initChart();
+}}
+function initChart() {{
 {echarts_js}
+}}
 </script>'''
 
     def _generate_text_report(self, code: str, stock_name: str, df: pd.DataFrame, latest: pd.Series, latest_date: str) -> str:
