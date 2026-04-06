@@ -22,6 +22,13 @@ from api.config import settings
 router = APIRouter(prefix="/api/skill/auth", tags=["skill-auth"])
 
 
+def _get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 class DeviceTokenRequest(BaseModel):
     code: str = Field(min_length=6, max_length=6, pattern=r"^[A-Z0-9]+$")
 
@@ -51,7 +58,7 @@ async def poll_device_token(
     Rate limited to 10 requests per minute per IP.
     """
     # Rate limit: 10 req/min per IP
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _get_client_ip(request)
     rate_key = f"skill:auth:poll_rate:{client_ip}"
     count = await redis.incr(rate_key)
     if count == 1:

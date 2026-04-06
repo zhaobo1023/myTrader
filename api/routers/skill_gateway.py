@@ -64,6 +64,8 @@ async def _execute_core(
     ctx = ExecuteContext(params=req.params, db=db, user=current_user, redis=redis)
     try:
         data = await handler(ctx)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"detail": str(e)})
     except QuotaExceeded as e:
         return JSONResponse(
             status_code=429,

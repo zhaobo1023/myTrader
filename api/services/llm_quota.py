@@ -13,6 +13,21 @@ from api.services.skill_permissions import TIER_LLM_QUOTA
 
 QUOTA_KEY_PREFIX = "skill:quota:llm:"
 
+_INCR_LUA = """
+local key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local expireat = tonumber(ARGV[2])
+local new_val = redis.call('INCR', key)
+if new_val == 1 then
+    redis.call('EXPIREAT', key, expireat)
+end
+if limit >= 0 and new_val > limit then
+    redis.call('DECR', key)
+    return -1
+end
+return new_val
+"""
+
 
 class QuotaExceeded(Exception):
     def __init__(self, tier: str, limit: int, reset_at: str):
@@ -69,16 +84,23 @@ class LLMQuotaService:
                 await self.redis.expireat(key, self._month_end_timestamp())
             return new_val
 
-        raw = await self.redis.get(key)
-        used = int(raw) if raw is not None else 0
-
-        if used >= limit:
-            raise QuotaExceeded(tier=tier, limit=limit, reset_at=self._reset_at())
-
-        new_val = await self.redis.incr(key)
-        if new_val == 1:
-            await self.redis.expireat(key, self._month_end_timestamp())
-        return new_val
+        # Atomic INCR with limit check via Lua
+        expireat = self._month_end_timestamp()
+        result = await self.redis.eval(
+            _INCR_LUA,
+            1,
+            key,
+            str(limit),
+            str(expireat),
+        )
+        if result == -1:
+            used = await self.redis.get(key)
+            raise QuotaExceeded(
+                tier=tier,
+                limit=limit,
+                reset_at=self._reset_at(),
+            )
+        return result
 
     async def get_status(self, user_id: int, tier: str) -> dict:
         """Return quota status dict with used/limit/remaining."""

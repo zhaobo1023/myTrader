@@ -7,9 +7,8 @@ from api.models.user import UserTier
 @pytest.mark.asyncio
 async def test_check_passes_for_pro_user_under_limit():
     redis = AsyncMock()
-    redis.get = AsyncMock(return_value="5")
-    redis.incr = AsyncMock(return_value=6)
-    redis.expireat = AsyncMock()
+    # Lua script returns new_val=6 (under limit)
+    redis.eval = AsyncMock(return_value=6)
     svc = LLMQuotaService(redis)
     result = await svc.check_and_increment(user_id=1, tier=UserTier.PRO.value)
     assert result == 6  # new count after increment
@@ -18,7 +17,9 @@ async def test_check_passes_for_pro_user_under_limit():
 @pytest.mark.asyncio
 async def test_check_raises_for_free_tier():
     redis = AsyncMock()
-    redis.get = AsyncMock(return_value="0")
+    # Lua script returns -1 when limit exceeded; get returns current count for error context
+    redis.eval = AsyncMock(return_value=-1)
+    redis.get = AsyncMock(return_value=b"0")
     svc = LLMQuotaService(redis)
     with pytest.raises(QuotaExceeded) as exc_info:
         await svc.check_and_increment(user_id=1, tier=UserTier.FREE.value)
@@ -29,7 +30,8 @@ async def test_check_raises_for_free_tier():
 @pytest.mark.asyncio
 async def test_check_raises_when_pro_limit_reached():
     redis = AsyncMock()
-    redis.get = AsyncMock(return_value="100")
+    redis.eval = AsyncMock(return_value=-1)
+    redis.get = AsyncMock(return_value=b"100")
     svc = LLMQuotaService(redis)
     with pytest.raises(QuotaExceeded):
         await svc.check_and_increment(user_id=1, tier=UserTier.PRO.value)
@@ -49,19 +51,17 @@ async def test_admin_tier_uses_role_bypass_not_quota():
 
 @pytest.mark.asyncio
 async def test_first_increment_sets_expireat():
-    """First call this month should set TTL to end of month."""
+    """Lua script is called with a future expireat timestamp as ARGV[2]."""
+    import time
     redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)  # first call
-    redis.incr = AsyncMock(return_value=1)
-    redis.expireat = AsyncMock()
+    redis.eval = AsyncMock(return_value=1)
     svc = LLMQuotaService(redis)
     await svc.check_and_increment(user_id=1, tier=UserTier.PRO.value)
-    redis.expireat.assert_called_once()
-    # TTL target should be a future timestamp
-    call_args = redis.expireat.call_args
-    timestamp = call_args[0][1]
-    import time
-    assert timestamp > time.time()
+    redis.eval.assert_called_once()
+    call_args = redis.eval.call_args[0]
+    # call signature: eval(script, numkeys, key, limit_str, expireat_str)
+    expireat_str = call_args[4]
+    assert int(expireat_str) > time.time()
 
 
 @pytest.mark.asyncio
