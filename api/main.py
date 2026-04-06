@@ -21,6 +21,7 @@ from api.routers.watchlist import router as watchlist_router
 from api.routers.notification import router as notification_router
 from api.routers.scan_results import router as scan_results_router
 from api.routers.skill_auth import router as skill_auth_router
+from api.routers.skill_gateway import router as skill_gw_router
 
 logger = logging.getLogger('myTrader.api')
 
@@ -111,6 +112,7 @@ app.include_router(watchlist_router)
 app.include_router(notification_router)
 app.include_router(scan_results_router)
 app.include_router(skill_auth_router)
+app.include_router(skill_gw_router)
 
 
 @app.get('/')
