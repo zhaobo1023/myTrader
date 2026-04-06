@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,8 +17,11 @@ from api.models.user import User, UserRole
 from api.services.llm_quota import LLMQuotaService, QuotaExceeded
 from api.services.skill_permissions import PermissionDenied, SkillPermissions
 from api.services.skill_actions import stock_query, tech_scan
+from api.services.skill_router import SkillRouter
 
 router = APIRouter(prefix="/api/skill", tags=["skill-gateway"])
+
+_skill_router = SkillRouter()
 
 
 @dataclass
@@ -43,13 +46,13 @@ class ExecuteRequest(BaseModel):
     params: dict[str, Any] = {}
 
 
-@router.post("/v1/execute")
-async def execute_v1(
+async def _execute_core(
     req: ExecuteRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-    redis: aioredis.Redis = Depends(get_redis),
+    current_user: User,
+    db: AsyncSession,
+    redis: aioredis.Redis,
 ):
+    """Shared execution logic for v1 and v2."""
     try:
         SkillPermissions.check(current_user, req.skill_id, req.action)
     except PermissionDenied as e:
@@ -88,3 +91,29 @@ async def execute_v1(
             "quota_remaining": quota_status["remaining"],
         },
     }
+
+
+@router.post("/v1/execute")
+async def execute_v1(
+    req: ExecuteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    return await _execute_core(req, current_user, db, redis)
+
+
+@router.post("/v2/execute")
+async def execute_v2(
+    req: ExecuteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+    x_skill_version: int = Header(default=2, alias="X-Skill-Version"),
+):
+    warnings = _skill_router.get_warnings(x_skill_version, req.skill_id)
+    result = await _execute_core(req, current_user, db, redis)
+    # result could be a JSONResponse (429) - pass through as-is
+    if isinstance(result, dict):
+        return {**result, "warnings": warnings}
+    return result
