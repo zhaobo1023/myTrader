@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, alias='API_PORT')
     api_workers: int = Field(default=2, alias='API_WORKERS')
     api_debug: bool = Field(default=True, alias='API_DEBUG')
+    api_base_url: str = Field(default='http://localhost:8000', alias='API_BASE_URL')
     app_name: str = 'myTrader API'
     app_version: str = '0.1.0'
     log_level: str = Field(default='INFO', alias='LOG_LEVEL')
