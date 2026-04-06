@@ -1,6 +1,7 @@
 # api/models/watchlist.py
 # -*- coding: utf-8 -*-
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Optional
 from sqlalchemy import Integer, String, DateTime, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from api.dependencies import Base
@@ -16,5 +17,5 @@ class UserWatchlist(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
     stock_code: Mapped[str] = mapped_column(String(20), nullable=False)
     stock_name: Mapped[str] = mapped_column(String(50), nullable=False, default='')
-    note: Mapped[str] = mapped_column(Text, nullable=True)
-    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
