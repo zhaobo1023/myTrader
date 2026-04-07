@@ -7,11 +7,23 @@ No DB calls. Takes a ScorerInput dataclass and returns a ScoreResult.
 
 Scoring formula:
     composite (0-100) = earnings_quality (0-40) + valuation_attractiveness (0-40) + growth_certainty (0-20)
+
+v2 变更：
+- ScorerInput 新增 industry_type 字段
+- _valuation 根据行业类型分流：
+    周期资源 -> PB-ROE 模型（不用 PE 分位）
+    金融地产 -> PB 主导
+    成长/消费/未知 -> 原 PE 分位逻辑
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from research.industry_classifier import IndustryType
 
 
 @dataclass
@@ -26,6 +38,8 @@ class ScorerInput:
     debt_ratio: float | None = None       # total_liab / total_assets
     revenue_yoy: float | None = None      # e.g. 0.15 = 15% growth
     profit_yoy: float | None = None
+    # v2: 行业类型，影响估值评分逻辑
+    industry_type: object = None          # IndustryType enum，None 时走默认 PE 逻辑
 
 
 @dataclass
@@ -144,19 +158,85 @@ class FundamentalScorer:
 
     def _valuation(self, inp: ScorerInput) -> int:
         """
-        0-40, start = 0.
+        0-40，根据行业类型选择不同的估值模型：
 
-        PE quantile:
-            score += round(25 - 35 * pe_quantile)
-            e.g. 0.0 -> +25, 0.5 -> +7, 1.0 -> -10
+        周期资源（CYCLICAL）：PB-ROE 模型
+            周期股"高 PE 买，低 PE 卖"，PE 分位在景气高点反而偏低，不可用。
+            改用：高 ROE + 低 PB 分位 = 景气期估值合理 = 高分
 
-        PB quantile:
-            score += round(10 - 15 * pb_quantile)
-            e.g. 0.0 -> +10, 0.5 -> +2, 1.0 -> -5
+        金融地产（FINANCIAL）：PB 主导
+            金融股 PE 波动大，PB 更稳定。
 
-        FCF yield:
-            >= 8% -> +5
-            >= 5% -> +2
+        成长/消费/未知：原 PE 分位主导逻辑
+            低 PE 分位 = 低估 = 高分
+        """
+        industry_type = inp.industry_type
+
+        # 延迟导入避免循环依赖
+        try:
+            from research.industry_classifier import IndustryType
+            is_cyclical = (industry_type == IndustryType.CYCLICAL)
+            is_financial = (industry_type == IndustryType.FINANCIAL)
+        except ImportError:
+            is_cyclical = False
+            is_financial = False
+
+        if is_cyclical:
+            return self._valuation_cyclical(inp)
+        if is_financial:
+            return self._valuation_financial(inp)
+        return self._valuation_growth(inp)
+
+    def _valuation_cyclical(self, inp: ScorerInput) -> int:
+        """
+        周期资源股估值：PB-ROE 模型，0-40 分。
+
+        ROE >= 15%（景气期）+ PB 分位 < 40% -> 买点，最高分
+        ROE >= 15%（景气期）+ PB 分位 >= 40% -> 估值偏贵，中分
+        ROE <  15%（低谷期）+ PB 分位 < 40% -> 可能见底，中高分
+        ROE <  15%（低谷期）+ PB 分位 >= 40% -> 估值陷阱，低分
+        """
+        roe = inp.roe or 0.0
+        pb_q = inp.pb_quantile if inp.pb_quantile is not None else 0.5
+
+        is_boom = roe >= 0.15
+        is_cheap = pb_q < 0.40
+
+        if is_boom and is_cheap:
+            base = 32
+        elif is_boom and not is_cheap:
+            base = 16
+        elif not is_boom and is_cheap:
+            base = 22
+        else:
+            base = 6
+
+        # FCF yield 附加分（与行业无关）
+        if inp.fcf_yield is not None:
+            if inp.fcf_yield >= 0.08:
+                base += 5
+            elif inp.fcf_yield >= 0.05:
+                base += 2
+
+        return _clamp(base, 0, 40)
+
+    def _valuation_financial(self, inp: ScorerInput) -> int:
+        """
+        金融地产股估值：PB 主导，0-40 分。
+        """
+        pts = 0
+        if inp.pb_quantile is not None:
+            # PB 权重更大：0-35 分
+            pts += round(20 - 30 * inp.pb_quantile)
+        if inp.pe_quantile is not None:
+            # PE 仅作参考：0-5 分
+            pts += round(5 - 7 * inp.pe_quantile)
+        return _clamp(pts, 0, 40)
+
+    def _valuation_growth(self, inp: ScorerInput) -> int:
+        """
+        成长/消费/默认：PE 分位主导，0-40 分。
+        原有逻辑保持不变。
         """
         pts = 0
 

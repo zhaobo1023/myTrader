@@ -1,0 +1,90 @@
+# 07_data_supplement.yaml - Daily incremental data supplement tasks
+#
+# 补充四张空表的日增量数据：
+#   - trade_stock_moneyflow  (主力资金流向)
+#   - trade_stock_industry   (申万行业分类，周度同步)
+#   - trade_margin_trade     (融资融券)
+#   - trade_north_holding    (北向持仓)
+#
+# 注意：AKShare 接口（东方财富）需要能访问 push2his.eastmoney.com
+#   - 应在服务器（100.119.128.104）上运行，本地 Mac 可能网络不通
+#   - 所有任务均支持双写 --envs local,online
+#   - --no-proxy 会清除代理环境变量，适合 VPN/代理环境
+# 调度时间：收盘后数据更新完成后执行
+
+tasks:
+  - id: fetch_moneyflow_daily
+    name: "Fetch moneyflow incremental"
+    module: scheduler.adapters
+    func: fetch_moneyflow_incremental
+    tags: [daily, data_supplement, moneyflow]
+    schedule: "19:00"
+    depends_on: []
+    params:
+      envs: "online"          # 改为 "local,online" 如果服务器上本地 DB 也可达
+    env:
+      local:
+        enabled: false        # 本地 Mac 无法访问 eastmoney.com，调度器默认关闭
+      prod:
+        enabled: true
+    retry:
+      max_attempts: 2
+      delay_seconds: 60
+    timeout_seconds: 7200   # 5000 stocks * 0.8s / 3 workers ~ 22 min; allow 2h for backfill
+
+  - id: fetch_margin_daily
+    name: "Fetch margin trade incremental"
+    module: scheduler.adapters
+    func: fetch_margin_incremental
+    tags: [daily, data_supplement, margin]
+    schedule: "19:30"
+    depends_on: []
+    params:
+      envs: "online"
+    env:
+      local:
+        enabled: false
+      prod:
+        enabled: true
+    retry:
+      max_attempts: 2
+      delay_seconds: 60
+    timeout_seconds: 1800
+
+  - id: fetch_north_holding_daily
+    name: "Fetch north-bound holding incremental"
+    module: scheduler.adapters
+    func: fetch_north_holding_incremental
+    tags: [daily, data_supplement, north_holding]
+    schedule: "20:00"
+    depends_on: []
+    params:
+      envs: "online"
+    env:
+      local:
+        enabled: false
+      prod:
+        enabled: true
+    retry:
+      max_attempts: 2
+      delay_seconds: 60
+    timeout_seconds: 3600
+
+  - id: sync_sw_industry_weekly
+    name: "Sync SW industry classification (weekly)"
+    module: scheduler.adapters
+    func: fetch_sw_industry_sync
+    tags: [weekly, data_supplement, industry]
+    schedule: manual
+    depends_on: []
+    params:
+      envs: "online"
+    env:
+      local:
+        enabled: true
+      prod:
+        enabled: true
+    retry:
+      max_attempts: 1
+      delay_seconds: 0
+    timeout_seconds: 300

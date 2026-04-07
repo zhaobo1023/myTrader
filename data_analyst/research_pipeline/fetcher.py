@@ -40,6 +40,18 @@ class FinancialSeries:
     revenue_yoy: float = 0.0    # revenue YoY growth (ratio)
     profit_yoy: float = 0.0     # profit YoY growth (ratio)
     report_date: str = ""
+    # v2: 数据时效性
+    is_stale: bool = False       # 距今超过 18 个月视为过时
+    stale_months: int = 0        # 实际距今月数
+    data_warning: str = ""       # 供 HealthChecker 使用的警告文本
+    # v2: 上年度快照（用于报告对比列）
+    revenue_prev: float = 0.0
+    net_profit_prev: float = 0.0
+    gross_margin_prev: float = 0.0
+    debt_ratio_prev: float = 0.0
+    report_date_prev: str = ""
+    # v2: 年份列表（供渲染层直接使用，避免 T-3/T-2 标注）
+    report_years: list = field(default_factory=list)
 
 
 @dataclass
@@ -61,6 +73,9 @@ class FundFlowData:
     net_20d_amount: float = 0.0
     total_mv_yuan: float = 0.0  # 市值（元）
     rps_120: float = 50.0
+    # v2: 缺失标记
+    is_missing: bool = False
+    data_warning: str = ""
 
 
 class ResearchDataFetcher:
@@ -89,11 +104,16 @@ class ResearchDataFetcher:
             """
             SELECT report_date, revenue, net_profit, roe, gross_margin,
                    net_margin, debt_ratio, operating_cashflow
-            FROM trade_stock_financial
-            WHERE stock_code = %s
-              AND report_date LIKE %s
+            FROM (
+                SELECT report_date, revenue, net_profit, roe, gross_margin,
+                       net_margin, debt_ratio, operating_cashflow
+                FROM trade_stock_financial
+                WHERE stock_code = %s
+                  AND report_date LIKE %s
+                ORDER BY report_date DESC
+                LIMIT 6
+            ) t
             ORDER BY report_date ASC
-            LIMIT 6
             """,
             [stock_code, "%-12-31"],
         )
@@ -141,6 +161,29 @@ class ResearchDataFetcher:
             else 0.0
         )
 
+        # v2: 计算数据时效性
+        latest_date_str = str(latest["report_date"])
+        report_year = int(latest_date_str[:4])
+        now = datetime.now()
+        stale_months = (now.year - report_year) * 12 + now.month
+        is_stale = stale_months > 18
+        data_warning = (
+            f"[STALE] 财务数据距今 {stale_months} 个月（最新年报: {latest_date_str}），"
+            f"基本面/周期评分可信度低"
+            if is_stale else ""
+        )
+
+        # v2: 提取上年度快照
+        prev_row = rows[-2] if len(rows) >= 2 else None
+        revenue_prev = float(prev_row["revenue"] or 0) / 1e8 if prev_row else 0.0
+        net_profit_prev = float(prev_row["net_profit"] or 0) / 1e8 if prev_row else 0.0
+        gross_margin_prev = float(prev_row["gross_margin"] or 0) if prev_row else 0.0
+        debt_ratio_prev = float(prev_row["debt_ratio"] or 0) if prev_row else 0.0
+        report_date_prev = str(prev_row["report_date"]) if prev_row else ""
+
+        # v2: 实际年份列表（格式 "2021"）
+        report_years = [str(r["report_date"])[:4] for r in rows]
+
         return FinancialSeries(
             roe_series=roe_series,
             revenue_growth_series=rev_growth,
@@ -155,7 +198,16 @@ class ResearchDataFetcher:
             ocf_latest=float(latest["operating_cashflow"] or 0) / 1e8,
             revenue_yoy=revenue_yoy,
             profit_yoy=profit_yoy,
-            report_date=str(latest["report_date"]),
+            report_date=latest_date_str,
+            is_stale=is_stale,
+            stale_months=stale_months,
+            data_warning=data_warning,
+            revenue_prev=revenue_prev,
+            net_profit_prev=net_profit_prev,
+            gross_margin_prev=gross_margin_prev,
+            debt_ratio_prev=debt_ratio_prev,
+            report_date_prev=report_date_prev,
+            report_years=report_years,
         )
 
     # ------------------------------------------------------------------
@@ -229,13 +281,25 @@ class ResearchDataFetcher:
 
         if not rows:
             logger.warning(f"[{stock_code}] No moneyflow data found")
-            return FundFlowData(rps_120=rps_120)
+            return FundFlowData(
+                rps_120=rps_120,
+                is_missing=True,
+                data_warning="[MISSING] trade_stock_moneyflow 表无数据，资金面评分不可用",
+            )
 
         amounts = [float(r["net_mf_amount"] or 0) for r in rows]
 
-        # Detect unit: if median abs value < 1e6, likely in 万元; multiply by 1e4
+        # v2: 检测是否全为 0（数据异常）
         import statistics
         abs_vals = [abs(x) for x in amounts if x != 0]
+        if not abs_vals:
+            logger.warning(f"[{stock_code}] Moneyflow data all zeros")
+            return FundFlowData(
+                rps_120=rps_120,
+                is_missing=True,
+                data_warning="[MISSING] 资金流向数据全为 0，可能是数据源异常，资金面评分不可用",
+            )
+
         median_abs = statistics.median(abs_vals) if abs_vals else 0
         # Heuristic: reasonable daily net flow for mid/large cap is 1M-500M yuan
         # If median_abs < 100000, it's probably in 万元

@@ -230,20 +230,25 @@ def build_report_data(code_bare: str, name: str, date_str: str) -> Optional["Rep
     Returns None on critical failure.
     """
     from data_analyst.research_pipeline.fetcher import ResearchDataFetcher
+    from data_analyst.research_pipeline.health_checker import HealthChecker
     from data_analyst.research_pipeline.renderer import ReportData
-
-    from research.fundamental.scorer import FundamentalScorer, ScorerInput as FundInput
-    from research.sentiment.scorer import SentimentScorer, SentimentInput
-    from research.capital_cycle.scorer import CapitalCycleScorer, CapitalCycleInput
-    from research.fund_flow.scorer import FundFlowScorer, FundFlowInput
-    from research.composite.aggregator import CompositeAggregator, FiveSectionScores
+    from research.fundamental.scorer import FundamentalScorer
+    from research.fundamental.scorer import ScorerInput as FundInput
+    from research.sentiment.scorer import SentimentScorer
+    from research.sentiment.scorer import SentimentInput
+    from research.capital_cycle.scorer import CapitalCycleScorer
+    from research.capital_cycle.scorer import CapitalCycleInput
+    from research.fund_flow.scorer import FundFlowScorer
+    from research.fund_flow.scorer import FundFlowInput
+    from research.composite.aggregator import CompositeAggregator
+    from research.composite.aggregator import FiveSectionScores
+    from research.industry_classifier import IndustryClassifier
 
     logger.info(f"  [1/5] Fetching tech data ...")
     tech = fetch_tech_data(code_bare)
 
-    logger.info(f"  [2/5] Fetching financial/valuation/fund-flow ...")
+    logger.info(f"  [2/5] Fetching financial/valuation/fund-flow/industry ...")
     research_fetcher = ResearchDataFetcher(env="online")
-
     code_with_suffix = _fmt_code(code_bare)
 
     financial = research_fetcher.fetch_financial(code_with_suffix)
@@ -251,14 +256,33 @@ def build_report_data(code_bare: str, name: str, date_str: str) -> Optional["Rep
     rps_120 = tech.get("rps_120", 50.0)
     fund_flow_data = research_fetcher.fetch_fund_flow(code_with_suffix, rps_120=rps_120)
 
+    # v2: 行业分类
+    classifier = IndustryClassifier(env="online")
+    industry_type = classifier.classify_by_code(code_with_suffix)
+    logger.info(f"  Industry: {industry_type.value}")
+
+    # v2: 数据健康度检测
+    health_checker = HealthChecker()
+    health = health_checker.check(
+        stock_code=code_bare,
+        tech_data=tech,
+        fund_flow_data=fund_flow_data,
+        financial_data=financial,
+        valuation_data=valuation,
+        rps_value=rps_120,
+        check_date=date_str,
+    )
+    if health.warnings:
+        for w in health.warnings:
+            logger.warning(f"  {w}")
+    logger.info(f"  Data health: {health.confidence} ({health.completeness_pct}%)")
+
     # ---- Fundamental scoring ----
     logger.info(f"  [3/5] Scoring fundamental ...")
     fund_scorer = FundamentalScorer()
     ocf_to_profit = 0.0
     if financial.net_profit_latest and financial.net_profit_latest != 0:
         ocf_to_profit = financial.ocf_latest / financial.net_profit_latest
-    else:
-        ocf_to_profit = 0.0
 
     fund_input = FundInput(
         pe_quantile=valuation.pe_quantile,
@@ -269,6 +293,7 @@ def build_report_data(code_bare: str, name: str, date_str: str) -> Optional["Rep
         debt_ratio=financial.debt_ratio_latest / 100.0 if financial.debt_ratio_latest else None,
         revenue_yoy=financial.revenue_yoy,
         profit_yoy=financial.profit_yoy,
+        industry_type=industry_type,
     )
     fund_result = fund_scorer.score(fund_input)
     score_fundamental = fund_result.composite_score
@@ -306,7 +331,7 @@ def build_report_data(code_bare: str, name: str, date_str: str) -> Optional["Rep
         macd_hist=tech.get("macd_hist"),
         vol_ratio=tech.get("vol_ratio"),
         rps_120=rps_120,
-        score_fund=score_fund_flow,    # use fund flow as proxy for capital flow sentiment
+        score_fund=score_fund_flow,
     )
     sent_result = sent_scorer.score(sent_input, code=code_with_suffix)
     score_sentiment = sent_result.composite_score
@@ -322,9 +347,12 @@ def build_report_data(code_bare: str, name: str, date_str: str) -> Optional["Rep
         score_sentiment=score_sentiment,
         score_capital_cycle=score_capital_cycle,
         pe_quantile=valuation.pe_quantile,
+        pb_quantile=valuation.pb_quantile,
         capital_cycle_phase=cc_result.phase,
         founder_reducing=False,
         technical_breakdown=tech.get("price", 0) < tech.get("ma20", 0),
+        industry_type=industry_type,
+        weight_adjustments=health.get_weight_adjustments(),
     )
     aggregator = CompositeAggregator()
     agg_result = aggregator.aggregate(five_scores)
@@ -345,6 +373,16 @@ def build_report_data(code_bare: str, name: str, date_str: str) -> Optional["Rep
         score_capital_cycle=score_capital_cycle,
         composite_score=composite_score,
         direction=direction,
+        # v2: 双维度 + 建议
+        quality_score=agg_result.quality_score,
+        timing_score=agg_result.timing_score,
+        quality_label=agg_result.quality_label,
+        timing_label=agg_result.timing_label,
+        suggestion=agg_result.suggestion,
+        rule_triggered=agg_result.rule_triggered,
+        # v2: 行业 + 健康度
+        industry_type=industry_type.value,
+        data_health=health,
         # Technical
         tech_price=tech.get("price", 0),
         tech_ma5=tech.get("ma5", 0),
@@ -366,6 +404,8 @@ def build_report_data(code_bare: str, name: str, date_str: str) -> Optional["Rep
         ff_net_5d_pct=ff_result.net_5d_pct,
         ff_net_20d_pct=ff_result.net_20d_pct,
         ff_label=ff_result.label,
+        ff_missing=fund_flow_data.is_missing,
+        ff_warning=fund_flow_data.data_warning,
         # Fundamental
         fund_revenue_yi=financial.revenue_latest,
         fund_revenue_yoy=financial.revenue_yoy,
@@ -385,6 +425,15 @@ def build_report_data(code_bare: str, name: str, date_str: str) -> Optional["Rep
         fund_eq_score=fund_result.earnings_quality_score,
         fund_va_score=fund_result.valuation_score,
         fund_gc_score=fund_result.growth_score,
+        fund_stale=financial.is_stale,
+        fund_stale_warning=financial.data_warning,
+        # v2: 上年度数据
+        fund_revenue_prev=financial.revenue_prev,
+        fund_profit_prev=financial.net_profit_prev,
+        fund_gross_margin_prev=financial.gross_margin_prev,
+        fund_debt_ratio_prev=financial.debt_ratio_prev,
+        fund_report_date_prev=financial.report_date_prev,
+        fund_report_years=financial.report_years,
         # Sentiment
         sent_score_fund=sent_result.score_fund,
         sent_score_pricevol=sent_result.score_price_vol,
@@ -400,6 +449,7 @@ def build_report_data(code_bare: str, name: str, date_str: str) -> Optional["Rep
         cc_label=cc_result.label,
         cc_roe_series=financial.roe_series,
         cc_rev_growth_series=financial.revenue_growth_series,
+        cc_report_years=financial.report_years,
     )
 
     return report_data
@@ -604,9 +654,24 @@ def main():
     logger.info(f"DB reachable OK")
 
     watch_list = get_portfolio_stocks(args.portfolio)
-    logger.info(f"Non-ETF A-shares: {len(watch_list)}")
-    for code, name in watch_list.items():
-        logger.info(f"  {code}  {name}")
+
+    # If --stock is provided and not in portfolio, add it (supports ad-hoc analysis)
+    if args.stock and args.stock not in watch_list:
+        # Try to fetch name from trade_stock_basic
+        from config.db import execute_query
+        code_full = _fmt_code(args.stock)
+        name_rows = execute_query(
+            "SELECT stock_name FROM trade_stock_basic WHERE stock_code = %s LIMIT 1",
+            [code_full],
+            env=db_env,
+        )
+        stock_name = name_rows[0]["stock_name"] if name_rows else args.stock
+        watch_list = {args.stock: stock_name}
+        logger.info(f"Ad-hoc (non-portfolio) stock: {args.stock} ({stock_name})")
+    else:
+        logger.info(f"Non-ETF A-shares: {len(watch_list)}")
+        for code, name in watch_list.items():
+            logger.info(f"  {code}  {name}")
 
     summary_rows = run_batch(watch_list, date_str, output_dir, single_code=args.stock)
 

@@ -55,6 +55,9 @@ class ReportData:
     ff_net_5d_pct: float = 0.0    # % of market cap
     ff_net_20d_pct: float = 0.0
     ff_label: str = "中性"
+    # v2
+    ff_missing: bool = False
+    ff_warning: str = ""
 
     # Fundamental details
     fund_revenue_yi: float = 0.0
@@ -75,6 +78,16 @@ class ReportData:
     fund_eq_score: int = 0
     fund_va_score: int = 0
     fund_gc_score: int = 0
+    # v2: 数据时效性
+    fund_stale: bool = False
+    fund_stale_warning: str = ""
+    # v2: 上年度对比数据
+    fund_revenue_prev: float = 0.0
+    fund_profit_prev: float = 0.0
+    fund_gross_margin_prev: float = 0.0
+    fund_debt_ratio_prev: float = 0.0
+    fund_report_date_prev: str = ""
+    fund_report_years: list = field(default_factory=list)
 
     # Sentiment details
     sent_score_fund: int = 50
@@ -92,12 +105,25 @@ class ReportData:
     cc_label: str = "中性"
     cc_roe_series: list = field(default_factory=list)
     cc_rev_growth_series: list = field(default_factory=list)
+    cc_report_years: list = field(default_factory=list)  # v2: 实际年份列表
 
     # Alerts (list of dicts with keys: type='danger'|'opportunity'|'neutral', text)
     alerts: list = field(default_factory=list)
 
     # Rules triggered
     rules_triggered: list = field(default_factory=list)
+
+    # v2: 双维度评估
+    quality_score: int = 0
+    timing_score: int = 0
+    quality_label: str = ""
+    timing_label: str = ""
+    suggestion: str = ""
+    rule_triggered: str = ""
+
+    # v2: 行业类型 + 数据健康度
+    industry_type: str = ""
+    data_health: object = None   # DataHealthReport
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +271,7 @@ class FiveSectionRenderer:
     def render(self, d: ReportData) -> str:
         sections = [
             self._header(d),
+            self._section_data_health(d),   # v2: 数据健康度置于最顶部
             self._overview(d),
             self._section_technical(d),
             self._section_fund_flow(d),
@@ -272,10 +299,58 @@ class FiveSectionRenderer:
     # ------------------------------------------------------------------
 
     def _header(self, d: ReportData) -> str:
+        industry_tag = f" &nbsp;|&nbsp; {d.industry_type}" if d.industry_type else ""
         return (
             f"<h1>{d.stock_name} ({d.stock_code}) - 五截面深度分析</h1>\n"
-            f'<div class="meta">分析日期: {d.report_date} &nbsp;|&nbsp; 框架: FiveSectionFramework v1.0</div>'
+            f'<div class="meta">分析日期: {d.report_date}{industry_tag} &nbsp;|&nbsp; 框架: FiveSectionFramework v2.0</div>'
         )
+
+    # ------------------------------------------------------------------
+
+    def _section_data_health(self, d: ReportData) -> str:
+        """v2: 数据健康度模块，显示在报告最顶部。"""
+        health = d.data_health
+        if health is None:
+            return ""
+
+        def status_cell(ok: bool, warn: str = "") -> str:
+            if warn:
+                return '<td style="color:#e74c3c;font-weight:bold;">[WARN]</td>'
+            if ok:
+                return '<td style="color:#27ae60;">[OK]</td>'
+            return '<td style="color:#f39c12;">[N/A]</td>'
+
+        rows_html = (
+            f"<tr><td>技术面</td>{status_cell(health.technical_ok)}"
+            f"<td>{health.technical_date or '-'}</td></tr>"
+
+            f"<tr><td>资金流</td>{status_cell(health.fund_flow_ok and not health.fund_flow_missing, health.fund_flow_warning)}"
+            f"<td>{health.fund_flow_warning if health.fund_flow_warning else 'OK'}</td></tr>"
+
+            f"<tr><td>财务数据</td>{status_cell(health.financial_ok and not health.financial_stale, health.financial_warning)}"
+            f"<td>{health.financial_warning if health.financial_warning else f'最新年报: {health.financial_report_date}'}</td></tr>"
+
+            f"<tr><td>估值数据</td>{status_cell(health.valuation_ok)}"
+            f"<td>{health.valuation_date or '-'}</td></tr>"
+
+            f"<tr><td>RPS</td>{status_cell(health.rps_ok)}"
+            f"<td>{'RPS120=' + str(round(health.rps_value, 1)) if health.rps_ok else '[DEFAULT] 使用默认值 50'}</td></tr>"
+        )
+
+        conf = health.confidence
+        conf_color = {"HIGH": "#27ae60", "MEDIUM": "#f39c12", "LOW": "#e74c3c"}.get(conf, "#888")
+
+        warns_html = ""
+        for w in health.warnings:
+            warns_html += f'<div class="danger-alert">{w}</div>'
+
+        return f"""<div class="info-card" style="border-left:4px solid {conf_color};">
+<h2>数据健康度 &nbsp;<span style="font-size:13px;color:{conf_color};">{conf} ({health.completeness_pct}%)</span></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>数据源</th><th>状态</th><th>说明</th></tr></thead>
+<tbody>{rows_html}</tbody></table></div>
+{warns_html}
+</div>"""
 
     # ------------------------------------------------------------------
 
@@ -329,6 +404,34 @@ class FiveSectionRenderer:
         if d.score_technical >= 65:
             badge_html += _badge("[OK] 技术强势", "#27ae60") + " "
 
+        # v2: 双维度评估
+        q = d.quality_score
+        t = d.timing_score
+        q_color = _score_color(q)
+        t_color = _score_color(t)
+        dual_html = ""
+        if q > 0 or t > 0:
+            suggestion_type = "opportunity" if q >= 60 and t >= 55 else ("danger" if q < 45 and t < 40 else "neutral")
+            dual_html = f"""
+<div style="border-top:1px solid #eee;margin-top:14px;padding-top:12px;">
+  <div style="font-size:12px;color:#888;margin-bottom:8px;">v2.0 双维度评估</div>
+  <div class="two-col" style="gap:8px;">
+    <div style="background:#f8f9fa;border-radius:6px;padding:10px;text-align:center;border-top:3px solid {q_color};">
+      <div style="font-size:11px;color:#888;">资产质地（买不买）</div>
+      <div style="font-size:26px;font-weight:bold;color:{q_color};">{q}</div>
+      <div style="font-size:12px;color:{q_color};">{d.quality_label}</div>
+      <div style="font-size:10px;color:#aaa;">基本面60%+周期40%</div>
+    </div>
+    <div style="background:#f8f9fa;border-radius:6px;padding:10px;text-align:center;border-top:3px solid {t_color};">
+      <div style="font-size:11px;color:#888;">交易择时（何时买）</div>
+      <div style="font-size:26px;font-weight:bold;color:{t_color};">{t}</div>
+      <div style="font-size:12px;color:{t_color};">{d.timing_label}</div>
+      <div style="font-size:10px;color:#aaa;">技术40%+资金35%+情绪25%</div>
+    </div>
+  </div>
+  {_alert(suggestion_type, f"[建议] {d.suggestion}")}
+</div>"""
+
         return f"""<div class="info-card" style="border:2px solid #e67e22;">
 <h2>综合评分总览</h2>
 <div class="two-col">
@@ -345,6 +448,7 @@ class FiveSectionRenderer:
 </div>
 </div>
 <div class="badge-row" style="margin-top:10px;">{badge_html}</div>
+{dual_html}
 </div>"""
 
     # ------------------------------------------------------------------
@@ -411,21 +515,28 @@ class FiveSectionRenderer:
         s = d.score_fund_flow
         c = _score_color(s)
 
-        net5_color = "#27ae60" if d.ff_net_5d_yi >= 0 else "#e74c3c"
-        net20_color = "#27ae60" if d.ff_net_20d_yi >= 0 else "#e74c3c"
-
-        return f"""<div class="info-card">
-<h2>截面二：资金面（权重 20%，得分 {s}/100）</h2>
-<div class="badge-row">{_badge(d.ff_label, c)}</div>
-{_score_bar(s)}
-<h3>主力资金净流向</h3>
+        # v2: 数据缺失时显示警告，不显示全 0 数据迷惑用户
+        if d.ff_missing:
+            score_label = "N/A（数据缺失，不参与评分）"
+            flow_content = _alert("danger", d.ff_warning or "[MISSING] 主力资金流向数据缺失，请更新 trade_stock_moneyflow 表后重新生成报告")
+        else:
+            score_label = f"{s}/100"
+            net5_color = "#27ae60" if d.ff_net_5d_yi >= 0 else "#e74c3c"
+            net20_color = "#27ae60" if d.ff_net_20d_yi >= 0 else "#e74c3c"
+            flow_content = f"""<h3>主力资金净流向</h3>
 <div class="table-wrap"><table>
 <thead><tr><th>统计周期</th><th>主力净流入</th><th>占市值</th><th>趋势</th></tr></thead>
 <tbody>
 <tr><td>近5日</td><td style="color:{net5_color};font-weight:bold;">{d.ff_net_5d_yi:+.2f}亿</td><td style="color:{net5_color};">{d.ff_net_5d_pct:+.2f}%</td><td style="color:{net5_color};">{"净流入" if d.ff_net_5d_yi>=0 else "净流出"}</td></tr>
 <tr><td>近20日</td><td style="color:{net20_color};font-weight:bold;">{d.ff_net_20d_yi:+.2f}亿</td><td style="color:{net20_color};">{d.ff_net_20d_pct:+.2f}%</td><td style="color:{net20_color};">{"净流入" if d.ff_net_20d_yi>=0 else "净流出"}</td></tr>
 </tbody></table></div>
-{_alert("danger" if d.ff_net_5d_yi < -5 else "neutral", f"[资金] 5日净流入{d.ff_net_5d_yi:+.2f}亿；RPS120={d.tech_rps120:.1f}")}
+{_alert("danger" if d.ff_net_5d_yi < -5 else "neutral", f"[资金] 5日净流入{d.ff_net_5d_yi:+.2f}亿；RPS120={d.tech_rps120:.1f}")}"""
+
+        return f"""<div class="info-card">
+<h2>截面二：资金面（权重 20%，得分 {score_label}）</h2>
+<div class="badge-row">{_badge(d.ff_label, c)}</div>
+{_score_bar(s)}
+{flow_content}
 </div>"""
 
     # ------------------------------------------------------------------
@@ -441,8 +552,56 @@ class FiveSectionRenderer:
         roe_delta = d.fund_roe - d.fund_roe_prev
         ocf_ratio = d.fund_ocf_to_profit
 
+        # v2: 数据过时警告
+        stale_html = ""
+        if d.fund_stale:
+            stale_html = _alert("danger", d.fund_stale_warning or "[STALE] 财务数据过时，评分可信度低")
+
+        # v2: 上年度对比列（有数据时展示）
+        has_prev = d.fund_report_date_prev and d.fund_revenue_prev > 0
+        if has_prev:
+            prev_year = d.fund_report_date_prev[:4] if d.fund_report_date_prev else "上年"
+            cur_year = d.fund_report_date[:4] if d.fund_report_date else "最新"
+            fin_thead = f"<tr><th>指标</th><th>{cur_year}年（最新）</th><th>{prev_year}年（上年）</th><th>同比</th><th>评价</th></tr>"
+            gm_delta = d.fund_gross_margin - d.fund_gross_margin_prev
+            fin_rows = (
+                f"<tr><td>营业收入</td><td>{d.fund_revenue_yi:.1f}亿</td><td>{d.fund_revenue_prev:.1f}亿</td>"
+                f"{_td_color(f'{d.fund_revenue_yoy*100:+.1f}%', d.fund_revenue_yoy>0)}"
+                f"<td style=\"color:{'#27ae60' if d.fund_revenue_yoy>0.15 else '#888'};\">{'强劲增长' if d.fund_revenue_yoy>0.2 else ('增长' if d.fund_revenue_yoy>0 else '下滑')}</td></tr>"
+
+                f"<tr><td>归母净利润</td><td>{d.fund_profit_yi:.1f}亿</td><td>{d.fund_profit_prev:.1f}亿</td>"
+                f"{_td_color(f'{d.fund_profit_yoy*100:+.1f}%', d.fund_profit_yoy>0)}"
+                f"<td style=\"color:{'#27ae60' if d.fund_profit_yoy>0.15 else '#888'};\">{'超预期' if d.fund_profit_yoy>0.3 else ('增长' if d.fund_profit_yoy>0 else '下滑')}</td></tr>"
+
+                f"<tr><td>ROE</td><td>{d.fund_roe:.2f}%</td><td>{d.fund_roe_prev:.2f}%</td>"
+                f"{_td_color(f'{roe_delta:+.1f}pct', roe_delta>0)}"
+                f"<td style=\"color:{'#27ae60' if d.fund_roe>=15 else '#888'};\">{'优秀' if d.fund_roe>=20 else ('良好' if d.fund_roe>=12 else '偏低')}</td></tr>"
+
+                f"<tr><td>毛利率</td><td>{d.fund_gross_margin:.1f}%</td><td>{d.fund_gross_margin_prev:.1f}%</td>"
+                f"{_td_color(f'{gm_delta:+.1f}pct', gm_delta>0)}"
+                f"<td style=\"color:{'#27ae60' if d.fund_gross_margin>30 else '#888'};\">{'高毛利' if d.fund_gross_margin>35 else ('中等' if d.fund_gross_margin>20 else '偏低')}</td></tr>"
+
+                f"<tr><td>OCF/净利润</td><td>{ocf_ratio:.2f}x</td><td>-</td><td>-</td>"
+                f"<td style=\"color:{'#27ae60' if ocf_ratio>=1.0 else ('#e74c3c' if ocf_ratio<0.5 else '#888')};\">{'利润高质量' if ocf_ratio>=1.0 else ('一般' if ocf_ratio>=0.5 else '含金量低')}</td></tr>"
+
+                f"<tr><td>资产负债率</td><td>{d.fund_debt_ratio:.1f}%</td><td>{d.fund_debt_ratio_prev:.1f}%</td>"
+                f"{_td_color(f'{d.fund_debt_ratio-d.fund_debt_ratio_prev:+.1f}pct', d.fund_debt_ratio<d.fund_debt_ratio_prev)}"
+                f"<td style=\"color:{'#e74c3c' if d.fund_debt_ratio>70 else ('#f39c12' if d.fund_debt_ratio>50 else '#27ae60')};\">{'偏高' if d.fund_debt_ratio>70 else ('适中' if d.fund_debt_ratio>40 else '偏低')}</td></tr>"
+            )
+        else:
+            fin_thead = "<tr><th>指标</th><th>最新值</th><th>同比</th><th>评价</th></tr>"
+            fin_rows = (
+                f"<tr><td>营业收入</td><td>{d.fund_revenue_yi:.1f}亿</td>{_td_color(f'{d.fund_revenue_yoy*100:+.1f}%', d.fund_revenue_yoy>0)}<td style=\"color:{'#27ae60' if d.fund_revenue_yoy>0.15 else '#888'};\">{'强劲增长' if d.fund_revenue_yoy>0.2 else ('增长' if d.fund_revenue_yoy>0 else '下滑')}</td></tr>"
+                f"<tr><td>归母净利润</td><td>{d.fund_profit_yi:.1f}亿</td>{_td_color(f'{d.fund_profit_yoy*100:+.1f}%', d.fund_profit_yoy>0)}<td style=\"color:{'#27ae60' if d.fund_profit_yoy>0.15 else '#888'};\">{'超预期' if d.fund_profit_yoy>0.3 else ('增长' if d.fund_profit_yoy>0 else '下滑')}</td></tr>"
+                f"<tr><td>ROE</td><td>{d.fund_roe:.2f}%</td>{_td_color(f'{roe_delta:+.1f}pct', roe_delta>0)}<td style=\"color:{'#27ae60' if d.fund_roe>=15 else '#888'};\">{'优秀' if d.fund_roe>=20 else ('良好' if d.fund_roe>=12 else '偏低')}</td></tr>"
+                f"<tr><td>毛利率</td><td>{d.fund_gross_margin:.1f}%</td><td>-</td><td style=\"color:{'#27ae60' if d.fund_gross_margin>30 else '#888'};\">{'高毛利' if d.fund_gross_margin>35 else ('中等' if d.fund_gross_margin>20 else '偏低')}</td></tr>"
+                f"<tr><td>OCF/净利润</td><td>{ocf_ratio:.2f}x</td><td>-</td><td style=\"color:{'#27ae60' if ocf_ratio>=1.0 else ('#e74c3c' if ocf_ratio<0.5 else '#888')};\">{'利润高质量' if ocf_ratio>=1.0 else ('一般' if ocf_ratio>=0.5 else '含金量低')}</td></tr>"
+                f"<tr><td>资产负债率</td><td>{d.fund_debt_ratio:.1f}%</td><td>-</td><td style=\"color:{'#e74c3c' if d.fund_debt_ratio>70 else ('#f39c12' if d.fund_debt_ratio>50 else '#27ae60')};\">{'偏高' if d.fund_debt_ratio>70 else ('适中' if d.fund_debt_ratio>40 else '偏低')}</td></tr>"
+            )
+
         return f"""<div class="info-card">
 <h2>截面三：基本面（权重 30%，得分 {s}/100）</h2>
+{stale_html}
 <div class="badge-row">
 {_badge("盈利质量", _score_color(d.fund_eq_score * 100 // 40))}
 {_badge("估值" + ("高位" if d.fund_pe_quantile > 0.8 else "合理"), "#e74c3c" if d.fund_pe_quantile > 0.8 else "#27ae60")}
@@ -457,15 +616,8 @@ class FiveSectionRenderer:
 </div>
 <h3>核心财务数据（{d.fund_report_date}）</h3>
 <div class="table-wrap"><table>
-<thead><tr><th>指标</th><th>最新值</th><th>同比</th><th>评价</th></tr></thead>
-<tbody>
-<tr><td>营业收入</td><td>{d.fund_revenue_yi:.1f}亿</td>{_td_color(f"{d.fund_revenue_yoy*100:+.1f}%", d.fund_revenue_yoy>0)}<td style="color:{'#27ae60' if d.fund_revenue_yoy>0.15 else '#888'};">{"强劲增长" if d.fund_revenue_yoy>0.2 else ("增长" if d.fund_revenue_yoy>0 else "下滑")}</td></tr>
-<tr><td>归母净利润</td><td>{d.fund_profit_yi:.1f}亿</td>{_td_color(f"{d.fund_profit_yoy*100:+.1f}%", d.fund_profit_yoy>0)}<td style="color:{'#27ae60' if d.fund_profit_yoy>0.15 else '#888'};">{"超预期" if d.fund_profit_yoy>0.3 else ("增长" if d.fund_profit_yoy>0 else "下滑")}</td></tr>
-<tr><td>ROE</td><td>{d.fund_roe:.2f}%</td>{_td_color(f"{roe_delta:+.1f}pct", roe_delta>0)}<td style="color:{'#27ae60' if d.fund_roe>=15 else '#888'};">{"优秀" if d.fund_roe>=20 else ("良好" if d.fund_roe>=12 else "偏低")}</td></tr>
-<tr><td>毛利率</td><td>{d.fund_gross_margin:.1f}%</td><td>-</td><td style="color:{'#27ae60' if d.fund_gross_margin>30 else '#888'};">{"高毛利" if d.fund_gross_margin>35 else ("中等" if d.fund_gross_margin>20 else "偏低")}</td></tr>
-<tr><td>OCF/净利润</td><td>{ocf_ratio:.2f}x</td><td>-</td><td style="color:{'#27ae60' if ocf_ratio>=1.0 else ('#e74c3c' if ocf_ratio<0.5 else '#888')};">{"利润高质量" if ocf_ratio>=1.0 else ("一般" if ocf_ratio>=0.5 else "含金量低")}</td></tr>
-<tr><td>资产负债率</td><td>{d.fund_debt_ratio:.1f}%</td><td>-</td><td style="color:{'#e74c3c' if d.fund_debt_ratio>70 else ('#f39c12' if d.fund_debt_ratio>50 else '#27ae60')};">{"偏高" if d.fund_debt_ratio>70 else ("适中" if d.fund_debt_ratio>40 else "偏低")}</td></tr>
-</tbody></table></div>
+<thead>{fin_thead}</thead>
+<tbody>{fin_rows}</tbody></table></div>
 <h3>估值分析（5年历史分位）</h3>
 <div class="table-wrap"><table>
 <thead><tr><th>指标</th><th>当前值</th><th>5年分位</th><th>评价</th></tr></thead>
@@ -511,14 +663,21 @@ class FiveSectionRenderer:
         c = _score_color(s)
         phase_color = {1: "#888", 2: "#27ae60", 3: "#27ae60", 4: "#e74c3c", 5: "#e74c3c"}.get(d.cc_phase, "#888")
 
-        # ROE series table
+        # v2: ROE 轨迹用实际年份标注
         roe_rows = ""
         if d.cc_roe_series:
+            years = d.cc_report_years if d.cc_report_years else []
             for i, roe in enumerate(d.cc_roe_series):
-                year_label = f"T-{len(d.cc_roe_series)-1-i}" if i < len(d.cc_roe_series)-1 else "最新年报"
+                # 优先使用实际年份，无则回退到 T-N
+                if years and i < len(years):
+                    year_label = years[i]
+                else:
+                    year_label = f"T-{len(d.cc_roe_series)-1-i}" if i < len(d.cc_roe_series)-1 else "最新"
                 rev_g = d.cc_rev_growth_series[i-1] * 100 if i > 0 and d.cc_rev_growth_series and i-1 < len(d.cc_rev_growth_series) else None
                 rev_str = f"{rev_g:+.1f}%" if rev_g is not None else "-"
-                roe_rows += f"<tr><td>{year_label}</td><td>{roe:.1f}%</td><td>{rev_str}</td></tr>"
+                is_latest = (i == len(d.cc_roe_series) - 1)
+                row_style = ' style="font-weight:bold;"' if is_latest else ""
+                roe_rows += f"<tr{row_style}><td>{year_label}</td><td>{roe:.1f}%</td><td>{rev_str}</td></tr>"
 
         phase_rows = ""
         for ph, lbl, desc in [
@@ -549,16 +708,27 @@ class FiveSectionRenderer:
     # ------------------------------------------------------------------
 
     def _section_rules(self, d: ReportData) -> str:
-        p1_triggered = d.cc_phase == 4 and d.fund_pe_quantile > 0.8
-        p2_triggered = False  # founder_reducing not available in auto mode
+        # v2: P1 规则区分行业类型
+        is_cyclical = "周期" in (d.industry_type or "")
+        if is_cyclical:
+            p1_cond = "周期资源: Phase 3/4 AND PB分位&gt;75%"
+            p1_state = f"Phase={d.cc_phase}, PB分位={d.fund_pb_quantile*100:.0f}%"
+            p1_triggered = d.cc_phase in (3, 4) and d.fund_pb_quantile > 0.75
+            p1_note = "周期景气高点+PB高位 => 警惕见顶" if p1_triggered else "-"
+        else:
+            p1_cond = "成长/消费: Phase==4 AND PE分位&gt;80%"
+            p1_state = f"Phase={d.cc_phase}, PE分位={d.fund_pe_quantile*100:.0f}%"
+            p1_triggered = d.cc_phase == 4 and d.fund_pe_quantile > 0.8
+            p1_note = "资本周期4+高估值 => 强空" if p1_triggered else "-"
+
         boost_triggered = d.cc_phase == 3 and d.score_fundamental > 70
 
         rows = f"""
-<tr><td>P1 泡沫期</td><td>Phase==4 AND PE分位&gt;80%</td><td>Phase={d.cc_phase}, PE分位={d.fund_pe_quantile*100:.0f}%</td>
+<tr><td>P1 泡沫期</td><td>{p1_cond}</td><td>{p1_state}</td>
 <td style="color:{'#e74c3c' if p1_triggered else '#27ae60'};">{"触发" if p1_triggered else "未触发"}</td>
-<td>{"资本周期4+高估值 => 强空" if p1_triggered else "-"}</td></tr>
-<tr><td>P2 减仓破位</td><td>大股东减仓 AND 技术破位</td><td>需人工监控</td>
-<td style="color:#27ae60;">未触发</td><td>-</td></tr>
+<td>{p1_note}</td></tr>
+<tr><td>P2 减仓破位</td><td>大股东减仓 AND 技术破位</td><td>[需人工录入大股东减持数据]</td>
+<td style="color:#f39c12;">待监控</td><td>-</td></tr>
 <tr><td>BOOST 扩张期</td><td>Phase==3 AND 基本面&gt;70</td><td>Phase={d.cc_phase}, 基本面={d.score_fundamental}</td>
 <td style="color:{'#27ae60' if boost_triggered else '#f39c12'};">{"触发 +1.3x基本面权重" if boost_triggered else "未达阈值"}</td>
 <td>{"基本面权重提升" if boost_triggered else "-"}</td></tr>"""
@@ -620,6 +790,6 @@ class FiveSectionRenderer:
             f'<div class="disclaimer">'
             f"本报告由系统自动生成，仅供个人研究参考，不构成任何投资建议。股市有风险，投资需谨慎。"
             f"所有分析基于历史数据，不代表未来表现。五截面评分模型为实验性框架，存在模型风险与数据局限性。"
-            f"<br>生成时间：{now} &nbsp;|&nbsp; 数据来源：在线数据库 &nbsp;|&nbsp; 框架: FiveSectionFramework v1.0"
+            f"<br>生成时间：{now} &nbsp;|&nbsp; 数据来源：在线数据库 &nbsp;|&nbsp; 框架: FiveSectionFramework v2.0"
             f"</div>"
         )
