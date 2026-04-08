@@ -322,6 +322,7 @@ class ReportDataTools:
             return f"[预期回报] {clean_code} 历史数据不足，无法计算"
 
         df = pd.DataFrame(rows)
+        df["pe_ttm"] = pd.to_numeric(df["pe_ttm"], errors="coerce")
         pe_series = df["pe_ttm"].dropna()
         pe_series = pe_series[pe_series > 0]
         current_pe = _safe_float(df.iloc[-1].get("pe_ttm"))
@@ -426,6 +427,110 @@ class ReportDataTools:
 
         return self._format_tech_text(latest, all_signals, trend, macd_div)
 
+    # ----------------------------------------------------------
+    # 5. Bank Industry Specific Data
+    # ----------------------------------------------------------
+
+    def get_bank_indicators(self, stock_code: str) -> str:
+        """
+        获取银行行业专项指标，用于 Step1 银行资产质量分析。
+
+        数据来源：
+        - financial_balance：NPL率、拨备覆盖率、CAR、NIM（由 financial_fetcher 写入）
+        - bank_asset_quality：NPL率2（逾期90d+ + 重组贷款/总贷款）、逾期/不良比
+
+        Returns:
+            Formatted text for LLM consumption
+        """
+        if _execute_query is None:
+            return "[银行指标] DB模块未加载"
+
+        clean_code = stock_code.split(".")[0]
+        lines = [f"[银行专项指标] {clean_code}"]
+
+        # -- 1. 标准财务指标（来自 financial_balance）--
+        sql_std = """
+            SELECT
+                report_date,
+                npl_ratio,
+                provision_coverage,
+                cap_adequacy_ratio,
+                nim,
+                tier1_ratio
+            FROM financial_balance
+            WHERE stock_code = %s
+            ORDER BY report_date DESC
+            LIMIT 8
+        """
+        try:
+            rows = _execute_query(sql_std, params=(clean_code,), env=self._db_env)
+            if rows:
+                lines.append("\n-- 资产质量与经营指标（近8期）--")
+                lines.append(
+                    f"{'报告期':<12} {'官方NPL率':>10} {'拨备覆盖':>10} "
+                    f"{'NIM(%)':>8} {'CET1(%)':>8} {'CAR(%)':>8}"
+                )
+                for r in rows:
+                    npl = f"{float(r['npl_ratio']):.2f}%" if r.get('npl_ratio') else "N/A"
+                    prov = f"{float(r['provision_coverage']):.1f}%" if r.get('provision_coverage') else "N/A"
+                    nim = f"{float(r['nim']):.2f}%" if r.get('nim') else "N/A"
+                    t1 = f"{float(r['tier1_ratio']):.2f}%" if r.get('tier1_ratio') else "N/A"
+                    car = f"{float(r['cap_adequacy_ratio']):.2f}%" if r.get('cap_adequacy_ratio') else "N/A"
+                    lines.append(
+                        f"{str(r.get('report_date','')):<12} {npl:>10} {prov:>10} "
+                        f"{nim:>8} {t1:>8} {car:>8}"
+                    )
+            else:
+                lines.append("[financial_balance] 无数据（需运行 financial_fetcher）")
+        except Exception as e:
+            logger.warning("[ReportDataTools] bank_std query failed for %s: %s", stock_code, e)
+            lines.append(f"[financial_balance] 查询失败: {e}")
+
+        # -- 2. 扩展资产质量（来自 bank_asset_quality）--
+        sql_ext = """
+            SELECT
+                report_date,
+                npl_ratio2,
+                overdue_91,
+                restructured,
+                provision_adj,
+                profit_adj_est
+            FROM bank_asset_quality
+            WHERE stock_code = %s
+            ORDER BY report_date DESC
+            LIMIT 8
+        """
+        try:
+            rows2 = _execute_query(sql_ext, params=(clean_code,), env=self._db_env)
+            if rows2:
+                lines.append("\n-- Flitter方法：扩展不良指标 --")
+                lines.append(
+                    f"{'报告期':<12} {'NPL率2(%)':>12} {'逾期90d(亿)':>12} "
+                    f"{'重组贷款(亿)':>12} {'拨备调整(亿)':>12} {'利润调整(亿)':>12}"
+                )
+                for r in rows2:
+                    npl2 = f"{float(r['npl_ratio2']):.2f}%" if r.get('npl_ratio2') else "N/A"
+                    ov91 = f"{float(r['overdue_91']):.1f}亿" if r.get('overdue_91') else "N/A"
+                    restr = f"{float(r['restructured']):.1f}亿" if r.get('restructured') else "N/A"
+                    padj = f"{float(r['provision_adj']):.1f}亿" if r.get('provision_adj') is not None else "N/A"
+                    prof = f"{float(r['profit_adj_est']):.1f}亿" if r.get('profit_adj_est') is not None else "N/A"
+                    lines.append(
+                        f"{str(r.get('report_date','')):<12} {npl2:>12} {ov91:>12} "
+                        f"{restr:>12} {padj:>12} {prof:>12}"
+                    )
+                lines.append(
+                    "注：NPL率2 = (逾期90d+ + 重组贷款) / 总贷款；"
+                    "拨备调整 = (NPL率2-NPL率) x 总贷款 x 150%拨备要求；"
+                    "利润调整 = 若按NPL率2计提，税后利润受损估算"
+                )
+            else:
+                lines.append("[bank_asset_quality] 无数据（需运行 financial_fetcher 的 Flitter 模块）")
+        except Exception as e:
+            logger.warning("[ReportDataTools] bank_ext query failed for %s: %s", stock_code, e)
+            lines.append(f"[bank_asset_quality] 查询失败: {e}")
+
+        return "\n".join(lines)
+
     def _format_tech_text(
         self,
         latest: pd.Series,
@@ -473,3 +578,92 @@ class ReportDataTools:
                 lines.append(f"  {level_tag} {sig.name}: {sig.description}")
 
         return "\n".join(lines)
+
+    # ----------------------------------------------------------
+    # 6. Consensus Forecast & Earnings Preview
+    # ----------------------------------------------------------
+
+    def get_consensus_forecast(self, stock_code: str) -> str:
+        """
+        获取分析师一致预期（EPS、ROE 预测）。
+
+        数据源：AKShare stock_profit_forecast_ths（同花顺数据）
+        适用于所有行业。
+
+        Returns:
+            Formatted text with consensus forecast for 2-3 years
+        """
+        clean_code = stock_code.split(".")[0]
+        try:
+            import akshare as ak
+            df = ak.stock_profit_forecast_ths(symbol=clean_code)
+            if df is None or df.empty:
+                return "[一致预期] 无数据"
+
+            lines = [f"[分析师一致预期] {clean_code}（同花顺数据）"]
+            lines.append(f"\n{'年度':<8} {'预测机构数':>8} {'EPS最小值':>10} {'EPS均值':>10} {'EPS最大值':>10} {'行业均值':>10}")
+
+            for _, row in df.iterrows():
+                year = str(row.get("年度", "N/A"))
+                count = str(row.get("预测机构数", "N/A"))
+                min_val = f"{float(row['最小值']):.2f}" if row.get("最小值") else "N/A"
+                avg_val = f"{float(row['均值']):.2f}" if row.get("均值") else "N/A"
+                max_val = f"{float(row['最大值']):.2f}" if row.get("最大值") else "N/A"
+                ind_avg = f"{float(row['行业平均数']):.2f}" if row.get("行业平均数") else "N/A"
+
+                lines.append(
+                    f"{year:<8} {count:>8} {min_val:>10} {avg_val:>10} "
+                    f"{max_val:>10} {ind_avg:>10}"
+                )
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.warning("[ReportDataTools] Consensus forecast failed for %s: %s", stock_code, e)
+            return f"[一致预期] {clean_code} 获取失败: {e}"
+
+    def get_earnings_preview(self, stock_code: str) -> str:
+        """
+        获取最新业绩预告（预增/略增/略减/预减）。
+
+        数据源：AKShare stock_yjyg_em（网易数据）
+        目前 API 稳定性有限，返回 fallback 文本。
+
+        Returns:
+            Formatted text with latest earnings preview info (或 fallback)
+        """
+        return "[业绩预告] 数据源暂不可用，建议查看公司公告"
+
+    def get_top_shareholders(self, stock_code: str, top_n: int = 10) -> str:
+        """
+        获取十大流通股东信息。
+
+        数据源：AKShare stock_gdfx_free_holding_detail_em（网易数据）
+        目前 API 稳定性有限，返回 fallback 文本。
+
+        Args:
+            stock_code: Stock code
+            top_n: Number of top shareholders to return
+
+        Returns:
+            Formatted text with top shareholders (或 fallback)
+        """
+        return "[流通股东] 数据源暂不可用，建议查看最新年报附注"
+
+    def get_bank_cross_section(self) -> str:
+        """
+        获取全A股银行的横截面对标数据。
+
+        暂时返回提示文本（完整实现需汇总全行业数据）。
+
+        Returns:
+            Formatted text noting data limitation
+        """
+        return """[银行行业对标表]
+代表性银行估值位置（按PB排序）：
+- 城商行：PB 0.6-0.8x，隐含ROE 12-15%，风险较高
+- 股份制银行：PB 0.8-1.1x，隐含ROE 13-18%，增速中等
+- 大型银行：PB 0.9-1.2x，隐含ROE 12-17%，稳定性强
+
+当前个股在同业中的位置：低估(PB<0.8) / 合理(0.8-1.2) / 高估(PB>1.2)
+
+注：完整对标表需汇总全部上市银行数据，建议结合年度行业研究报告查阅。"""

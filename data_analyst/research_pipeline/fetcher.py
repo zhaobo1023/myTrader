@@ -161,11 +161,12 @@ class ResearchDataFetcher:
             else 0.0
         )
 
-        # v2: 计算数据时效性
+        # v2: 计算数据时效性（按 report_date 实际距今月数）
         latest_date_str = str(latest["report_date"])
-        report_year = int(latest_date_str[:4])
+        from datetime import date as _date
+        report_date_obj = latest["report_date"] if hasattr(latest["report_date"], 'year') else _date.fromisoformat(latest_date_str)
         now = datetime.now()
-        stale_months = (now.year - report_year) * 12 + now.month
+        stale_months = (now.year - report_date_obj.year) * 12 + (now.month - report_date_obj.month)
         is_stale = stale_months > 18
         data_warning = (
             f"[STALE] 财务数据距今 {stale_months} 个月（最新年报: {latest_date_str}），"
@@ -280,11 +281,11 @@ class ResearchDataFetcher:
         )
 
         if not rows:
-            logger.warning(f"[{stock_code}] No moneyflow data found")
+            logger.warning(f"[{stock_code}] No moneyflow data found, using neutral score")
             return FundFlowData(
                 rps_120=rps_120,
-                is_missing=True,
-                data_warning="[MISSING] trade_stock_moneyflow 表无数据，资金面评分不可用",
+                is_missing=False,
+                data_warning="[WARN] 资金流向数据暂缺，资金面使用中性评分",
             )
 
         amounts = [float(r["net_mf_amount"] or 0) for r in rows]

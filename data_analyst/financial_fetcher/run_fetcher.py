@@ -58,15 +58,97 @@ logging.basicConfig(
 logger = logging.getLogger('financial_fetcher')
 
 
+def _load_all_stocks(env: str) -> dict:
+    """load full A-share stock list from trade_stock_basic, return {code: name}"""
+    from config.db import execute_query
+    rows = execute_query(
+        "SELECT stock_code, stock_name FROM trade_stock_basic ORDER BY stock_code",
+        env=env,
+    )
+    result = {}
+    for r in rows:
+        raw = r["stock_code"]  # e.g. 000001.SZ
+        code = raw.split(".")[0] if "." in raw else raw
+        result[code] = r["stock_name"].strip()
+    return result
+
+
+def _load_done_codes(progress_file: str) -> set:
+    """read already-fetched stock codes from progress file"""
+    if not os.path.exists(progress_file):
+        return set()
+    done = set()
+    with open(progress_file) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                done.add(line)
+    return done
+
+
+def _mark_done(progress_file: str, code: str):
+    with open(progress_file, "a") as f:
+        f.write(code + "\n")
+
+
+def _run_all(config: FinancialFetcherConfig, workers: int = 3):
+    """fetch all A-share stocks with parallel workers and resume support"""
+    import concurrent.futures
+    import threading
+
+    ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    progress_dir = os.path.join(ROOT, 'output', 'financial_fetcher')
+    os.makedirs(progress_dir, exist_ok=True)
+    progress_file = os.path.join(progress_dir, 'progress.txt')
+    failed_file = os.path.join(progress_dir, 'failed.txt')
+
+    all_stocks = _load_all_stocks(config.db_env)
+    done_codes = _load_done_codes(progress_file)
+    pending = {k: v for k, v in all_stocks.items() if k not in done_codes}
+
+    logger.info(f"Total: {len(all_stocks)}, done: {len(done_codes)}, pending: {len(pending)}, workers: {workers}")
+
+    # init tables once before parallel workers start
+    FinancialStorage(env=config.db_env).init_tables()
+
+    lock = threading.Lock()
+    counter = {"done": len(done_codes), "fail": 0}
+
+    def fetch_one(item):
+        code, name = item
+        try:
+            run_fetch(config, stock_codes={code: name}, skip_init=True)
+            with lock:
+                _mark_done(progress_file, code)
+                counter["done"] += 1
+                logger.info(f"[{counter['done']}/{len(all_stocks)}] {name}({code}) done")
+        except Exception as e:
+            with lock:
+                counter["fail"] += 1
+                with open(failed_file, "a") as f:
+                    f.write(f"{code}\t{name}\t{e}\n")
+            logger.error(f"[FAIL] {name}({code}): {e}")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        executor.map(fetch_one, pending.items())
+
+    logger.info(f"All done. success={counter['done']}, fail={counter['fail']}")
+    logger.info(f"Progress: {progress_file}")
+    if counter["fail"]:
+        logger.info(f"Failed list: {failed_file}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Financial Data Fetcher')
     parser.add_argument('--code', type=str, help='Single stock code to fetch')
+    parser.add_argument('--all', action='store_true', help='Fetch all A-share stocks from trade_stock_basic')
     parser.add_argument('--env', type=str, default='online', choices=['local', 'online'])
     parser.add_argument('--output', type=str, help='Output dir for Markdown')
     parser.add_argument('--download-pdf', action='store_true', help='Download PDF annual reports')
     parser.add_argument('--ingest-rag', action='store_true', help='Ingest Markdown + PDF text to ChromaDB')
     parser.add_argument('--ingest-pdf', action='store_true', help='Ingest PDF annual reports to ChromaDB (extract text first)')
     parser.add_argument('--no-db', action='store_true', help='Skip database writes')
+    parser.add_argument('--workers', type=int, default=3, help='Parallel workers for --all mode (default 3)')
 
     args = parser.parse_args()
     config = FinancialFetcherConfig()
@@ -78,8 +160,11 @@ def main():
     try:
         # 1. fetch structured data
         if not args.no_db:
-            stats = run_fetch(config, single_code=args.code)
-            logger.info(f"Fetch stats: {stats}")
+            if args.all:
+                _run_all(config, workers=args.workers)
+            else:
+                stats = run_fetch(config, single_code=args.code)
+                logger.info(f"Fetch stats: {stats}")
 
         # 2. generate markdown
         storage = FinancialStorage(env=config.db_env)

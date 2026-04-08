@@ -1,0 +1,39 @@
+[Unit]
+Description=myTrader API Service (FastAPI)
+After=network.target
+Wants=mytrader-redis.service
+
+[Service]
+Type=notify
+User=ubuntu
+WorkingDirectory=/opt/myTrader
+Environment="PATH=/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin"
+Environment="PYTHONPATH=/opt/myTrader"
+Environment="DB_ENV=online"
+Environment="LOG_LEVEL=INFO"
+
+# 启动命令
+ExecStart=/home/ubuntu/.local/bin/uvicorn api.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 4 \
+    --log-level info \
+    --access-log
+
+# 重启策略
+Restart=always
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=3
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mytrader-api
+
+# 资源限制
+LimitNOFILE=65535
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

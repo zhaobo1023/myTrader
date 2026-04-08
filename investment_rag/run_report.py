@@ -38,7 +38,6 @@ def main():
     from investment_rag.report_engine.five_step import FiveStepAnalyzer
     from investment_rag.report_engine.report_builder import ReportBuilder
     from investment_rag.report_engine.report_store import ReportStore
-    from investment_rag.report_engine.prompts import FIVE_STEP_CONFIG
 
     db_env = os.environ.get("DB_ENV", "online")
     analyzer = FiveStepAnalyzer(db_env=db_env)
@@ -49,21 +48,22 @@ def main():
 
     fundamental_results = {}
     tech_section = ""
+    executive_summary = ""
 
     if args.type in ("fundamental", "comprehensive"):
-        print("[INFO] Running 五步法 fundamental analysis (5 steps)...")
-        for step_config in FIVE_STEP_CONFIG:
-            print(f"  -> Step: {step_config.name} ...", end="", flush=True)
-            prev_analysis = "\n\n---\n\n".join(fundamental_results.values())
-            result = analyzer._run_single_step(
-                step_config=step_config,
-                stock_code=args.code,
-                stock_name=args.name,
-                prev_analysis=prev_analysis,
-                collection=args.collection,
-            )
-            fundamental_results[step_config.step_id] = result
-            print(f" done ({len(result)} chars)")
+        print("[INFO] Running five-step fundamental analysis...")
+        fundamental_results = analyzer.generate_fundamental(
+            stock_code=args.code,
+            stock_name=args.name,
+            collection=args.collection,
+        )
+        executive_summary = fundamental_results.pop("executive_summary", "")
+        fundamental_results.pop("full_report", None)
+        for step_id in ["step1", "step2", "step3", "step4", "step5"]:
+            content = fundamental_results.get(step_id, "")
+            print(f"  [OK] {step_id}: {len(content)} chars")
+        if executive_summary:
+            print(f"  [OK] executive_summary: {len(executive_summary)} chars")
 
     if args.type in ("technical", "comprehensive"):
         print("[INFO] Running technical analysis ...", end="", flush=True)
@@ -76,12 +76,14 @@ def main():
             stock_name=args.name,
             fundamental_results=fundamental_results,
             tech_section=tech_section,
+            executive_summary=executive_summary,
         )
     elif args.type == "fundamental":
         final_report = builder.build_fundamental_only(
             stock_code=args.code,
             stock_name=args.name,
             fundamental_results=fundamental_results,
+            executive_summary=executive_summary,
         )
     else:
         final_report = f"# {args.name}({args.code}) 技术面分析\n\n{tech_section}"

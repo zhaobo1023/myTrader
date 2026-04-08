@@ -1,12 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-Five-step research report Prompt templates.
+五步法研报 Prompt 模板 v2.0
 
-Design principles:
-- Each step's output becomes {prev_analysis} context for next step (progressive chain)
-- Each step has independent RAG query list for targeted multi-angle retrieval
-- No emoji characters (use plain text: [RED]/[OK]/[WARN])
-- All prompts output Markdown format for easy assembly
+v2.0 改进要点：
+- 每步加"不重复前步已有数据和结论"硬约束，消除步骤间冗余
+- Step1 限制为 3 个高重要性信息点（砍掉低/中级别）
+- Step2 禁止引用 Step1 已列数字，聚焦逻辑链和护城河
+- Step3 砍掉"一致预期表格"（LLM 无法获取真实一致预期），聚焦估值隐含假设
+- Step4 纯表格输出，禁止说明段落
+- Step5 改为数据卡片格式，不写段落
+- 新增执行摘要 Prompt（200字以内的决策速览）
+- 上下文传递由全文改为结构化摘要
+
+设计原则：
+- 每步输出聚焦本步独有视角，不回顾前步内容
+- 禁止 emoji（使用纯文本：[RED]/[OK]/[WARN]）
+- 所有输出使用中文 Markdown 格式
 """
 from dataclasses import dataclass, field
 from typing import List
@@ -15,283 +24,350 @@ from typing import List
 # System prompt
 # ============================================================
 
-ANALYST_SYSTEM_PROMPT = """You are a professional investment research analyst focused on the A-share market.
-Analysis is fact-based, logically clear, combining quantitative and qualitative methods.
-Output format is Markdown, well-structured, suitable for professional research reports.
-No exaggeration, no unfounded predictions; clearly mark uncertain content as "needs verification".
-Today's date: {today}
+ANALYST_SYSTEM_PROMPT = """你是一位专注于A股市场的专业投资研究分析师。
+分析以事实为依据，逻辑清晰，结合定量与定性方法。
+输出格式为Markdown，结构完整，适合专业研究报告。
+不夸大、不做无根据的预测；对不确定内容明确标注"需进一步核实"。
+所有输出必须使用中文，包括标题、正文、术语解释。
+严禁使用 emoji 字符，用纯文本标记替代（如 [RED]、[WARN]、[OK]）。
+今日日期：{today}
+
+**核心规则：每步分析只写本步新增的视角和发现，严禁重复前步已经给出的数据、结论或论述。**
 """
 
 # ============================================================
-# Step 1: Information Gap
+# 第一步：财报关键发现
 # ============================================================
 
-STEP1_PROMPT = """## Task: Information Gap Analysis (Step 1)
+STEP1_PROMPT = """## 任务：财报关键发现（第一步）
 
-**Company**: {stock_name}
+**公司**：{stock_name}
+**行业**：{industry_name}
 
-**Financial Data Context**:
+**财务数据背景**：
 {financial_context}
 
-**Research Report/Announcement Retrieval Context**:
+**行业专项数据**：
+{industry_extra_data}
+
+**研报/公告检索背景**：
 {rag_context}
 
-**Instructions**:
-From the above materials, identify 3-5 key information points that the market may have overlooked (information gap):
-1. Hidden highlights or risks in financial report footnotes (accounting policy changes, impairment details)
-2. Divergence between cash flow and profit (high profit, low cash flow warning)
-3. Impact of non-recurring items on net profit and true earning power after exclusion
-4. Structural changes in balance sheet (abnormal growth in receivables/inventory)
-5. Quantitative evidence of industry position changes (market share, gross margin trends)
+**分析要求**：
+从上述材料中，识别 **3个** 市场可能忽视的高重要性信息点。
+只保留对投资决策有实质影响的发现，跳过常规信息。
 
-**Output Format** (strictly follow):
-### Information Gap Analysis
+{step1_focus_areas}
+筛选方向（若行业专项关注为空，则使用以下通用方向；不必全覆盖，选最有价值的3个）：
+1. 现金流与利润的背离（经营现金流/净利润比值异常）
+2. 非经常性损益的方向和规模（扣非净利润 vs 归母净利润）
+3. 资产负债表的结构性变化（应收/存货/商誉/有息负债的异常波动）
+4. 毛利率/净利率的趋势拐点（区分周期因素和结构性改善）
+5. 行业地位的量化变化（市占率、相对竞争力）
 
-#### Key Information Point 1: [Title]
-- Data: [specific numbers or ratios]
-- Market Common Understanding: [...]
-- Actual Situation: [what you found different]
-- Importance: [High/Medium/Low]
+**输出格式**（严格遵守，全部中文，不超过800字）：
 
-(Repeat for 3-5 points)
+#### 发现1：[一句话标题]
+- 关键数据：[具体数字，含同比/环比变化]
+- 投资含义：[这个发现对估值或盈利预测意味着什么，2-3句]
 
-#### Data Limitations
-[Data limitations for this analysis, what needs additional verification]
+#### 发现2：[一句话标题]
+- 关键数据：[具体数字]
+- 投资含义：[2-3句]
+
+#### 发现3：[一句话标题]
+- 关键数据：[具体数字]
+- 投资含义：[2-3句]
+
+#### 数据局限
+[1-2句，指出最关键的数据缺失]
 """
 
 STEP1_RAG_QUERIES = [
-    "{stock_name} financial indicators revenue net profit gross margin cash flow",
-    "{stock_name} annual report quarterly report accounts receivable impairment non-recurring items",
-    "{stock_name} accounting policy financial footnotes subsidies impairment",
+    "{stock_name} 财务指标 营收 净利润 毛利率 现金流",
+    "{stock_name} 年报 季报 应收账款 减值 非经常性损益",
+    "{stock_name} 会计政策 财报脚注 政府补贴 商誉减值",
 ]
 
 # ============================================================
-# Step 2: Logic Gap
+# 第二步：驱动逻辑与护城河
 # ============================================================
 
-STEP2_PROMPT = """## Task: Logic Gap Analysis (Step 2)
+STEP2_PROMPT = """## 任务：驱动逻辑与护城河（第二步）
 
-**Company**: {stock_name}
+**公司**：{stock_name}
+**行业**：{industry_name}
 
-**Previous Step Analysis (Information Gap)**:
+**第一步要点摘要**：
 {prev_analysis}
 
-**Supplementary Retrieval Context**:
+**补充检索背景**：
 {rag_context}
 
-**Instructions**:
-Based on the information gap from Step 1, identify market logic misconceptions and build correct analytical framework:
-1. Point out 1-3 most common linear thinking or false analogies in the market
-2. Build correct driver factor chain (A causes B causes C causal logic)
-3. Identify the company's true core competitive moat (quantifiable)
-4. Assess completeness and sustainability of current logic chain
+**行业对标数据**：
+{bank_cross_section}
 
-**Output Format**:
-### Logic Gap Analysis
+**分析要求**：
+基于第一步发现，构建正确的投资逻辑框架。
+**严禁重复第一步已列出的数据和结论，只写本步新增的逻辑分析。**
 
-#### Market Misconceptions
-| Misconception | Reason for Error | Correct Logic |
-|--------------|-----------------|---------------|
-| [misconception 1] | [reason] | [correct analysis] |
+聚焦以下两个核心问题：
 
-#### Correct Driver Logic Chain
-[A] -> [B] -> [C] -> [stock price driver]
+1. **驱动因子链条**：用 A -> B -> C -> 股价驱动 的格式，梳理从业务变化到股价的因果传导路径。每个环节附一个支撑数据点。
 
-#### Core Competitive Moat Assessment
-[Qualitative description + quantifiable metrics]
+2. **护城河评估**：{moat_dimensions}
+只评估最核心的 1-2 项竞争优势，必须附可量化指标（如 ROE持续性、桶油成本、客户集中度、转换成本等），给出护城河强度评级（强/中/弱）。
 
-#### Logic Sustainability Judgment
-[Expected duration of current driver logic and key variables]
+**输出格式**（严格遵守，全部中文，不超过600字）：
+
+#### 驱动逻辑链条
+[A：具体业务变化] -> [B：财务指标传导] -> [C：盈利/现金流变化] -> [股价驱动因素]
+> 各环节支撑：[每环节一个数据点]
+
+#### 护城河评估
+- 核心优势：[名称]
+- 量化证据：[具体指标和数值]
+- 强度：[强/中/弱]
+- 可持续性：[预计持续X年，关键风险变量]
 """
 
 STEP2_RAG_QUERIES = [
-    "{stock_name} competitive advantage moat market share industry position",
-    "{stock_name} business model profit model core competitiveness",
-    "{stock_name} industry landscape competitors peer companies",
+    "{stock_name} 竞争优势 护城河 市场份额 行业地位",
+    "{stock_name} 商业模式 盈利模式 核心竞争力",
+    "{stock_name} 行业格局 竞争对手 同行业公司",
 ]
 
 # ============================================================
-# Step 3: Expectation Gap
+# 第三步：估值与预期偏差
 # ============================================================
 
-STEP3_PROMPT = """## Task: Expectation Gap Analysis (Step 3)
+STEP3_PROMPT = """## 任务：估值与预期偏差（第三步）
 
-**Company**: {stock_name}
+**公司**：{stock_name}
+**行业**：{industry_name}
 
-**Accumulated Previous Analysis**:
+**前两步要点摘要**：
 {prev_analysis}
 
-**Financial Data Context**:
+**财务数据背景**：
 {financial_context}
 
-**Valuation Historical Percentile**:
+**估值历史分位**：
 {valuation_context}
 
-**Instructions**:
-Build comparison between consensus expectations and reality, quantify expectation gap:
-1. Summarize market consensus expectations for core metrics (revenue/net profit/gross margin/ROE)
-2. Compare with actual data, quantify deviation magnitude
-3. Assess scale (large/medium/small) and expected duration of expectation gap
-4. Judge whether current valuation already reflects this expectation gap
+**分析师一致预期**：
+{consensus_forecast_context}
 
-**Output Format**:
-### Expectation Gap Analysis
+**行业对标数据**：
+{bank_cross_section}
 
-| Metric | Market Consensus | Actual/Forecast | Deviation | Confidence |
-|--------|-----------------|-----------------|-----------|------------|
-| Revenue Growth | X% | Y% | +/- Z% | High/Medium/Low |
-| Net Profit Growth | X% | Y% | +/- Z% | High/Medium/Low |
-| Gross Margin | X% | Y% | +/- Z pct | High/Medium/Low |
-| ROE | X% | Y% | +/- Z pct | High/Medium/Low |
+**预期回报测算**：
+{expected_return_context}
 
-#### Valuation Implied Expectations
-[Growth assumption implied by current PE/PB vs your judgment]
+**分析要求**：
+**严禁重复前两步已有的数据和论述。** 本步只回答一个核心问题：当前股价隐含了什么假设，这个假设合理吗？与分析师一致预期有无偏差？与同业对标比较如何？
 
-#### Expectation Gap Realization Window
-[When will this gap be recognized by market, key observation nodes]
+{valuation_note}
+聚焦两个分析：
+
+1. **估值隐含假设拆解**：当前 PE/PB 隐含了多少增长率和 ROE 假设？与前两步发现的实际情况有多大偏差？与分析师一致预期和同业对标位置如何对比？结论是高估/合理/低估？
+
+2. **预期偏差的兑现窗口**：如果存在预期偏差，市场最可能在什么时间节点修正？列出 2-3 个关键观察节点（具体事件+预期时间）。
+
+**输出格式**（严格遵守，全部中文，不超过500字）：
+
+#### 估值隐含假设
+| 维度 | 当前估值隐含 | 实际情况（基于前两步） | 偏差方向 |
+|------|------------|-------------------|---------|
+| 盈利增速 | X% | Y% | 低估/合理/高估 |
+| ROE水平 | X% | Y% | 低估/合理/高估 |
+| 现金流质量 | [描述] | [描述] | 未充分定价/已定价 |
+
+**综合判断**：[一句话结论——当前估值高估/合理/低估，偏差幅度大/中/小]
+
+#### 预期修正窗口
+1. [事件] - [预期时间] - [为什么能修正预期]
+2. [事件] - [预期时间] - [为什么能修正预期]
 """
 
 STEP3_RAG_QUERIES = [
-    "{stock_name} performance expectations consensus analyst forecast",
-    "{stock_name} valuation PE PB historical percentile valuation center",
-    "{stock_name} revenue growth net profit growth forecast",
+    "{stock_name} 业绩预期 一致预期 分析师预测",
+    "{stock_name} 估值 PE PB 历史分位 估值中枢",
+    "{stock_name} 营收增速 净利润增速 预测",
 ]
 
 # ============================================================
-# Step 4: Catalysts
+# 第四步：催化剂时间表
 # ============================================================
 
-STEP4_PROMPT = """## Task: Catalyst Identification (Step 4)
+STEP4_PROMPT = """## 任务：催化剂时间表（第四步）
 
-**Company**: {stock_name}
+**公司**：{stock_name}
+**行业**：{industry_name}
 
-**Accumulated Previous Analysis**:
+**前三步要点摘要**：
 {prev_analysis}
 
-**Retrieval Context (Policy/Events/Announcements)**:
+**检索背景（政策/事件/公告）**：
 {rag_context}
 
-**Instructions**:
-Identify catalysts that drive expectation gap realization, arranged by timeline:
-1. Short-term catalysts (1-3 months): earnings guidance, important meetings, industry policy
-2. Medium-term catalysts (3-12 months): new product ramp-up, overseas expansion, M&A integration
-3. Negative catalysts (risk events to watch, with probability)
+**分析要求**：
+**严禁重复前三步已有的内容。** 本步只做一件事：列出能推动或阻碍预期差兑现的具体事件时间表。
 
-**Output Format**:
-### Catalyst Analysis
+规则：
+- 每个催化剂只写一行表格，不写解释段落
+- 时间必须具体到月份（不接受"Q3"这种模糊表述，写"2025年8月"）
+- 正面催化剂最多5个，负面催化剂最多3个
 
-#### Short-term Catalysts (1-3 months)
-| Event | Expected Time | Direction | Magnitude |
-|-------|--------------|-----------|-----------|
-| [event 1] | [time] | [Positive/Negative] | [Large/Medium/Small] |
+**输出格式**（严格遵守，全部中文，纯表格）：
 
-#### Medium-term Catalysts (3-12 months)
-| Event | Expected Time | Direction | Magnitude |
-|-------|--------------|-----------|-----------|
+#### 正面催化剂
+| 事件 | 预期时间 | 影响幅度 |
+|------|---------|---------|
+| [事件1] | [YYYY年M月] | [大/中/小] |
 
-#### Negative Catalysts (Risks)
-| Risk Event | Probability | Impact Level | Response Suggestion |
-|-----------|------------|--------------|---------------------|
+#### 负面催化剂（风险）
+| 风险事件 | 概率 | 影响程度 |
+|---------|------|---------|
+| [风险1] | [X%] | [大/中/小] |
 """
 
 STEP4_RAG_QUERIES = [
-    "{stock_name} policy benefits industry policy regulation policy risk",
-    "{stock_name} new products new projects strategic plan expansion",
-    "{stock_name} risks uncertainties challenges competitive pressure",
+    "{stock_name} 政策利好 行业政策 监管政策风险",
+    "{stock_name} 新产品 新项目 战略规划 扩张",
+    "{stock_name} 风险 不确定性 挑战 竞争压力",
 ]
 
 # ============================================================
-# Step 5: Comprehensive Conclusion
+# 第五步：风险与操作建议
 # ============================================================
 
-STEP5_PROMPT = """## Task: Comprehensive Conclusion (Step 5)
+STEP5_PROMPT = """## 任务：风险与操作建议（第五步）
 
-**Company**: {stock_name}
+**公司**：{stock_name}
+**行业**：{industry_name}
 
-**Complete Previous Analysis (Info Gap + Logic Gap + Expectation Gap + Catalysts)**:
+**前四步要点摘要**：
 {prev_analysis}
 
-**Technical Data**:
+**技术面数据**：
 {technical_context}
 
-**Valuation Historical Percentile**:
+**估值历史分位**：
 {valuation_context}
 
-**Expected Return Estimate**:
+**预期回报测算**：
 {expected_return_context}
 
-**Instructions**:
-Synthesize all four previous steps into actionable investment conclusion:
-1. Investment rating (Strong Buy / Buy / Neutral / Sell)
-2. Core investment thesis (2-3 concise sentences)
-3. Key assumptions (conditions for logic to hold)
-4. Risk circuit breaker (3 conditions that invalidate the thesis)
-5. Reference price levels (combined with technical support/resistance)
+**行业专项风险维度**：
+{risk_dimensions}
 
-**Output Format**:
-### Comprehensive Conclusion
+**分析要求**：
+**严禁重复前四步内容。** 本步只输出结构化的决策卡片，不写分析段落。
+综合前四步分析 + 技术面数据 + 估值数据 + 行业专项风险，给出可操作的投资结论。
 
-**Rating**: [Strong Buy / Buy / Neutral / Sell]
+**输出格式**（严格遵守数据卡片格式，全部中文，不超过400字）：
 
-**Core Thesis**:
-[2-3 sentence core investment logic with quantitative support]
+#### 投资评级
 
-#### Key Assumptions
-1. [assumption 1]
-2. [assumption 2]
-3. [assumption 3]
+| 项目 | 结论 |
+|------|------|
+| 评级 | [强烈推荐/推荐/中性/回避] |
+| 核心逻辑 | [一句话，不超过40字] |
+| 预期回报 | [+X% / N年] |
+| 最大风险 | [一句话] |
 
-#### Risk Circuit Breaker (Invalidation Conditions)
-| Invalidation Condition | Probability | Recommended Action |
-|----------------------|------------|-------------------|
-| [condition 1] | High/Medium/Low | Stop-loss/Reduce/Hold |
-| [condition 2] | High/Medium/Low | ... |
-| [condition 3] | High/Medium/Low | ... |
+#### 关键假设（逻辑成立的前提）
+1. [假设1 - 附量化条件]
+2. [假设2 - 附量化条件]
+3. [假设3 - 附量化条件]
 
-#### Reference Price Levels (Technical)
-- Support: [price] (source: [MA20/BOLL lower/previous low])
-- Resistance: [price] (source: [MA60/BOLL upper/previous high])
-- Suggested Stop-loss: [price] (source: [ATR/MA20])
+#### 风险熔断条件
+| 失效条件 | 触发概率 | 操作 |
+|---------|---------|------|
+| [条件1 - 含具体阈值] | [X%] | [止损/减仓] |
+| [条件2 - 含具体阈值] | [X%] | [止损/减仓] |
+| [条件3 - 含具体阈值] | [X%] | [止损/减仓] |
+
+#### 技术面参考价位
+若技术面数据不为空，输出：
+| 类型 | 价格 | 来源 |
+|------|------|------|
+| 支撑位 | [X元] | [MA20/布林下轨/前低] |
+| 压力位 | [X元] | [MA60/布林上轨/前高] |
+| 建议止损 | [X元] | [依据] |
+若技术面数据为空（显示"[无技术面数据]"），则完整省略此区块，不输出任何内容。
 """
 
 # ============================================================
-# Technical Analysis Prompt
+# 执行摘要 Prompt（新增）
 # ============================================================
 
-TECH_ANALYSIS_PROMPT = """## Technical Analysis Task
+EXECUTIVE_SUMMARY_PROMPT = """## 任务：生成执行摘要
 
-**Company**: {stock_name} ({stock_code})
+**公司**：{stock_name}（{stock_code}）
 
-**Technical Indicator Data**:
+**完整分析结果**：
+{full_analysis}
+
+**分析要求**：
+将上述完整分析浓缩为一张决策速览卡片。
+不添加任何新分析，只从已有内容中提炼。
+
+**输出格式**（严格遵守，全部中文，不超过200字）：
+
+**评级**：[强烈推荐/推荐/中性/回避]
+
+**一句话逻辑**：[不超过50字的核心投资理由]
+
+**关键数据**：
+- [最重要的财务数据点1]
+- [最重要的财务数据点2]
+- [当前估值水平一句话描述]
+
+**下一个催化剂**：[最近的一个催化事件 + 时间]
+
+**止损信号**：[最重要的一个风险熔断条件]
+"""
+
+# ============================================================
+# 技术面分析 Prompt（保持不变）
+# ============================================================
+
+TECH_ANALYSIS_PROMPT = """## 任务：技术面分析
+
+**公司**：{stock_name}（{stock_code}）
+
+**技术指标数据**：
 {technical_data}
 
-**Instructions**:
-Based on the above technical data, provide concise technical judgment:
-1. Current trend (uptrend/downtrend/consolidation) and strength
-2. Key support/resistance levels (based on MA/BOLL/previous high-low)
-3. Main signal interpretation (golden cross/death cross/divergence/overbought/oversold)
-4. Short-term operational suggestion (hold/add/reduce/wait)
+**分析要求**：
+基于上述技术数据，给出简洁的技术判断：
+1. 当前趋势（上涨/下跌/震荡）及强度
+2. 关键支撑/压力位（基于均线/布林/前高前低）
+3. 主要信号解读（金叉/死叉/背离/超买/超卖）
+4. 短期操作建议（持有/加仓/减仓/观望）
 
-**Output Format**:
-### Technical Analysis
+**输出格式**（全部使用中文）：
+### 技术面分析
 
-**Trend**: [Uptrend / Downtrend / Consolidation] - [Strong / Moderate / Weak]
+**趋势**：[上涨/下跌/震荡] - [强/中/弱]
 
-**Key Price Levels**:
-| Type | Level | Source |
-|------|-------|--------|
-| Support 1 | XXX | MA20 |
-| Support 2 | XXX | BOLL Lower |
-| Resistance 1 | XXX | MA60 |
-| Resistance 2 | XXX | BOLL Upper |
+**关键价位**：
+| 类型 | 价位 | 来源 |
+|------|------|------|
+| 支撑1 | XXX | MA20 |
+| 支撑2 | XXX | 布林下轨 |
+| 压力1 | XXX | MA60 |
+| 压力2 | XXX | 布林上轨 |
 
-**Signal Interpretation**:
-[Explain each major signal and its implications]
+**信号解读**：
+[解释各主要信号及其含义]
 
-**MACD Divergence**:
-[Divergence type and confidence description]
+**MACD背离**：
+[背离类型及置信度描述]
 
-**Short-term Suggestion**: [Hold / Add / Reduce / Wait], Reason: [...]
+**短期建议**：[持有/加仓/减仓/观望]，理由：[...]
 """
 
 # ============================================================
@@ -313,20 +389,20 @@ class StepConfig:
 FIVE_STEP_CONFIG: List[StepConfig] = [
     StepConfig(
         step_id="step1",
-        name="信息差",
+        name="财报关键发现",
         prompt_template=STEP1_PROMPT,
         rag_queries=STEP1_RAG_QUERIES,
         needs_financial=True,
     ),
     StepConfig(
         step_id="step2",
-        name="逻辑差",
+        name="驱动逻辑与护城河",
         prompt_template=STEP2_PROMPT,
         rag_queries=STEP2_RAG_QUERIES,
     ),
     StepConfig(
         step_id="step3",
-        name="预期差",
+        name="估值与预期偏差",
         prompt_template=STEP3_PROMPT,
         rag_queries=STEP3_RAG_QUERIES,
         needs_financial=True,
@@ -334,13 +410,13 @@ FIVE_STEP_CONFIG: List[StepConfig] = [
     ),
     StepConfig(
         step_id="step4",
-        name="催化剂",
+        name="催化剂时间表",
         prompt_template=STEP4_PROMPT,
         rag_queries=STEP4_RAG_QUERIES,
     ),
     StepConfig(
         step_id="step5",
-        name="综合结论",
+        name="风险与操作建议",
         prompt_template=STEP5_PROMPT,
         rag_queries=[],
         needs_technical=True,

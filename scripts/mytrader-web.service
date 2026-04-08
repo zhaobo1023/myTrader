@@ -1,0 +1,32 @@
+[Unit]
+Description=myTrader Web Frontend (Next.js)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/myTrader/web
+Environment="PATH=/home/ubuntu/.nvm/versions/node/v20.x/bin:/usr/local/bin:/usr/bin"
+Environment="NODE_ENV=production"
+Environment="NEXT_TELEMETRY_DISABLED=1"
+
+# 构建 + 启动
+ExecStart=/home/ubuntu/.nvm/versions/node/v20.x/bin/npm start
+
+# 重启策略
+Restart=always
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=3
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mytrader-web
+
+# 资源限制
+LimitNOFILE=65535
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

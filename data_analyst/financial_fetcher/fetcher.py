@@ -303,7 +303,7 @@ def compute_provision_adj(storage: FinancialStorage, stock_code: str) -> List[di
 
 
 def run_fetch(config: FinancialFetcherConfig, stock_codes: Dict[str, str] = None,
-              single_code: str = None) -> Dict[str, int]:
+              single_code: str = None, skip_init: bool = False) -> Dict[str, int]:
     """
     main entry: fetch all financial data for watch list
     Returns: {stock_code: records_saved_count}
@@ -313,7 +313,8 @@ def run_fetch(config: FinancialFetcherConfig, stock_codes: Dict[str, str] = None
         targets = {single_code: targets.get(single_code, single_code)}
 
     storage = FinancialStorage(env=config.db_env)
-    storage.init_tables()
+    if not skip_init:
+        storage.init_tables()
 
     stats = {}
     for code, name in targets.items():

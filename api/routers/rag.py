@@ -250,22 +250,36 @@ async def report_generate(
         fundamental_results = {}
         tech_section = ''
 
-        # 2. Fundamental steps (step1..step5)
+        # 2. Fundamental steps (step1..step5) - v2.0: 摘要式上下文传递
+        executive_summary = ''
         if req.report_type in ('fundamental', 'comprehensive'):
+            step_outputs = {}
             for step_config in FIVE_STEP_CONFIG:
                 yield f"data: {json.dumps({'type': 'step_start', 'step': step_config.step_id, 'name': step_config.name}, ensure_ascii=False)}\n\n"
 
-                prev_analysis = '\n\n---\n\n'.join(fundamental_results.values())
+                prev_summary = analyzer._build_prev_summary(step_config.step_id, step_outputs)
                 step_result = analyzer._run_single_step(
                     step_config=step_config,
                     stock_code=req.stock_code,
                     stock_name=req.stock_name,
-                    prev_analysis=prev_analysis,
+                    prev_analysis=prev_summary,
                     collection=req.collection,
                 )
                 fundamental_results[step_config.step_id] = step_result
+                step_outputs[step_config.step_id] = step_result
 
                 yield f"data: {json.dumps({'type': 'step_done', 'step': step_config.step_id, 'name': step_config.name, 'content': step_result}, ensure_ascii=False)}\n\n"
+
+            # Generate executive summary
+            full_report_text = '\n\n---\n\n'.join(
+                fundamental_results.get(sc.step_id, '') for sc in FIVE_STEP_CONFIG
+            )
+            executive_summary = analyzer._generate_executive_summary(
+                stock_code=req.stock_code,
+                stock_name=req.stock_name,
+                full_analysis=full_report_text,
+                system_prompt='',
+            )
 
         # 3. Technical section
         if req.report_type in ('technical', 'comprehensive'):
@@ -280,12 +294,14 @@ async def report_generate(
                 stock_name=req.stock_name,
                 fundamental_results=fundamental_results,
                 tech_section=tech_section,
+                executive_summary=executive_summary,
             )
         elif req.report_type == 'fundamental':
             final_report = builder.build_fundamental_only(
                 stock_code=req.stock_code,
                 stock_name=req.stock_name,
                 fundamental_results=fundamental_results,
+                executive_summary=executive_summary,
             )
         else:  # technical
             final_report = f"# {req.stock_name}（{req.stock_code}）技术面分析\n\n{tech_section}"

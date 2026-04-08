@@ -328,7 +328,7 @@ class FiveSectionRenderer:
             f"<td>{health.fund_flow_warning if health.fund_flow_warning else 'OK'}</td></tr>"
 
             f"<tr><td>财务数据</td>{status_cell(health.financial_ok and not health.financial_stale, health.financial_warning)}"
-            f"<td>{health.financial_warning if health.financial_warning else f'最新年报: {health.financial_report_date}'}</td></tr>"
+            f"<td>{health.financial_warning if health.financial_warning else 'OK'}</td></tr>"
 
             f"<tr><td>估值数据</td>{status_cell(health.valuation_ok)}"
             f"<td>{health.valuation_date or '-'}</td></tr>"

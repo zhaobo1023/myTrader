@@ -1,0 +1,16 @@
+[Unit]
+Description=myTrader Redis Service
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/redis-server /etc/redis/redis-mytrader.conf --daemonize no --logfile ""
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mytrader-redis
+
+[Install]
+WantedBy=multi-user.target
