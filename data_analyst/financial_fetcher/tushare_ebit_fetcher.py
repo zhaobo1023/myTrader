@@ -97,20 +97,11 @@ def create_table():
 
 
 def get_all_stock_codes() -> List[str]:
-    """获取全部 A 股代码列表（通过 Tushare）"""
-    if not HAS_TUSHARE:
-        logger.error("[ERROR] Tushare 未安装")
-        return []
-
+    """获取全部 A 股代码列表（通过 AKShare）"""
     try:
-        pro = get_pro()
         # 获取沪深A股列表（不含B股）
-        df = pro.stock_basic(exchange='', list_status='L', fields='ts_code')
-        codes = []
-        for ts_code in df['ts_code'].tolist():
-            # 转换格式: 600519.SH -> 600519
-            code = ts_code.split('.')[0]
-            codes.append(code)
+        df = ak.stock_info_a_code_name()
+        codes = df['code'].tolist()
         logger.info(f"[OK] 获取 A 股代码 {len(codes)} 只")
         return codes
     except Exception as e:
