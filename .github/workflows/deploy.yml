@@ -23,10 +23,37 @@ jobs:
           username: ${{ secrets.ECS_USER }}
           key: ${{ secrets.ECS_SSH_KEY }}
           script: |
+            set -e
+            echo "[INFO] Starting deployment..."
+
             cd /opt/myTrader
+
+            # 1. Git pull
+            echo "[INFO] Pulling latest code..."
             git pull origin main
-            docker compose build api nextjs worker
-            docker compose up -d api nextjs worker
-            sleep 10
-            curl -sf http://localhost:8000/health || exit 1
-            echo "Deploy successful"
+
+            # 2. Install Python dependencies
+            echo "[INFO] Installing dependencies..."
+            pip install -q -r requirements.txt
+
+            # 3. Build frontend (if changed)
+            echo "[INFO] Building frontend..."
+            cd web && npm ci && npm run build && cd ..
+
+            # 4. Database migration
+            echo "[INFO] Running migrations..."
+            alembic upgrade head
+
+            # 5. Restart services via systemd
+            echo "[INFO] Restarting services..."
+            sudo systemctl restart mytrader-api
+            sudo systemctl restart mytrader-web
+
+            # 6. Wait and health check
+            echo "[INFO] Waiting for services..."
+            sleep 3
+
+            echo "[INFO] Checking API health..."
+            curl -sf http://localhost:8000/health || { echo "API health check failed"; exit 1; }
+
+            echo "[SUCCESS] Deploy completed"

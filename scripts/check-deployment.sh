@@ -1,10 +1,8 @@
 #!/bin/bash
 
-# ============================================================
-# myTrader 部署检查脚本
-# 检查 API、前端、Nginx、Redis 是否正常运行
-# 用法: ./scripts/check-deployment.sh
-# ============================================================
+# myTrader Deployment Check Script
+# Check if API, frontend, Nginx, and Redis are running correctly
+# Usage: ./scripts/check-deployment.sh
 
 set -e
 
@@ -25,24 +23,24 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-echo "========== myTrader 部署检查 =========="
+echo "========== myTrader Deployment Check =========="
 echo ""
 
-# 1. 检查 systemd 服务
-echo "1. 检查 systemd 服务状态..."
+# Step 1: Check systemd services
+echo "1. Checking systemd service status..."
 
 for service in mytrader-redis mytrader-api mytrader-web; do
     if systemctl is-active --quiet $service 2>/dev/null; then
         log_ok "$service is running"
     else
         log_error "$service is NOT running"
-        echo "   启动命令: sudo systemctl start $service"
+        echo "   Start with: sudo systemctl start $service"
     fi
 done
 echo ""
 
-# 2. 检查端口监听
-echo "2. 检查端口监听..."
+# Step 2: Check port listening
+echo "2. Checking port listening..."
 
 if lsof -i :6379 > /dev/null 2>&1; then
     log_ok "Redis is listening on port 6379"
@@ -69,8 +67,8 @@ else
 fi
 echo ""
 
-# 3. 检查 API 健康
-echo "3. 检查 API 健康状态..."
+# Step 3: Check API health
+echo "3. Checking API health..."
 
 if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
     log_ok "API health check passed (direct)"
@@ -85,8 +83,8 @@ else
 fi
 echo ""
 
-# 4. 检查数据库连接
-echo "4. 检查数据库连接..."
+# Step 4: Check database connection
+echo "4. Checking database connection..."
 
 cd /opt/myTrader 2>/dev/null || cd .
 
@@ -97,8 +95,8 @@ else
 fi
 echo ""
 
-# 5. 检查 Nginx 配置
-echo "5. 检查 Nginx 配置..."
+# Step 5: Check Nginx configuration
+echo "5. Checking Nginx configuration..."
 
 if sudo nginx -t > /dev/null 2>&1; then
     log_ok "Nginx configuration is valid"
@@ -108,8 +106,8 @@ else
 fi
 echo ""
 
-# 6. 检查磁盘空间
-echo "6. 检查磁盘空间..."
+# Step 6: Check disk space
+echo "6. Checking disk space..."
 
 disk_usage=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
 
@@ -120,8 +118,8 @@ else
 fi
 echo ""
 
-# 7. 检查进程内存
-echo "7. 检查进程内存占用..."
+# Step 7: Check process memory
+echo "7. Checking process memory usage..."
 
 api_mem=$(ps aux | grep uvicorn | grep -v grep | awk '{print $6}' | head -1)
 if [ -n "$api_mem" ]; then
@@ -131,13 +129,13 @@ else
 fi
 echo ""
 
-echo "========== 检查完成 =========="
+echo "========== Check Complete =========="
 echo ""
-echo "访问应用:"
+echo "Access application:"
 echo "  API docs:    http://localhost:8000/docs"
 echo "  Frontend:    http://localhost/"
 echo ""
-echo "查看日志:"
+echo "View logs:"
 echo "  API:         sudo journalctl -u mytrader-api -f"
 echo "  Frontend:    sudo journalctl -u mytrader-web -f"
 echo "  Nginx:       sudo tail -f /var/log/nginx/error.log"

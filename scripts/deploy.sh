@@ -1,10 +1,8 @@
 #!/bin/bash
 
-# ============================================================
-# myTrader 部署脚本 (ECS 一键部署)
-# 功能: git pull + pip install + 重启 API 和前端
-# 用法: ./scripts/deploy.sh
-# ============================================================
+# myTrader Deployment Script for ECS
+# Functions: git pull + pip install + restart API and frontend
+# Usage: ./scripts/deploy.sh
 
 set -e
 
@@ -12,7 +10,7 @@ PROJECT_DIR="/opt/myTrader"
 LOG_FILE="/var/log/mytrader/deploy.log"
 ERROR_LOG="/var/log/mytrader/error.log"
 
-# 确保日志目录存在
+# Ensure log directory exists
 mkdir -p "$(dirname "$LOG_FILE")"
 
 log() {
@@ -25,45 +23,45 @@ error() {
 
 log "========== Deploy Start =========="
 
-# 1. 进入项目目录
-cd "$PROJECT_DIR" || { error "项目目录不存在: $PROJECT_DIR"; exit 1; }
+# Step 1: Enter project directory
+cd "$PROJECT_DIR" || { error "Project directory does not exist: $PROJECT_DIR"; exit 1; }
 
-# 2. Git 更新代码
+# Step 2: Git update code
 log "Pulling latest code..."
 if ! git pull origin main >> "$LOG_FILE" 2>&1; then
     error "Git pull failed"
     exit 1
 fi
 
-# 3. 安装/更新依赖（仅安装新增的）
+# Step 3: Install/update dependencies
 log "Installing Python dependencies..."
 if ! pip install -q -r requirements.txt >> "$LOG_FILE" 2>&1; then
     error "pip install failed"
     exit 1
 fi
 
-# 4. 数据库迁移
+# Step 4: Database migration
 log "Running database migrations..."
 if ! alembic upgrade head >> "$LOG_FILE" 2>&1; then
     error "Database migration failed"
     exit 1
 fi
 
-# 5. 重启 API 服务 (使用 systemd)
+# Step 5: Restart API service (using systemd)
 log "Restarting API service..."
 if ! sudo systemctl restart mytrader-api >> "$LOG_FILE" 2>&1; then
     error "Failed to restart API service"
     exit 1
 fi
 
-# 6. 重启前端 (如果使用 Next.js，使用 PM2 或 systemd)
+# Step 6: Restart frontend (using systemd)
 log "Restarting frontend service..."
 if ! sudo systemctl restart mytrader-web >> "$LOG_FILE" 2>&1; then
     error "Failed to restart frontend service"
     exit 1
 fi
 
-# 7. 健康检查
+# Step 7: Health check
 log "Waiting for services to be ready..."
 sleep 3
 

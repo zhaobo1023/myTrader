@@ -1,10 +1,7 @@
 #!/bin/bash
 
-# ============================================================
-# Claude CLI + GLM-5 一键安装脚本 (CentOS)
-# 在 ECS 上运行此脚本来安装和配置 Claude CLI
-# 用法: ./scripts/setup-claude-cli.sh
-# ============================================================
+# Setup Claude CLI + GLM-5 on CentOS
+# Usage: ./scripts/setup-claude-cli.sh
 
 set -e
 
@@ -25,54 +22,54 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-echo "========== Claude CLI + GLM-5 安装脚本 =========="
+echo "========== Claude CLI + GLM-5 Setup =========="
 echo ""
 
-# 1. 检查 CentOS 版本
-echo "[1/6] 检查系统..."
+# Step 1: Check system
+echo "[1/6] Checking system..."
 if ! command -v yum &> /dev/null; then
-    log_error "此脚本仅支持 CentOS/RHEL (yum)"
+    log_error "This script requires CentOS/RHEL with yum"
     exit 1
 fi
-log_ok "检测到 CentOS/RHEL 系统"
+log_ok "CentOS/RHEL system detected"
 
-# 2. 安装 Node.js
+# Step 2: Install Node.js
 echo ""
-echo "[2/6] 安装 Node.js..."
+echo "[2/6] Installing Node.js..."
 
 if command -v node &> /dev/null; then
     NODE_VERSION=$(node --version)
-    log_ok "Node.js 已安装: $NODE_VERSION"
+    log_ok "Node.js already installed: $NODE_VERSION"
 else
-    log_info "安装 Node.js 20 LTS..."
+    log_info "Installing Node.js 20 LTS..."
     curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
     sudo yum install -y nodejs
-    log_ok "Node.js 安装成功"
+    log_ok "Node.js installed successfully"
 fi
 
-# 3. 安装 Claude CLI
+# Step 3: Install Claude CLI
 echo ""
-echo "[3/6] 安装 Claude CLI..."
+echo "[3/6] Installing Claude CLI..."
 
 if sudo npm list -g @anthropic-ai/claude-cli &> /dev/null; then
-    log_ok "Claude CLI 已安装"
+    log_ok "Claude CLI already installed"
 else
-    log_info "从 npm 安装 Claude CLI..."
+    log_info "Installing Claude CLI from npm..."
     sudo npm install -g @anthropic-ai/claude-cli
-    log_ok "Claude CLI 安装成功"
+    log_ok "Claude CLI installed successfully"
 fi
 
-# 4. 创建配置目录
+# Step 4: Create config directory
 echo ""
-echo "[4/6] 创建配置目录..."
+echo "[4/6] Creating config directory..."
 
 mkdir -p ~/.claude
 chmod 700 ~/.claude
-log_ok "配置目录: ~/.claude"
+log_ok "Config directory: ~/.claude"
 
-# 5. 创建基础配置
+# Step 5: Create config files
 echo ""
-echo "[5/6] 创建配置文件..."
+echo "[5/6] Creating configuration files..."
 
 # 主配置
 cat > ~/.claude/config.json << 'EOF'
@@ -106,58 +103,58 @@ EOF
 
 log_ok "配置文件已创建"
 
-# 6. 提示配置 API Key
+# Step 6: API Key configuration
 echo ""
-echo "[6/6] 配置 API Key..."
+echo "[6/6] API Key Configuration..."
 echo ""
 
-# 检查是否已设置
+# Check if GLM_API_KEY is set
 if [ -z "$GLM_API_KEY" ]; then
-    log_info "需要配置 GLM_API_KEY"
+    log_info "GLM_API_KEY not set"
     echo ""
-    echo "请按照以下步骤配置:"
+    echo "To configure GLM_API_KEY:"
     echo ""
-    echo "1. 访问智谱 AI 官网: https://open.bigmodel.cn/"
-    echo "2. 登录或注册账户"
-    echo "3. 获取 API Key"
-    echo "4. 执行以下命令设置环境变量:"
+    echo "1. Visit: https://open.bigmodel.cn/"
+    echo "2. Login or register"
+    echo "3. Get your API Key"
+    echo "4. Run:"
     echo ""
     echo "   export GLM_API_KEY='your-api-key'"
     echo "   echo 'export GLM_API_KEY=\"your-api-key\"' >> ~/.bashrc"
     echo ""
 else
-    log_ok "已检测到 GLM_API_KEY: ${GLM_API_KEY:0:10}..."
+    log_ok "GLM_API_KEY detected: ${GLM_API_KEY:0:10}..."
 fi
 
 echo ""
-echo "========== 安装完成 =========="
+echo "========== Setup Complete =========="
 echo ""
 
-# 验证安装
-echo "验证安装..."
+# Verify installation
+echo "Verifying installation..."
 if command -v claude &> /dev/null; then
     CLAUDE_VERSION=$(claude --version 2>/dev/null || echo "unknown")
-    log_ok "Claude CLI 已准备好！版本: $CLAUDE_VERSION"
+    log_ok "Claude CLI ready! Version: $CLAUDE_VERSION"
 else
-    log_error "Claude CLI 未找到，请检查安装"
+    log_error "Claude CLI not found. Please check installation"
     exit 1
 fi
 
 echo ""
-echo "后续步骤:"
+echo "Next steps:"
 echo ""
-echo "1. 设置 GLM_API_KEY:"
+echo "1. Set GLM_API_KEY:"
 echo "   export GLM_API_KEY='your-api-key'"
 echo ""
-echo "2. 测试 Claude CLI:"
-echo "   claude 'Hello, 你好吗?'"
+echo "2. Test Claude CLI:"
+echo "   claude 'Hello, how are you?'"
 echo ""
-echo "3. 交互模式:"
+echo "3. Interactive mode:"
 echo "   claude --interactive"
 echo ""
-echo "4. 查看配置:"
+echo "4. View config:"
 echo "   cat ~/.claude/config.json"
 echo ""
-echo "更多信息请参考:"
+echo "For more info, see:"
 echo "   docs/CLAUDE_CLI_SETUP.md"
 echo ""
