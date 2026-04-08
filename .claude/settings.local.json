@@ -54,7 +54,13 @@
       "Bash(networksetup -setwebproxystate Wi-Fi on)",
       "Bash(networksetup -setsecurewebproxystate Wi-Fi on)",
       "Bash(curl -s --max-time 10 \"https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get?lmt=0&klt=101&secid=0.002636&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55&ut=b2884a393a59ad64002292a3e90d46a5\")",
-      "Bash(2>&1)"
+      "Bash(2>&1)",
+      "Bash(pip show:*)",
+      "Bash(pip list:*)",
+      "WebFetch(domain:themenonlab.blog)",
+      "WebFetch(domain:jimmysong.io)",
+      "WebFetch(domain:github.com)",
+      "Bash(pip install:*)"
     ],
     "deny": [],
     "ask": []
