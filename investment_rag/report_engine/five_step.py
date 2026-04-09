@@ -34,7 +34,7 @@ _STEP_MAX_TOKENS = {
     "step2": 1200,   # 逻辑链 + 护城河
     "step3": 1200,   # 估值隐含假设 + 修正窗口
     "step4": 800,    # 纯表格
-    "step5": 1000,   # 数据卡片
+    "step5": 1200,   # 数据卡片 + 预期回报量化分解
 }
 
 # 摘要生成 prompt（内部使用，不暴露给外部）
@@ -281,13 +281,30 @@ class FiveStepAnalyzer:
         financial_context = ""
         if step_config.needs_financial:
             financial_context = self._tools.get_financial_data(stock_code, years=3)
+            # 追加核心财务数据（绝对金额，防止LLM幻觉）
+            core_financials = self._tools.get_core_financials(stock_code)
+            _no_data_core = ("无数据", "查询失败", "DB模块未加载")
+            if core_financials and not any(s in core_financials for s in _no_data_core):
+                financial_context += "\n\n" + core_financials
 
         # 3. 行业专项数据（银行指标等）
         industry_extra_data = ""
         bank_cross_section = ""
         if industry_config.needs_bank_indicators:
             if step_config.step_id == "step1":
+                # 基础银行指标 + 年报提取的精确数据（逾期贷款、公允价值变动、一次性损益）
                 industry_extra_data = self._tools.get_bank_indicators(stock_code)
+                overdue_detail = self._tools.get_overdue_loan_detail(stock_code)
+                income_detail = self._tools.get_income_detail(stock_code)
+                non_recurring = self._tools.get_non_recurring_items(stock_code)
+                # Only append if data was actually retrieved (failure strings contain "失败" or "无年报")
+                _no_data = ("无年报", "查询失败", "DB模块未加载")
+                if overdue_detail and not any(s in overdue_detail for s in _no_data):
+                    industry_extra_data += "\n\n" + overdue_detail
+                if income_detail and not any(s in income_detail for s in _no_data):
+                    industry_extra_data += "\n\n" + income_detail
+                if non_recurring and not any(s in non_recurring for s in _no_data):
+                    industry_extra_data += "\n\n" + non_recurring
             elif step_config.step_id in ("step2", "step3"):
                 # Step2 / Step3 注入银行对标表用于护城河和估值对标
                 bank_cross_section = self._tools.get_bank_cross_section()
@@ -301,12 +318,18 @@ class FiveStepAnalyzer:
         valuation_context = ""
         expected_return_context = ""
         consensus_forecast_context = ""
-        if step_config.needs_valuation:
+        # Step2 也需要估值锚定数据（防止LLM用训练记忆编造PB/PE）
+        if step_config.needs_valuation or step_config.step_id == "step2":
             valuation_context = self._tools.get_valuation_snapshot(stock_code)
+        if step_config.needs_valuation:
             expected_return_context = self._tools.get_expected_return_context(stock_code)
-            # Step3 额外注入一致预期（用于对标分析师预期）
+            # Step3 额外注入一致预期 + 分红数据（用于估值和股息率分析）
             if step_config.step_id == "step3":
                 consensus_forecast_context = self._tools.get_consensus_forecast(stock_code)
+                dividend_analysis = self._tools.get_dividend_analysis(stock_code)
+                _no_data_div = ("无分红", "查询失败", "DB模块未加载")
+                if dividend_analysis and not any(s in dividend_analysis for s in _no_data_div):
+                    valuation_context += "\n\n" + dividend_analysis
 
         # 7. 渲染 Prompt（包含行业差异化槽位）
         prompt = step_config.prompt_template.format(

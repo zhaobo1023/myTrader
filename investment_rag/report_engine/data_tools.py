@@ -446,7 +446,10 @@ class ReportDataTools:
             return "[银行指标] DB模块未加载"
 
         clean_code = stock_code.split(".")[0]
-        lines = [f"[银行专项指标] {clean_code}"]
+        lines = [
+            f"[银行专项指标] {clean_code}",
+            "注意：以下所有数字均来自数据库，分析时只能引用此处出现的数字，严禁补充任何未在此出现的数值。",
+        ]
 
         # -- 1. 标准财务指标（来自 financial_balance）--
         sql_std = """
@@ -454,6 +457,7 @@ class ReportDataTools:
                 report_date,
                 npl_ratio,
                 provision_coverage,
+                provision_ratio,
                 cap_adequacy_ratio,
                 nim,
                 tier1_ratio
@@ -462,29 +466,100 @@ class ReportDataTools:
             ORDER BY report_date DESC
             LIMIT 8
         """
+        std_rows = None
         try:
-            rows = _execute_query(sql_std, params=(clean_code,), env=self._db_env)
-            if rows:
-                lines.append("\n-- 资产质量与经营指标（近8期）--")
+            std_rows = _execute_query(sql_std, params=(clean_code,), env=self._db_env)
+            if std_rows:
                 lines.append(
-                    f"{'报告期':<12} {'官方NPL率':>10} {'拨备覆盖':>10} "
-                    f"{'NIM(%)':>8} {'CET1(%)':>8} {'CAR(%)':>8}"
+                    "\n-- 资产质量与经营指标（来自 financial_balance，近8期）--"
                 )
-                for r in rows:
-                    npl = f"{float(r['npl_ratio']):.2f}%" if r.get('npl_ratio') else "N/A"
-                    prov = f"{float(r['provision_coverage']):.1f}%" if r.get('provision_coverage') else "N/A"
+                lines.append(
+                    f"{'报告期':<12} {'官方NPL率(%)':>12} {'拨备覆盖率(%)':>14} "
+                    f"{'拨备比(%)':>10} {'NIM(%)':>8} {'CET1(%)':>8} {'CAR(%)':>8}"
+                )
+                for r in std_rows:
+                    npl = f"{float(r['npl_ratio']):.3f}%" if r.get('npl_ratio') else "N/A"
+                    prov = f"{float(r['provision_coverage']):.2f}%" if r.get('provision_coverage') else "N/A"
+                    prov_ratio = f"{float(r['provision_ratio']):.2f}%" if r.get('provision_ratio') else "N/A"
                     nim = f"{float(r['nim']):.2f}%" if r.get('nim') else "N/A"
                     t1 = f"{float(r['tier1_ratio']):.2f}%" if r.get('tier1_ratio') else "N/A"
                     car = f"{float(r['cap_adequacy_ratio']):.2f}%" if r.get('cap_adequacy_ratio') else "N/A"
                     lines.append(
-                        f"{str(r.get('report_date','')):<12} {npl:>10} {prov:>10} "
-                        f"{nim:>8} {t1:>8} {car:>8}"
+                        f"{str(r.get('report_date','')):<12} {npl:>12} {prov:>14} "
+                        f"{prov_ratio:>10} {nim:>8} {t1:>8} {car:>8}"
                     )
+                # 拨备比趋势（Flitter核心指标）
+                if len(std_rows) >= 2:
+                    latest_pr = _safe_float(std_rows[0].get('provision_ratio'))
+                    prev_pr = _safe_float(std_rows[1].get('provision_ratio'))
+                    if latest_pr is not None and prev_pr is not None:
+                        pr_diff = latest_pr - prev_pr
+                        lines.append(
+                            f"\n[拨备比趋势] "
+                            f"{str(std_rows[1].get('report_date',''))} {prev_pr:.2f}% -> "
+                            f"{str(std_rows[0].get('report_date',''))} {latest_pr:.2f}%，"
+                            f"环比{'上升' if pr_diff > 0 else '下降'} {abs(pr_diff):.2f}ppt。"
+                            f"注：拨备比=拨备余额/总贷款，反映贷款整体风险缓冲厚度，"
+                            f"{'下降表明风险缓冲在削薄，需关注' if pr_diff < -0.1 else '变动不大'}"
+                        )
+                # Provision trend + regulatory threshold analysis
+                # Policy background: 2018 CBIRC 《关于调整商业银行贷款损失准备监管要求的通知》
+                # Dynamic range: 120%-150% (no longer a fixed 150% floor)
+                # Banks with strict NPL recognition qualify for lower floor (120-130%)
+                if len(std_rows) >= 2:
+                    latest_prov = _safe_float(std_rows[0].get('provision_coverage'))
+                    prev_prov = _safe_float(std_rows[1].get('provision_coverage'))
+                    if latest_prov is not None and prev_prov is not None:
+                        diff = latest_prov - prev_prov
+                        direction = "上升" if diff > 0 else "下降"
+                        lines.append(
+                            f"\n[拨备覆盖率趋势] "
+                            f"{str(std_rows[1].get('report_date',''))} {prev_prov:.2f}% -> "
+                            f"{str(std_rows[0].get('report_date',''))} {latest_prov:.2f}%，"
+                            f"同比{direction} {abs(diff):.2f}ppt。"
+                        )
+                        # Compute applicable regulatory floor based on NPL recognition quality
+                        # (will be cross-checked with NPL2 data after; placeholder here)
+                        lines.append(
+                            "[监管合规判断 - 重要政策背景] "
+                            "2018年银保监会已将拨备覆盖率监管要求由固定150%动态调整为120%-150%区间。"
+                            "具体适用下限取决于贷款分类准确性："
+                            "若逾期90天以上贷款已全部纳入不良（NPL率2 <= 官方NPL率），"
+                            "银行适用的最低下限为120%-130%；"
+                            "若分类不严格（NPL率2 >> 官方NPL率），则须维持在150%。"
+                            "分析时必须先判断该行适用哪档下限，再判断合规性，"
+                            "严禁将150%作为所有银行的统一硬性红线。"
+                        )
+                        if latest_prov < 120:
+                            lines.append(
+                                f"[RED] 拨备覆盖率 {latest_prov:.2f}% 低于最低档120%，"
+                                f"无论贷款分类质量如何均属监管违规，存在被强制补提风险。"
+                            )
+                        elif latest_prov < 130:
+                            lines.append(
+                                f"[WARN] 拨备覆盖率 {latest_prov:.2f}%，"
+                                f"处于120%-130%区间，仅当贷款分类极度严格时（NPL率2<=NPL率）合规，"
+                                f"需结合NPL交叉验证结论判断。"
+                            )
+                        elif latest_prov < 150:
+                            lines.append(
+                                f"[INFO] 拨备覆盖率 {latest_prov:.2f}%，"
+                                f"处于130%-150%区间。对于不良认定严格的银行（NPL率2<=NPL率），"
+                                f"此水平完全合规，不构成监管红线问题。"
+                                f"趋势{'下降' if diff < 0 else '上升'}值得关注但不是警报。"
+                            )
+                        else:
+                            lines.append(
+                                f"[OK] 拨备覆盖率 {latest_prov:.2f}%，高于150%，无合规压力。"
+                            )
             else:
-                lines.append("[financial_balance] 无数据（需运行 financial_fetcher）")
+                lines.append(
+                    "[financial_balance] 无数据（需运行 financial_fetcher）。"
+                    "官方NPL率、拨备覆盖率、NIM、CET1 数据均不可用，分析时须标注(数据缺失)。"
+                )
         except Exception as e:
             logger.warning("[ReportDataTools] bank_std query failed for %s: %s", stock_code, e)
-            lines.append(f"[financial_balance] 查询失败: {e}")
+            lines.append(f"[financial_balance] 查询失败: {e}。官方NPL率等数据不可用，须标注(数据缺失)。")
 
         # -- 2. 扩展资产质量（来自 bank_asset_quality）--
         sql_ext = """
@@ -503,13 +578,13 @@ class ReportDataTools:
         try:
             rows2 = _execute_query(sql_ext, params=(clean_code,), env=self._db_env)
             if rows2:
-                lines.append("\n-- Flitter方法：扩展不良指标 --")
+                lines.append("\n-- Flitter方法：扩展不良指标（来自 bank_asset_quality）--")
                 lines.append(
                     f"{'报告期':<12} {'NPL率2(%)':>12} {'逾期90d(亿)':>12} "
                     f"{'重组贷款(亿)':>12} {'拨备调整(亿)':>12} {'利润调整(亿)':>12}"
                 )
                 for r in rows2:
-                    npl2 = f"{float(r['npl_ratio2']):.2f}%" if r.get('npl_ratio2') else "N/A"
+                    npl2 = f"{float(r['npl_ratio2']):.3f}%" if r.get('npl_ratio2') else "N/A"
                     ov91 = f"{float(r['overdue_91']):.1f}亿" if r.get('overdue_91') else "N/A"
                     restr = f"{float(r['restructured']):.1f}亿" if r.get('restructured') else "N/A"
                     padj = f"{float(r['provision_adj']):.1f}亿" if r.get('provision_adj') is not None else "N/A"
@@ -523,11 +598,257 @@ class ReportDataTools:
                     "拨备调整 = (NPL率2-NPL率) x 总贷款 x 150%拨备要求；"
                     "利润调整 = 若按NPL率2计提，税后利润受损估算"
                 )
+
+                # Cross-check NPL vs NPL2 for LLM to avoid narrative confusion
+                if rows2 and std_rows:
+                    latest_npl2 = _safe_float(rows2[0].get('npl_ratio2'))
+                    latest_npl_off = _safe_float(std_rows[0].get('npl_ratio'))
+                    if latest_npl2 is not None and latest_npl_off is not None:
+                        diff = latest_npl2 - latest_npl_off
+                        if diff <= 0:
+                            verdict = (
+                                f"[OK] NPL率2({latest_npl2:.3f}%) <= 官方NPL率({latest_npl_off:.3f}%)，"
+                                f"差值 {diff:+.3f}ppt，说明不良认定严格（无隐藏不良），"
+                                f"不得将此解读为存在隐藏不良敞口。"
+                            )
+                        elif diff < 0.3:
+                            verdict = (
+                                f"[OK] NPL率2({latest_npl2:.3f}%) 略高于官方NPL率({latest_npl_off:.3f}%)，"
+                                f"差值 {diff:+.3f}ppt（< 0.3ppt），属正常区间，无重大隐藏不良。"
+                            )
+                        else:
+                            verdict = (
+                                f"[WARN] NPL率2({latest_npl2:.3f}%) 显著高于官方NPL率({latest_npl_off:.3f}%)，"
+                                f"差值 {diff:+.3f}ppt（> 0.3ppt），存在潜在隐藏不良敞口。"
+                            )
+                        lines.append(f"\n[NPL交叉验证] {verdict}")
             else:
                 lines.append("[bank_asset_quality] 无数据（需运行 financial_fetcher 的 Flitter 模块）")
         except Exception as e:
             logger.warning("[ReportDataTools] bank_ext query failed for %s: %s", stock_code, e)
             lines.append(f"[bank_asset_quality] 查询失败: {e}")
+
+        return "\n".join(lines)
+
+    # ----------------------------------------------------------
+    # Annual report extracted data methods
+    # ----------------------------------------------------------
+
+    def get_income_detail(self, stock_code: str) -> str:
+        """
+        Get non-interest income breakdown from annual report extraction.
+        Data source: financial_income_detail table.
+        Used in Step1 to detect one-off items (fair value change, etc.)
+        """
+        if _execute_query is None:
+            return "[利润表明细] DB模块未加载"
+
+        clean_code = stock_code.split(".")[0]
+        sql = """
+            SELECT
+                report_date,
+                fee_commission_net,
+                investment_income,
+                fair_value_change,
+                exchange_gain,
+                other_business_income,
+                non_interest_income_total,
+                credit_impairment,
+                other_comprehensive_income
+            FROM financial_income_detail
+            WHERE stock_code = %s
+            ORDER BY report_date DESC
+            LIMIT 4
+        """
+        try:
+            rows = _execute_query(sql, params=(clean_code,), env=self._db_env)
+        except Exception as e:
+            logger.warning("[ReportDataTools] income_detail query failed: %s", e)
+            return "[利润表明细] 查询失败（需先运行年报提取）"
+
+        if not rows:
+            return "[利润表明细] 无年报提取数据（需先运行 annual_report_extractor）"
+
+        lines = [f"[利润表明细 - 年报提取] {clean_code}"]
+        lines.append(
+            f"\n{'报告期':<12} {'手续费(亿)':>10} {'投资收益(亿)':>12} "
+            f"{'公允价值变动(亿)':>16} {'非息合计(亿)':>12} {'信用减值(亿)':>12}"
+        )
+        for r in rows:
+            fc = float(r['fee_commission_net']) if r.get('fee_commission_net') is not None else None
+            iv = float(r['investment_income']) if r.get('investment_income') is not None else None
+            fv = float(r['fair_value_change']) if r.get('fair_value_change') is not None else None
+            ni = float(r['non_interest_income_total']) if r.get('non_interest_income_total') is not None else None
+            ci = float(r['credit_impairment']) if r.get('credit_impairment') is not None else None
+            lines.append(
+                f"{str(r.get('report_date','')):<12}"
+                f"  {f'{fc:.2f}亿' if fc is not None else 'N/A':>10}"
+                f"  {f'{iv:.2f}亿' if iv is not None else 'N/A':>12}"
+                f"  {f'{fv:+.2f}亿' if fv is not None else 'N/A':>16}"
+                f"  {f'{ni:.2f}亿' if ni is not None else 'N/A':>12}"
+                f"  {f'{ci:.2f}亿' if ci is not None else 'N/A':>12}"
+            )
+
+        # flag one-off items
+        latest = rows[0]
+        fv_latest = float(latest['fair_value_change']) if latest.get('fair_value_change') is not None else None
+        if fv_latest is not None and len(rows) > 1:
+            prev = rows[1]
+            fv_prev = float(prev['fair_value_change']) if prev.get('fair_value_change') is not None else None
+            if fv_prev is not None:
+                swing = fv_latest - fv_prev
+                if abs(swing) > 10:
+                    lines.append(
+                        f"\n[一次性损益警示] 公允价值变动同比摆动 {swing:+.2f}亿，"
+                        f"属重大非经常性项目，分析盈利时须单独剥离"
+                    )
+
+        oci = float(latest['other_comprehensive_income']) if latest.get('other_comprehensive_income') is not None else None
+        if oci is not None and abs(oci) > 5:
+            lines.append(
+                f"[净资产警示] 其他综合收益 {oci:+.2f}亿，"
+                f"大额OCI变动（通常为债券浮盈/亏）直接影响净资产，属一次性扰动"
+            )
+
+        return "\n".join(lines)
+
+    def get_overdue_loan_detail(self, stock_code: str) -> str:
+        """
+        Get overdue loan classification detail from annual report extraction.
+        Data source: bank_overdue_detail table.
+        Used in Step1 for precise NPL rate 2 calculation.
+        """
+        if _execute_query is None:
+            return "[逾期贷款明细] DB模块未加载"
+
+        clean_code = stock_code.split(".")[0]
+        sql = """
+            SELECT
+                report_date,
+                total_loans,
+                overdue_total,
+                overdue_1_90,
+                overdue_90_plus,
+                restructured,
+                official_npl,
+                official_npl_ratio,
+                npl_ratio2,
+                overdue90_npl_coverage
+            FROM bank_overdue_detail
+            WHERE stock_code = %s
+            ORDER BY report_date DESC
+            LIMIT 4
+        """
+        try:
+            rows = _execute_query(sql, params=(clean_code,), env=self._db_env)
+        except Exception as e:
+            logger.warning("[ReportDataTools] overdue_detail query failed: %s", e)
+            return "[逾期贷款明细] 查询失败（需先运行年报提取）"
+
+        if not rows:
+            return "[逾期贷款明细] 无年报提取数据"
+
+        lines = [f"[逾期贷款明细 - 年报提取] {clean_code}"]
+        for r in rows:
+            date_str = str(r.get('report_date', ''))
+            total = float(r['total_loans']) if r.get('total_loans') is not None else None
+            ov90 = float(r['overdue_90_plus']) if r.get('overdue_90_plus') is not None else None
+            rs = float(r['restructured']) if r.get('restructured') is not None else None
+            npl_off = float(r['official_npl_ratio']) if r.get('official_npl_ratio') is not None else None
+            npl2 = float(r['npl_ratio2']) if r.get('npl_ratio2') is not None else None
+            cov = float(r['overdue90_npl_coverage']) if r.get('overdue90_npl_coverage') is not None else None
+
+            lines.append(f"\n{date_str}:")
+            if total is not None:
+                lines.append(f"  总贷款余额: {total:,.2f}亿元")
+            if ov90 is not None:
+                lines.append(f"  逾期90天以上贷款: {ov90:.2f}亿元")
+            if rs is not None:
+                lines.append(f"  重组贷款: {rs:.2f}亿元")
+            if npl_off is not None:
+                lines.append(f"  官方NPL率: {npl_off:.3f}%")
+            if npl2 is not None:
+                lines.append(f"  NPL率2（Flitter）: {npl2:.3f}%")
+            if npl2 is not None and npl_off is not None:
+                diff = npl2 - npl_off
+                direction = "低于" if diff < 0 else "高于"
+                lines.append(
+                    f"  结论: NPL率2 {direction}官方NPL率 {abs(diff):.3f}ppt，"
+                    + ("不良认定严格，无隐藏不良" if diff < 0 else "存在潜在隐藏不良敞口")
+                )
+            if cov:
+                lines.append(
+                    f"  逾期90d+/不良比: {cov:.1f}%（<100%表示不良认定已覆盖所有逾期）"
+                )
+
+        return "\n".join(lines)
+
+    def get_non_recurring_items(self, stock_code: str) -> str:
+        """
+        Detect and summarize non-recurring / one-off income items.
+        Compares current vs prior year fair_value_change, credit_impairment.
+        """
+        if _execute_query is None:
+            return "[一次性损益] DB模块未加载"
+
+        clean_code = stock_code.split(".")[0]
+        sql = """
+            SELECT report_date, fair_value_change, investment_income,
+                   credit_impairment, other_comprehensive_income,
+                   non_operating_income, non_operating_expense
+            FROM financial_income_detail
+            WHERE stock_code = %s
+            ORDER BY report_date DESC
+            LIMIT 2
+        """
+        try:
+            rows = _execute_query(sql, params=(clean_code,), env=self._db_env)
+        except Exception as e:
+            return f"[一次性损益] 查询失败: {e}"
+
+        if not rows:
+            return "[一次性损益] 无年报提取数据"
+
+        lines = [f"[一次性损益分析] {clean_code}"]
+        cur = rows[0]
+        report_date = cur.get('report_date')
+        latest_year = report_date.year if hasattr(report_date, 'year') else int(str(report_date)[:4])
+
+        items = []
+        fv = float(cur['fair_value_change']) if cur.get('fair_value_change') is not None else None
+        oci = float(cur['other_comprehensive_income']) if cur.get('other_comprehensive_income') is not None else None
+
+        if fv is not None:
+            if len(rows) > 1 and rows[1].get('fair_value_change') is not None:
+                fv_prev = float(rows[1]['fair_value_change'])
+                swing = fv - fv_prev
+                items.append(
+                    f"公允价值变动损益: {fv:+.2f}亿  "
+                    f"（同比摆动 {swing:+.2f}亿，"
+                    f"{'重大一次性拖累' if swing < -10 else '重大一次性贡献' if swing > 10 else '正常波动'}）"
+                )
+            else:
+                items.append(f"公允价值变动损益: {fv:+.2f}亿")
+
+        ci = float(cur['credit_impairment']) if cur.get('credit_impairment') is not None else None
+        if ci is not None:
+            items.append(f"信用减值损失: {ci:.2f}亿")
+
+        if oci is not None and abs(oci) > 3:
+            items.append(
+                f"其他综合收益(OCI): {oci:+.2f}亿  "
+                f"（{'债券浮亏侵蚀净资产' if oci < 0 else '债券浮盈增厚净资产'}，属一次性）"
+            )
+
+        if items:
+            lines.append(f"\n{str(cur.get('report_date',''))} 一次性项目:")
+            lines.extend([f"  - {i}" for i in items])
+            lines.append(
+                f"\n注：分析{latest_year + 1}年盈利弹性时，须考虑上述一次性项目的回摆效应。"
+                "若公允价值变动从大幅亏损恢复，将直接增厚当期利润。"
+            )
+        else:
+            lines.append("  无重大一次性损益项（或数据不足）")
 
         return "\n".join(lines)
 
@@ -648,6 +969,192 @@ class ReportDataTools:
             Formatted text with top shareholders (或 fallback)
         """
         return "[流通股东] 数据源暂不可用，建议查看最新年报附注"
+
+    # ----------------------------------------------------------
+    # 7. Core Financials (clean P&L from financial_income table)
+    # ----------------------------------------------------------
+
+    def get_core_financials(self, stock_code: str, periods: int = 8) -> str:
+        """
+        获取核心财务数据（营收、净利润、YoY、ROE、EPS）。
+
+        数据来源：financial_income 表（AKShare 拉取，已转换为亿元）。
+        用途：为 LLM 提供绝对金额数据，防止幻觉。
+
+        Returns:
+            Formatted text with P&L summary table
+        """
+        if _execute_query is None:
+            return "[核心财务] DB模块未加载"
+
+        clean_code = stock_code.split(".")[0]
+        sql = """
+            SELECT report_date, revenue, net_profit, net_profit_yoy, roe, eps
+            FROM financial_income
+            WHERE stock_code = %s
+            ORDER BY report_date DESC
+            LIMIT %s
+        """
+        try:
+            rows = _execute_query(sql, params=(clean_code, periods), env=self._db_env)
+        except Exception as e:
+            logger.warning("[ReportDataTools] core_financials query failed: %s", e)
+            return f"[核心财务] 查询失败: {e}"
+
+        if not rows:
+            return f"[核心财务] {clean_code} 无数据"
+
+        lines = [
+            f"[核心财务数据] {clean_code}（来源：financial_income，单位：亿元/元）",
+            "注意：以下金额已为亿元单位，EPS为元/股，严禁自行换算或编造其他数值。",
+            f"\n{'报告期':<12} {'营收(亿元)':>12} {'归母净利(亿元)':>14} "
+            f"{'净利YoY(%)':>12} {'ROE(%)':>8} {'EPS(元)':>8}",
+        ]
+        for r in rows:
+            rev = f"{float(r['revenue']):.2f}" if r.get('revenue') is not None else "N/A"
+            np_ = f"{float(r['net_profit']):.2f}" if r.get('net_profit') is not None else "N/A"
+            yoy = f"{float(r['net_profit_yoy']):+.2f}" if r.get('net_profit_yoy') is not None else "N/A"
+            roe = f"{float(r['roe']):.2f}" if r.get('roe') is not None else "N/A"
+            eps = f"{float(r['eps']):.2f}" if r.get('eps') is not None else "N/A"
+            lines.append(
+                f"{str(r.get('report_date','')):<12} {rev:>12} {np_:>14} "
+                f"{yoy:>12} {roe:>8} {eps:>8}"
+            )
+
+        # YoY trend analysis for annual reports (Q4 only)
+        annual_rows = [r for r in rows if str(r.get('report_date', '')).endswith('12-31')]
+        if len(annual_rows) >= 2:
+            cur = annual_rows[0]
+            prev = annual_rows[1]
+            cur_np = _safe_float(cur.get('net_profit'))
+            prev_np = _safe_float(prev.get('net_profit'))
+            cur_rev = _safe_float(cur.get('revenue'))
+            prev_rev = _safe_float(prev.get('revenue'))
+            if cur_np is not None and prev_np is not None:
+                np_chg = (cur_np / prev_np - 1) * 100
+                lines.append(
+                    f"\n[年度盈利趋势] "
+                    f"{str(prev.get('report_date',''))} 净利 {prev_np:.2f}亿 -> "
+                    f"{str(cur.get('report_date',''))} 净利 {cur_np:.2f}亿，"
+                    f"同比 {np_chg:+.2f}%"
+                )
+            if cur_rev is not None and prev_rev is not None:
+                rev_chg = (cur_rev / prev_rev - 1) * 100
+                lines.append(
+                    f"[年度营收趋势] "
+                    f"{prev_rev:.2f}亿 -> {cur_rev:.2f}亿，同比 {rev_chg:+.2f}%"
+                )
+
+        return "\n".join(lines)
+
+    # ----------------------------------------------------------
+    # 8. Dividend Analysis (from financial_dividend table)
+    # ----------------------------------------------------------
+
+    def get_dividend_analysis(self, stock_code: str) -> str:
+        """
+        获取分红历史并计算每股分红、派息率、股息率。
+
+        数据来源：financial_dividend 表（cash_div 为每10股派现金额）。
+        用途：Step3 估值分析，提供分红数据支撑股息率测算。
+
+        Returns:
+            Formatted text with dividend history and analysis
+        """
+        if _execute_query is None:
+            return "[分红分析] DB模块未加载"
+
+        clean_code = stock_code.split(".")[0]
+        # Get dividend history
+        sql_div = """
+            SELECT ex_date, cash_div
+            FROM financial_dividend
+            WHERE stock_code = %s AND cash_div > 0
+            ORDER BY ex_date DESC
+            LIMIT 10
+        """
+        # Get EPS for payout ratio calculation
+        sql_eps = """
+            SELECT report_date, eps
+            FROM financial_income
+            WHERE stock_code = %s
+              AND report_date LIKE '%%12-31'
+            ORDER BY report_date DESC
+            LIMIT 5
+        """
+        try:
+            div_rows = _execute_query(sql_div, params=(clean_code,), env=self._db_env)
+            eps_rows = _execute_query(sql_eps, params=(clean_code,), env=self._db_env)
+        except Exception as e:
+            logger.warning("[ReportDataTools] dividend query failed: %s", e)
+            return f"[分红分析] 查询失败: {e}"
+
+        if not div_rows:
+            return f"[分红分析] {clean_code} 无分红记录"
+
+        # Build EPS lookup by year
+        eps_by_year = {}
+        if eps_rows:
+            for r in eps_rows:
+                rd = r.get('report_date')
+                year = rd.year if hasattr(rd, 'year') else int(str(rd)[:4])
+                eps_val = _safe_float(r.get('eps'))
+                if eps_val:
+                    eps_by_year[year] = eps_val
+
+        lines = [
+            f"[分红历史] {clean_code}（来源：financial_dividend）",
+            "注：cash_div 为每10股派现金额，每股分红 = cash_div / 10",
+            f"\n{'除权日':<12} {'每10股派(元)':>12} {'每股分红(元)':>12} "
+            f"{'对应年度EPS':>12} {'派息率(%)':>10}",
+        ]
+
+        # Aggregate annual dividends (some years have interim + final)
+        annual_divs = {}  # year -> total per-share dividend
+        for r in div_rows:
+            ex = r.get('ex_date')
+            cash = _safe_float(r.get('cash_div'))
+            if ex is None or cash is None:
+                continue
+
+            ex_year = ex.year if hasattr(ex, 'year') else int(str(ex)[:4])
+            per_share = cash / 10.0
+
+            # Determine which fiscal year this dividend belongs to
+            # Interim div (usually Jan) belongs to prior year H1; annual div (Jun-Jul) belongs to prior year
+            ex_month = ex.month if hasattr(ex, 'month') else int(str(ex)[5:7])
+            fiscal_year = ex_year - 1 if ex_month <= 7 else ex_year
+
+            if fiscal_year not in annual_divs:
+                annual_divs[fiscal_year] = 0.0
+            annual_divs[fiscal_year] += per_share
+
+            # EPS for payout ratio: use fiscal year
+            eps_val = eps_by_year.get(fiscal_year)
+            payout = f"{(per_share / eps_val * 100):.1f}" if eps_val else "N/A"
+            lines.append(
+                f"{str(ex):<12} {cash:>12.2f} {per_share:>12.4f} "
+                f"{f'{eps_val:.2f}' if eps_val else 'N/A':>12} {payout:>10}"
+            )
+
+        # Annual total dividend summary
+        if annual_divs:
+            lines.append(f"\n[年度合计每股分红]")
+            for year in sorted(annual_divs.keys(), reverse=True):
+                total_div = annual_divs[year]
+                eps_val = eps_by_year.get(year)
+                payout = f"{(total_div / eps_val * 100):.1f}%" if eps_val else "N/A"
+                lines.append(
+                    f"  {year}年度: 合计每股分红 {total_div:.4f}元，"
+                    f"EPS {f'{eps_val:.2f}' if eps_val else 'N/A'}元，"
+                    f"派息率 {payout}"
+                )
+
+        return "\n".join(lines)
+
+    # ----------------------------------------------------------
+    # 9. Bank Cross Section
+    # ----------------------------------------------------------
 
     def get_bank_cross_section(self) -> str:
         """

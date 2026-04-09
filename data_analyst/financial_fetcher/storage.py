@@ -76,7 +76,8 @@ class FinancialStorage:
         params_list = [tuple(r.get(c) for c in columns) for r in records]
 
         def _do():
-            conn, conn2 = get_dual_connections(primary_env=self.env)
+            # Use primary-only write (no dual-write) to avoid blocking on unreachable local DB
+            conn, conn2 = get_dual_connections(primary_env=self.env, secondary_env=None)
             try:
                 dual_executemany(conn, conn2, sql, params_list, _logger=logger)
                 return len(params_list)
