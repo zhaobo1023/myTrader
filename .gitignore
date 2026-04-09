@@ -74,3 +74,7 @@ certs/
 
 # Output (all generated artifacts)
 output/
+=1.1.0
+celerybeat-schedule
+=1.1.0
+celerybeat-schedule

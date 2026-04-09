@@ -66,13 +66,18 @@ app = FastAPI(
 )
 
 # ============================================================
-# CORS
+# CORS - 限制允许的来源以防止 CSRF 攻击
 # ============================================================
+allow_origins = ['http://localhost:3000', 'http://127.0.0.1:3000']
+if settings.api_debug:
+    # 开发模式允许本地开发服务器
+    allow_origins.extend(['http://localhost:3001', 'http://127.0.0.1:3001'])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['*'] if settings.api_debug else [],
+    allow_origins=allow_origins,
     allow_credentials=True,
-    allow_methods=['*'],
+    allow_methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allow_headers=['*'],
 )
 

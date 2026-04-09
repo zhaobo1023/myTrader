@@ -75,7 +75,10 @@
       "Bash(redis-cli ping:*)",
       "Bash(cp /root/app/nginx.conf /etc/nginx/conf.d/mytrader.conf)",
       "Bash(nginx -t)",
-      "Bash(du -sh *)"
+      "Bash(du -sh *)",
+      "Bash(docker exec:*)",
+      "Bash(docker compose:*)",
+      "Bash(mysql -u mytrader_user -p'lGgS^uruPhv%AK0ZifeC' mytrader -e \"SELECT 1 as test;\")"
     ],
     "deny": [],
     "ask": []
