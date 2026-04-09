@@ -1,17 +1,86 @@
+# Python
 __pycache__/
-*.pyc
-*.pyo
-.git/
-.gitignore
-.env
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
 .venv/
 venv/
-*.egg-info/
+ENV/
+env/
+
+# Git
+.git/
+.gitignore
+.github/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.*
+*.local
+
+# Output and data
 output/
 data/
+logs/
+*.log
+
+# Documentation
 docs/
 *.md
+!README.md
+
+# Tests
 .pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Claude
 .claude/
+
+# Scripts
 scripts/
+
+# Research
 research/
+
+# Frontend (has its own Dockerfile)
+web/
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# CI/CD
+.github/
+
+# Misc
+.DS_Store
+*.bak
+*.tmp
