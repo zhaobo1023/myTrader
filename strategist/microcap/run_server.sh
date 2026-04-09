@@ -38,7 +38,7 @@ echo "================================================"
 echo ""
 echo "[Step 1] 检查数据完整性..."
 
-python - <<'PYEOF'
+python3 - <<'PYEOF'
 import sys, os
 sys.path.insert(0, os.environ.get('ROOT', '.'))
 from config.db import get_connection
@@ -62,26 +62,24 @@ for name, sql in checks:
         min_d = str(row.get('min_d', 'N/A'))
         max_d = str(row.get('max_d', 'N/A'))
         status = "[OK]" if cnt > 0 else "[WARN] EMPTY"
-        print(f"  {status:8s} {name:<35} rows={cnt:>10,}  {min_d} ~ {max_d}")
+        print("  {:<8} {:<35} rows={:>10}  {} ~ {}".format(status, name, cnt, min_d, max_d))
         if cnt == 0:
             ok = False
     except Exception as e:
-        print(f"  [ERROR]  {name:<35} {e}")
+        print("  [ERROR]  {:<35} {}".format(name, e))
         ok = False
 
 conn.close()
 
-# 关键检查：trade_stock_daily_basic 需覆盖到 2022 年
-import pandas as pd2
-conn2 = __import__('config.db', fromlist=['get_connection']).get_connection()
+conn2 = get_connection()
 try:
     df = pd.read_sql("SELECT MIN(trade_date) as min_d FROM trade_stock_daily_basic", conn2)
     min_date = str(df.iloc[0]['min_d'])
     if min_date > '2022-06-01':
-        print(f"\n  [WARN] trade_stock_daily_basic 最早数据 {min_date}，早于 2022-01-01 的数据缺失")
-        print(f"         建议先运行: python -m data_analyst.financial_fetcher.daily_basic_history_fetcher")
+        print("\n  [WARN] trade_stock_daily_basic 最早数据 {}，2022-01-01 前数据缺失".format(min_date))
+        print("         建议先运行: python3 -m data_analyst.financial_fetcher.daily_basic_history_fetcher")
     else:
-        print(f"\n  [OK]   trade_stock_daily_basic 覆盖 2022 年以前，数据充足")
+        print("\n  [OK]   trade_stock_daily_basic 覆盖 2022 年以前，数据充足")
 finally:
     conn2.close()
 
@@ -112,7 +110,7 @@ echo ""
 
 # 任务1：grid (peg/pe/roe × h1/3/5/10)，4 并行
 GRID_LOG="$LOG_DIR/grid.log"
-DB_ENV=$DB_ENV python -m strategist.microcap.run_grid \
+DB_ENV=$DB_ENV python3 -m strategist.microcap.run_grid \
     --start "$START" --end "$END" \
     --factors peg pe roe \
     --hold-days 1 3 5 10 \
@@ -123,7 +121,7 @@ echo "  [START] grid       PID=$GRID_PID  log=$GRID_LOG"
 
 # 任务2：pure_mv h1
 PURE_LOG="$LOG_DIR/pure_mv_h1.log"
-DB_ENV=$DB_ENV python -m strategist.microcap.run_backtest \
+DB_ENV=$DB_ENV python3 -m strategist.microcap.run_backtest \
     --start "$START" --end "$END" \
     --factor pure_mv --top-n 15 --hold-days 1 \
     > "$PURE_LOG" 2>&1 &
@@ -132,7 +130,7 @@ echo "  [START] pure_mv_h1 PID=$PURE_PID  log=$PURE_LOG"
 
 # 任务3：peg_ebit_mv h1
 EBIT_LOG="$LOG_DIR/peg_ebit_mv_h1.log"
-DB_ENV=$DB_ENV python -m strategist.microcap.run_backtest \
+DB_ENV=$DB_ENV python3 -m strategist.microcap.run_backtest \
     --start "$START" --end "$END" \
     --factor peg_ebit_mv --top-n 10 --hold-days 1 \
     > "$EBIT_LOG" 2>&1 &
