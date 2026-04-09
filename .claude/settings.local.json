@@ -40,7 +40,19 @@
       "Skill(writing-skills)",
       "Bash(git -C /Users/zhaobo/data0/person/mySkills add investment-assistant/SKILL.md)",
       "Bash(git -C /Users/zhaobo/data0/person/mySkills commit -m \"$(cat <<''EOF''\nfeat: add investment-assistant skill\n\nPersonal investment research assistant for A-share financial data:\n- Download annual reports from cninfo (fulltextSearch API)\n- Embed PDF text + Markdown summaries into ChromaDB (DashScope)\n- Query financial data via RAG vector search\n- Fetch structured financial data from akshare to MySQL\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
-      "Bash(git -C /Users/zhaobo/data0/person/mySkills push origin main)"
+      "Bash(git -C /Users/zhaobo/data0/person/mySkills push origin main)",
+      "Bash(pip3 install:*)",
+      "Read(//usr/bin/**)",
+      "Read(//usr/local/bin/**)",
+      "Bash(yum install:*)",
+      "Bash(ls -la /root/app/.env*)",
+      "Bash(openssl rand:*)",
+      "Bash(npm --version)",
+      "Bash(npm install:*)",
+      "Bash(redis-cli ping:*)",
+      "Bash(cp /root/app/nginx.conf /etc/nginx/conf.d/mytrader.conf)",
+      "Bash(nginx -t)",
+      "Bash(du -sh *)"
     ],
     "deny": [],
     "ask": []
