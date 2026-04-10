@@ -66,19 +66,27 @@ def calc_peg(trade_date: str, stock_codes: List[str]) -> pd.DataFrame:
             max_report_year = trade_year
         logger.debug(f"PIT rule: trade_date={trade_date}, max_report_year={max_report_year}")
 
-        sql_eps = f"""
-            SELECT
-                stock_code,
-                YEAR(report_date) AS report_year,
-                eps
-            FROM trade_stock_financial
-            WHERE stock_code IN ({placeholders})
-            AND MONTH(report_date) = 12
-            AND YEAR(report_date) <= %s
-            ORDER BY stock_code, report_date DESC
-        """
-        params = stock_codes + [max_report_year]
-        df_eps = pd.read_sql(sql_eps, conn, params=params)
+        # 分批查询（每批 50 只），避免大 IN 子句导致 MySQL 写 /tmp 临时文件。
+        # 去掉 ORDER BY（在 Python 侧排序），进一步降低 MySQL 产生临时文件的概率。
+        EPS_BATCH = 50
+        eps_chunks = []
+        for batch_start in range(0, len(stock_codes), EPS_BATCH):
+            batch = stock_codes[batch_start: batch_start + EPS_BATCH]
+            ph = ','.join(['%s'] * len(batch))
+            sql_eps = f"""
+                SELECT
+                    stock_code,
+                    YEAR(report_date) AS report_year,
+                    eps
+                FROM trade_stock_financial
+                WHERE stock_code IN ({ph})
+                AND MONTH(report_date) = 12
+                AND YEAR(report_date) <= %s
+            """
+            chunk = pd.read_sql(sql_eps, conn, params=batch + [max_report_year])
+            if not chunk.empty:
+                eps_chunks.append(chunk)
+        df_eps = pd.concat(eps_chunks, ignore_index=True) if eps_chunks else pd.DataFrame()
 
     finally:
         conn.close()
