@@ -80,7 +80,9 @@
       "Bash(docker compose:*)",
       "Bash(mysql -u mytrader_user -p'lGgS^uruPhv%AK0ZifeC' mytrader -e \"SELECT 1 as test;\")",
       "Bash(bash:*)",
-      "Bash(/usr/local/bin/python3:*)"
+      "Bash(/usr/local/bin/python3:*)",
+      "Bash(chmod +x /Users/zhaobo/data0/person/myTrader/strategist/microcap/run_server.sh)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []

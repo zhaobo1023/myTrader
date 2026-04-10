@@ -1153,7 +1153,378 @@ class ReportDataTools:
         return "\n".join(lines)
 
     # ----------------------------------------------------------
-    # 9. Bank Cross Section
+    # 9. Bank Diagnostic (Flitter Six-Question Pre-computation)
+    # ----------------------------------------------------------
+
+    def get_bank_diagnostic(self, stock_code: str) -> str:
+        """
+        银行诊断预计算层（Flitter六问法核心指标）。
+
+        自动计算4个核心信号，LLM直接引用结论，无需重新推算。
+        信号标记：[OK] 无异常 / [WARN] 需关注 / [RISK] 高风险
+
+        计算内容：
+        1. 利润质量：拨备释放贡献比（provision_ratio变动 x 贷款规模）
+        2. 净资产质量：OCI差值（实际净资产 vs 推算净资产）
+        3. 剪刀差：营业利润增速 vs 归母净利增速
+        4. 资本消耗速率：贷款增速 vs 内生资本补充速度
+        """
+        if _execute_query is None:
+            return "[银行诊断] DB模块未加载"
+
+        clean_code = stock_code.split(".")[0]
+        lines = [
+            f"[银行诊断预计算] {clean_code}（Flitter六问法，信号已预判，LLM直接引用）",
+            "=" * 60,
+        ]
+
+        # --- 查询所需数据 ---
+        bal_sql = """
+            SELECT report_date, total_equity, loan_total, provision_ratio,
+                   provision_coverage, npl_ratio, roe, tier1_ratio, cap_adequacy_ratio
+            FROM financial_balance
+            WHERE stock_code = %s
+            ORDER BY report_date DESC
+            LIMIT 6
+        """
+        inc_sql = """
+            SELECT report_date, net_profit, net_profit_yoy, roe, eps
+            FROM financial_income
+            WHERE stock_code = %s
+            ORDER BY report_date DESC
+            LIMIT 6
+        """
+        detail_sql = """
+            SELECT report_date, operating_revenue, admin_expense, credit_impairment,
+                   asset_impairment, selling_expense, finance_expense, net_profit
+            FROM financial_income_detail
+            WHERE stock_code = %s
+            ORDER BY report_date DESC
+            LIMIT 3
+        """
+        div_sql = """
+            SELECT ex_date, cash_div, div_total, div_ratio
+            FROM financial_dividend
+            WHERE stock_code = %s
+            ORDER BY ex_date DESC
+            LIMIT 10
+        """
+        try:
+            bal_rows = _execute_query(bal_sql, params=(clean_code,), env=self._db_env) or []
+            inc_rows = _execute_query(inc_sql, params=(clean_code,), env=self._db_env) or []
+            detail_rows = _execute_query(detail_sql, params=(clean_code,), env=self._db_env) or []
+            div_rows = _execute_query(div_sql, params=(clean_code,), env=self._db_env) or []
+        except Exception as e:
+            return f"[银行诊断] 查询失败: {e}"
+
+        # 过滤年报（12-31结尾）
+        annual_bal = [r for r in bal_rows if str(r.get('report_date', '')).endswith('12-31')]
+        annual_inc = [r for r in inc_rows if str(r.get('report_date', '')).endswith('12-31')]
+        annual_det = [r for r in detail_rows if str(r.get('report_date', '')).endswith('12-31')]
+
+        if len(annual_bal) < 2 or len(annual_inc) < 2:
+            lines.append("[诊断不完整] 年报数据不足2期，无法计算同比变化")
+            return "\n".join(lines)
+
+        curr_bal = annual_bal[0]
+        prev_bal = annual_bal[1]
+        curr_inc = annual_inc[0]
+        prev_inc = annual_inc[1]
+        curr_date = str(curr_bal.get('report_date', ''))
+        prev_date = str(prev_bal.get('report_date', ''))
+        curr_year = curr_date[:4]
+        prev_year = prev_date[:4]
+
+        curr_np = _safe_float(curr_inc.get('net_profit'))
+        prev_np = _safe_float(prev_inc.get('net_profit'))
+        curr_np_yoy = _safe_float(curr_inc.get('net_profit_yoy'))
+
+        # 预估派息率（用于后续诊断2和4）
+        estimated_payout = 0.20  # default 20%
+        if div_rows:
+            latest_ratio = _safe_float(div_rows[0].get('div_ratio'))
+            if latest_ratio and 5 < latest_ratio < 80:
+                estimated_payout = latest_ratio / 100.0
+            else:
+                # 尝试用 div_total / net_profit 推算
+                div_total_map = {}
+                for dr in div_rows:
+                    ex = dr.get('ex_date')
+                    dt = _safe_float(dr.get('div_total'))
+                    if ex is None or dt is None:
+                        continue
+                    ex_yr = ex.year if hasattr(ex, 'year') else int(str(ex)[:4])
+                    ex_mo = ex.month if hasattr(ex, 'month') else int(str(ex)[5:7])
+                    fy = ex_yr - 1 if ex_mo <= 7 else ex_yr
+                    div_total_map[fy] = div_total_map.get(fy, 0) + dt
+                fy_int = int(curr_year)
+                if fy_int in div_total_map and curr_np and curr_np > 0:
+                    estimated_payout = min(div_total_map[fy_int] / curr_np, 0.80)
+
+        # ============================================================
+        # 诊断1：拨备释放贡献比（利润质量）
+        # ============================================================
+        lines.append(f"\n[诊断1] 利润质量 - 拨备释放贡献比")
+
+        curr_prov_ratio = _safe_float(curr_bal.get('provision_ratio'))
+        prev_prov_ratio = _safe_float(prev_bal.get('provision_ratio'))
+        curr_loan = _safe_float(curr_bal.get('loan_total'))
+
+        if all(v is not None for v in [curr_prov_ratio, prev_prov_ratio, curr_loan, curr_np, prev_np]):
+            prov_change = curr_prov_ratio - prev_prov_ratio
+            prov_release = -prov_change / 100.0 * curr_loan  # 正=释放增利
+            profit_increment = curr_np - prev_np
+            lines.append(
+                f"  拨备比（贷款拨备率）：{prev_prov_ratio:.2f}%({prev_year}) -> "
+                f"{curr_prov_ratio:.2f}%({curr_year})，变动 {prov_change:+.2f}ppt"
+            )
+            lines.append(
+                f"  对应拨备贡献：{prov_release:+.2f}亿元（正=拨备释放增厚利润）"
+            )
+            if abs(profit_increment) > 0.5 and curr_np > 0:
+                contrib_pct = prov_release / profit_increment * 100 if abs(profit_increment) > 0.01 else 0
+                lines.append(
+                    f"  利润增量({profit_increment:+.2f}亿)中拨备贡献：{contrib_pct:.1f}%"
+                )
+                if contrib_pct > 80:
+                    lines.append(
+                        "  [RISK] 利润增长主要靠拨备释放驱动(>80%)，核心盈利能力弱，不可持续"
+                    )
+                elif contrib_pct > 40:
+                    lines.append(
+                        "  [WARN] 拨备释放贡献利润增量40%+，核心收入增速远低于净利增速"
+                    )
+                elif prov_release < -5 and profit_increment > 0:
+                    lines.append(
+                        "  [OK/+] 大额拨备计提情况下利润仍正增长，核心盈利能力强"
+                    )
+                else:
+                    lines.append(
+                        "  [OK] 拨备释放贡献较小，利润增长主要来自核心业务"
+                    )
+            elif abs(prov_release) > 5:
+                lines.append(
+                    f"  [WARN] 利润近乎持平但拨备释放{prov_release:.1f}亿，"
+                    "核心经营收缩被掩盖"
+                )
+            else:
+                lines.append("  [OK] 拨备比变化不大，利润质量稳定")
+        else:
+            lines.append(
+                f"  [数据缺失] provision_ratio({curr_prov_ratio}) "
+                f"loan_total({curr_loan}) net_profit({curr_np},{prev_np})"
+            )
+
+        # ============================================================
+        # 诊断2：净资产质量 - OCI差值
+        # ============================================================
+        lines.append(f"\n[诊断2] 净资产质量 - OCI差值（推算净资产 vs 实际净资产）")
+
+        curr_eq = _safe_float(curr_bal.get('total_equity'))
+        prev_eq = _safe_float(prev_bal.get('total_equity'))
+
+        if curr_eq is not None and prev_eq is not None and curr_np is not None:
+            estimated_div = curr_np * estimated_payout
+            theoretical_eq = prev_eq + curr_np - estimated_div
+            oci_gap = curr_eq - theoretical_eq
+            oci_gap_pct = oci_gap / prev_eq * 100
+
+            lines.append(
+                f"  实际净资产：{curr_eq:.2f}亿 ({curr_date})"
+            )
+            lines.append(
+                f"  推算净资产：{theoretical_eq:.2f}亿  "
+                f"= {prev_eq:.2f}(期初) + {curr_np:.2f}(净利) - {estimated_div:.2f}(分红估算)"
+            )
+            lines.append(
+                f"  OCI差值：{oci_gap:+.2f}亿 ({oci_gap_pct:+.1f}% / 期初净资产)"
+            )
+            if oci_gap < -30:
+                lines.append(
+                    f"  [RISK] OCI差值{oci_gap:+.2f}亿，大额FVOCI债券浮亏侵蚀净资产，"
+                    "PB安全边际被压缩；利率上行可修复，利率下行将继续恶化"
+                )
+            elif oci_gap < -10:
+                lines.append(
+                    f"  [WARN] OCI差值{oci_gap:+.2f}亿，存在FVOCI浮亏，需关注利率走势"
+                )
+            elif oci_gap > 20:
+                lines.append(
+                    f"  [OK/+] OCI差值{oci_gap:+.2f}亿，FVOCI浮盈增厚净资产，"
+                    "利率下行受益；但存在未来回摆风险"
+                )
+            else:
+                lines.append(
+                    f"  [OK] OCI差值在合理范围（{oci_gap:+.2f}亿），净资产质量正常"
+                )
+            if estimated_payout <= 0.05:
+                lines.append(
+                    "  注：分红数据不足，推算使用默认派息率20%，OCI差值仅供参考"
+                )
+        else:
+            lines.append(
+                f"  [数据缺失] total_equity({curr_eq},{prev_eq}) net_profit({curr_np})"
+            )
+
+        # ============================================================
+        # 诊断3：营业利润 vs 归母净利 剪刀差
+        # ============================================================
+        lines.append(f"\n[诊断3] 利润质量 - 营业利润 vs 归母净利 剪刀差")
+
+        if len(annual_det) >= 2:
+            cd = annual_det[0]
+            pd_ = annual_det[1]
+            cd_date = str(cd.get('report_date', ''))
+
+            def _calc_op_profit(row):
+                op_rev = _safe_float(row.get('operating_revenue'))
+                if op_rev is None:
+                    return None
+                deductions = sum(
+                    v for v in [
+                        _safe_float(row.get('admin_expense')),
+                        _safe_float(row.get('credit_impairment')),
+                        _safe_float(row.get('asset_impairment')),
+                        _safe_float(row.get('selling_expense')),
+                        _safe_float(row.get('finance_expense')),
+                    ]
+                    if v is not None
+                )
+                return op_rev - deductions
+
+            curr_op = _calc_op_profit(cd)
+            prev_op = _calc_op_profit(pd_)
+
+            if curr_op is not None and prev_op is not None and prev_op > 0:
+                op_yoy = (curr_op / prev_op - 1) * 100
+                lines.append(
+                    f"  数据期间：{cd_date}（来源：financial_income_detail）"
+                )
+                lines.append(
+                    f"  推算营业利润：{prev_op:.2f}亿 -> {curr_op:.2f}亿，同比 {op_yoy:+.1f}%"
+                )
+                if curr_np_yoy is not None:
+                    scissors = curr_np_yoy - op_yoy
+                    lines.append(
+                        f"  归母净利同比：{curr_np_yoy:+.1f}%，"
+                        f"剪刀差（归母 - 营业利润）：{scissors:+.1f}ppt"
+                    )
+                    if scissors > 5:
+                        lines.append(
+                            f"  [WARN] 剪刀差{scissors:.1f}ppt，归母增速虚高于营业利润，"
+                            "可能由免税收入增加或少数股东损益驱动，不可持续"
+                        )
+                    elif scissors < -5:
+                        lines.append(
+                            f"  [INFO] 归母增速低于营业利润{abs(scissors):.1f}ppt，"
+                            "税率提升或少数股东贡献增加"
+                        )
+                    else:
+                        lines.append(
+                            f"  [OK] 剪刀差{scissors:+.1f}ppt，盈利质量正常"
+                        )
+                else:
+                    lines.append(f"  营业利润同比{op_yoy:+.1f}%（归母净利YoY数据缺失）")
+            else:
+                lines.append(
+                    "  [数据不足] financial_income_detail 关键字段缺失（operating_revenue/credit_impairment）"
+                )
+        elif len(annual_det) == 1:
+            cd = annual_det[0]
+            op_rev = _safe_float(cd.get('operating_revenue'))
+            credit_imp = _safe_float(cd.get('credit_impairment'))
+            if op_rev and credit_imp and curr_np:
+                deductions = sum(
+                    v for v in [
+                        _safe_float(cd.get('admin_expense')),
+                        credit_imp,
+                        _safe_float(cd.get('asset_impairment')),
+                        _safe_float(cd.get('selling_expense')),
+                        _safe_float(cd.get('finance_expense')),
+                    ]
+                    if v is not None
+                )
+                op_profit = op_rev - deductions
+                lines.append(
+                    f"  推算营业利润：{op_profit:.2f}亿，归母净利润：{curr_np:.2f}亿"
+                )
+                if op_profit > 0 and curr_np_yoy is not None:
+                    lines.append(
+                        f"  归母净利同比：{curr_np_yoy:+.1f}%"
+                        "（无上期detail数据，无法计算营业利润同比）"
+                    )
+            else:
+                lines.append("  [数据不足] 仅1期detail数据且关键字段缺失")
+        else:
+            lines.append(
+                "  [数据不足] financial_income_detail 无年报数据，建议手动录入年报利润表"
+            )
+
+        # ============================================================
+        # 诊断4：资本消耗速率
+        # ============================================================
+        lines.append(f"\n[诊断4] 资本消耗速率 - 贷款增速 vs 内生资本补充")
+
+        curr_loan_v = _safe_float(curr_bal.get('loan_total'))
+        prev_loan_v = _safe_float(prev_bal.get('loan_total'))
+        curr_roe = _safe_float(curr_inc.get('roe'))
+        if curr_roe is None:
+            curr_roe = _safe_float(curr_bal.get('roe'))
+        curr_tier1 = _safe_float(curr_bal.get('tier1_ratio'))
+        prev_tier1 = _safe_float(prev_bal.get('tier1_ratio'))
+
+        if curr_loan_v is not None and prev_loan_v is not None and prev_loan_v > 0:
+            loan_growth = (curr_loan_v / prev_loan_v - 1) * 100
+            lines.append(
+                f"  贷款总额：{prev_loan_v:.2f}亿({prev_year}) -> "
+                f"{curr_loan_v:.2f}亿({curr_year})，增速 {loan_growth:+.1f}%"
+            )
+            if curr_roe is not None:
+                ep = estimated_payout if 0.05 < estimated_payout < 0.80 else 0.20
+                internal_cap = curr_roe * (1.0 - ep)
+                cap_pressure = loan_growth - internal_cap
+                lines.append(
+                    f"  内生资本补充：ROE {curr_roe:.1f}% x (1-派息率{ep*100:.0f}%) "
+                    f"= {internal_cap:.1f}%/年"
+                )
+                lines.append(
+                    f"  资本压力（贷款增速 - 内生补充）：{cap_pressure:+.1f}ppt"
+                )
+                if cap_pressure > 10:
+                    lines.append(
+                        f"  [RISK] 资本压力{cap_pressure:.1f}ppt过大，"
+                        "若不补充外部资本，1-2年内资本充足率将持续下滑"
+                    )
+                elif cap_pressure > 5:
+                    lines.append(
+                        f"  [WARN] 资本压力{cap_pressure:.1f}ppt，"
+                        "贷款扩张显著超过内生补充速度"
+                    )
+                else:
+                    lines.append(
+                        f"  [OK] 资本压力{cap_pressure:.1f}ppt，内生补充基本匹配扩张节奏"
+                    )
+            else:
+                lines.append(f"  贷款增速：{loan_growth:.1f}%（ROE数据缺失）")
+        else:
+            lines.append("  [数据缺失] loan_total 无数据")
+
+        if curr_tier1 is not None:
+            tier1_chg = (curr_tier1 - prev_tier1) if prev_tier1 is not None else None
+            tier1_chg_str = f"，同比{tier1_chg:+.2f}ppt" if tier1_chg is not None else ""
+            lines.append(f"  一级资本充足率（tier1）：{curr_tier1:.2f}%{tier1_chg_str}")
+            if curr_tier1 < 9.5:
+                lines.append(
+                    f"  [WARN] tier1 {curr_tier1:.2f}%偏低，需关注监管合规余量"
+                )
+
+        lines.append("\n" + "=" * 60)
+        lines.append("以上为预计算诊断信号，LLM直接引用，无需重新推算。")
+
+        return "\n".join(lines)
+
+    # ----------------------------------------------------------
+    # 10. Bank Cross Section
     # ----------------------------------------------------------
 
     def get_bank_cross_section(self) -> str:

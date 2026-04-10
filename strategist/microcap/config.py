@@ -33,6 +33,13 @@ class MicrocapConfig:
     sell_cost_rate: float = 0.0013       # 卖出费率（0.13% = 佣金0.03% + 印花税0.1%）
     slippage_rate: float = 0.001         # 单边滑点（0.1%，微盘股买卖价差+冲击成本）
 
+    # 基准对比
+    benchmark_code: str = '399303'       # 基准指数代码（399303=国证2000，空字符串跳过）
+
+    # 流动性过滤
+    min_avg_turnover: float = 0.0        # 近 5 日平均成交额最低要求（元），0 表示不过滤
+                                         # 建议实盘前设为 5_000_000（500 万）
+
     # 输出配置
     output_dir: Optional[str] = None     # 输出目录，None 则使用默认 output/microcap
 

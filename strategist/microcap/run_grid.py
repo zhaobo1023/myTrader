@@ -95,18 +95,21 @@ def run_one(factor: str, hold_days: int, start_date: str, end_date: str,
     monthly_df.to_csv(monthly_file, index=False)
 
     row = {
-        'label':         label,
-        'factor':        factor,
-        'hold_days':     hold_days,
-        'status':        'ok',
-        'total_return':  round(summary['total_return'], 4),
-        'annual_return': round(summary['annual_return'], 4),
-        'sharpe':        round(summary['sharpe_ratio'], 3),
-        'max_drawdown':  round(summary['max_drawdown'], 4),
-        'win_rate':      round(summary['win_rate'], 4),
-        'total_trades':  summary['total_trades'],
-        'daily_file':    daily_file,
-        'monthly_file':  monthly_file,
+        'label':              label,
+        'factor':             factor,
+        'hold_days':          hold_days,
+        'slippage_rate':      slippage_rate,
+        'status':             'ok',
+        'total_return':       round(summary['total_return'], 4),
+        'annual_return':      round(summary['annual_return'], 4),
+        'sharpe':             round(summary['sharpe_ratio'], 3),
+        'max_drawdown':       round(summary['max_drawdown'], 4),
+        'win_rate':           round(summary['win_rate'], 4),
+        'total_trades':       summary['total_trades'],
+        'limit_up_skipped':   summary.get('limit_up_skipped', 0),
+        'limit_down_delayed': summary.get('limit_down_delayed', 0),
+        'daily_file':         daily_file,
+        'monthly_file':       monthly_file,
     }
 
     logger.info(
@@ -117,6 +120,35 @@ def run_one(factor: str, hold_days: int, start_date: str, end_date: str,
     return row
 
 
+def save_slippage_sensitivity(results: list, output_dir: str, date_str: str):
+    """输出滑点敏感性 CSV（固定因子/持有期，不同滑点下的关键指标）。"""
+    ok_rows = [r for r in results if r.get('status') == 'ok']
+    if not ok_rows:
+        return
+    df = pd.DataFrame(ok_rows)
+    if 'slippage_rate' not in df.columns or df['slippage_rate'].nunique() <= 1:
+        return   # 只有一个滑点档位，无需输出
+
+    cols = ['factor', 'hold_days', 'slippage_rate',
+            'annual_return', 'sharpe', 'max_drawdown', 'win_rate', 'total_trades']
+    sensitivity_df = df[cols].sort_values(['factor', 'hold_days', 'slippage_rate'])
+    out_file = os.path.join(output_dir, f'slippage_sensitivity_{date_str}.csv')
+    sensitivity_df.to_csv(out_file, index=False)
+    logger.info(f"[OK] 滑点敏感性报告: {out_file}")
+
+    print("\n" + "=" * 80)
+    print("滑点敏感性分析")
+    print("=" * 80)
+    print(f"{'因子':<8} {'持有天':<7} {'滑点':>8} {'年化':>9} {'Sharpe':>7} {'最大回撤':>9}")
+    print("-" * 80)
+    for _, row in sensitivity_df.iterrows():
+        sign = '+' if row['annual_return'] >= 0 else ''
+        print(f"{row['factor']:<8} {int(row['hold_days']):<7} "
+              f"{row['slippage_rate']:.1%}   {sign}{row['annual_return']:.2%}   "
+              f"{row['sharpe']:>7.3f}   {row['max_drawdown']:.2%}")
+    print("=" * 80)
+
+
 def print_summary_table(results: list):
     """打印汇总对比表。"""
     ok_rows = [r for r in results if r.get('status') == 'ok']
@@ -124,10 +156,14 @@ def print_summary_table(results: list):
         logger.warning("No successful results to display.")
         return
 
-    df = pd.DataFrame(ok_rows)[
+    df = pd.DataFrame(ok_rows)
+    sort_cols = ['factor', 'hold_days']
+    if 'slippage_rate' in df.columns:
+        sort_cols.append('slippage_rate')
+    df = df[
         ['label', 'factor', 'hold_days', 'total_return', 'annual_return',
          'sharpe', 'max_drawdown', 'win_rate', 'total_trades']
-    ].sort_values(['factor', 'hold_days'])
+    ].sort_values(sort_cols)
 
     print("\n" + "=" * 90)
     print("微盘股策略网格测试 - 汇总对比")
@@ -218,6 +254,8 @@ def main():
                         choices=['peg', 'pe', 'roe', 'ebit_ratio', 'peg_ebit_mv', 'pure_mv'])
     parser.add_argument('--hold-days', nargs='+', type=int, default=[1, 3, 5, 10],
                         dest='hold_days')
+    parser.add_argument('--slippage', nargs='+', type=float, default=[0.001],
+                        help='单边滑点列表，如 --slippage 0.001 0.002 0.003 0.005')
     parser.add_argument('--top-n', type=int, default=15, dest='top_n')
     parser.add_argument('--workers', type=int, default=1,
                         help='并行进程数（默认1，顺序执行）')
@@ -226,14 +264,15 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     combos = [
-        (f, h, args.start, args.end, args.top_n, 0.001)
+        (f, h, args.start, args.end, args.top_n, s)
         for f in args.factors
         for h in args.hold_days
+        for s in args.slippage
     ]
     total = len(combos)
 
     logger.info("=" * 60)
-    logger.info(f"网格测试: factors={args.factors}, hold_days={args.hold_days}")
+    logger.info(f"网格测试: factors={args.factors}, hold_days={args.hold_days}, slippage={args.slippage}")
     logger.info(f"日期范围: {args.start} ~ {args.end}, top_n={args.top_n}")
     logger.info(f"并行进程: {args.workers}, 总组合数: {total}")
     logger.info("=" * 60)
@@ -242,7 +281,7 @@ def main():
 
     if args.workers <= 1:
         for i, combo in enumerate(combos, 1):
-            logger.info(f"\n[{i}/{total}] 开始: factor={combo[0]}, hold_days={combo[1]}")
+            logger.info(f"\n[{i}/{total}] 开始: factor={combo[0]}, hold_days={combo[1]}, slippage={combo[5]:.3f}")
             results.append(_run_one_task(combo))
     else:
         with ProcessPoolExecutor(max_workers=args.workers) as executor:
@@ -254,13 +293,13 @@ def main():
                 try:
                     row = future.result()
                     results.append(row)
-                    logger.info(f"[{done_count}/{total}] 完成: {combo[0]}_h{combo[1]}")
+                    logger.info(f"[{done_count}/{total}] 完成: {combo[0]}_h{combo[1]}_slip{combo[5]:.3f}")
                 except Exception as e:
                     logger.error(f"[{done_count}/{total}] 失败: {combo[0]}_h{combo[1]}: {e}")
                     results.append({'label': f"{combo[0]}_h{combo[1]}", 'status': 'error'})
 
-    # 按 factor + hold_days 排序
-    results.sort(key=lambda r: (r.get('factor', ''), r.get('hold_days', 0)))
+    # 按 factor + hold_days + slippage 排序
+    results.sort(key=lambda r: (r.get('factor', ''), r.get('hold_days', 0), r.get('slippage_rate', 0)))
 
     # 保存结果
     date_str = f"{args.start.replace('-','')}_{args.end.replace('-','')}"
@@ -271,7 +310,9 @@ def main():
 
     # 打印汇总
     print_summary_table(results)
-    print_monthly_comparison(results)
+    save_slippage_sensitivity(results, OUTPUT_DIR, date_str)
+    if len(args.slippage) == 1:
+        print_monthly_comparison(results)
 
 
 if __name__ == '__main__':

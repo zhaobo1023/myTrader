@@ -23,6 +23,7 @@ from config.db import get_connection
 from .config import MicrocapConfig
 from .universe import get_daily_universe
 from .factors import calc_peg, calc_pe, calc_roe, calc_ebit_ratio, calc_peg_ebit_mv, calc_pure_mv
+from .benchmark import load_benchmark, calc_benchmark_metrics, DEFAULT_BENCHMARK
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +41,14 @@ class MicrocapBacktest:
         self.config = config
         self.trades = []           # 交易记录
         self.portfolio_values = [] # 净值记录
-        self.holdings = {}         # 当前持仓 {stock_code: (buy_date, buy_price, units)}
-        self._price_cache = {}     # 价格缓存 {trade_date: {'open': {code: price}, 'close': {code: price}}}
+        self.holdings = {}         # 当前持仓 {stock_code: dict(buy_date, buy_price, units, sell_date, delay_count)}
+        self._price_cache = {}     # 价格缓存 {trade_date: {'open','close','high','low': {code: price}}}
+        self._prev_close: Dict[str, float] = {}   # 上一交易日收盘价 {code: price}，用于涨跌停判断
+        self._trade_dates: List[str] = []          # 全量交易日列表（run() 时填充）
+        self._date_to_idx: Dict[str, int] = {}     # 日期 -> 索引，O(1) 查找
+        self._limit_up_skipped: int = 0            # 涨停跳过买入次数
+        self._limit_down_delayed: int = 0          # 跌停顺延卖出次数
+        self._delist_writeoffs: int = 0            # 退市归零笔数
 
     def run(self) -> Dict:
         """
@@ -73,41 +80,62 @@ class MicrocapBacktest:
                     'daily_values_df': pd.DataFrame(),
                 }
 
+            # 填充交易日索引（供涨跌停顺延使用）
+            self._trade_dates = trade_dates
+            self._date_to_idx = {d: i for i, d in enumerate(trade_dates)}
+
             # 回测主循环
             cash = 1.0                     # 现金余额
-            holdings = {}                  # 持仓 {stock_code: (buy_date, buy_price, units, sell_date)}
+            holdings = {}                  # 持仓 {stock_code: dict}
             daily_values = []
-            pending_buy = None             # 待买入的选股 {date: [codes]}
+            pending_buy = None             # 待买入的选股 [codes]
 
             for i, trade_date in enumerate(trade_dates):
                 # 第1步：处理卖出（持有期到期）—— 先卖后买，确保现金充足
                 for code in list(holdings.keys()):
-                    buy_date, buy_price, units, sell_date = holdings[code]
-                    if trade_date == sell_date:
-                        # 卖出：使用开盘价，向下滑点
-                        sell_price_raw = self._get_open_price(code, trade_date)
-                        if sell_price_raw is not None and sell_price_raw > 0:
-                            sell_price = sell_price_raw * (1 - self.config.slippage_rate)
-                            proceeds = units * sell_price * (1 - self.config.sell_cost_rate)
-                            cash += proceeds
-                            pnl = proceeds - (units * buy_price)
-                            pnl_pct = (sell_price / buy_price - 1) - self.config.buy_cost_rate - self.config.sell_cost_rate
+                    h = holdings[code]
+                    if trade_date != h['sell_date']:
+                        continue
 
-                            self.trades.append({
-                                'buy_date': buy_date,
-                                'sell_date': trade_date,
-                                'stock_code': code,
-                                'buy_price': buy_price,
-                                'sell_price': sell_price,
-                                'hold_days': self.config.hold_days,
-                                'return': pnl_pct,
-                                'pnl': pnl,
-                            })
+                    # 检测一字跌停：无法成交，顺延最多 5 个交易日
+                    if self._is_limit_down(code, trade_date) and h['delay_count'] < 5:
+                        idx = self._date_to_idx[trade_date]
+                        if idx + 1 < len(trade_dates):
+                            h['sell_date'] = trade_dates[idx + 1]
+                            h['delay_count'] += 1
+                            self._limit_down_delayed += 1
+                            logger.debug(f"Sell {code} delayed (limit-down) to {h['sell_date']}, "
+                                         f"delay_count={h['delay_count']}")
+                            continue
+                        # 无后续交易日，强制按现价卖出（兜底）
 
-                            logger.debug(f"Sell {code} on {trade_date}: "
-                                       f"buy={buy_price:.2f}, sell={sell_price:.2f}, "
-                                       f"return={pnl_pct:.4f}")
-                            del holdings[code]
+                    # 卖出：使用开盘价，向下滑点
+                    sell_price_raw = self._get_open_price(code, trade_date)
+                    if sell_price_raw is not None and sell_price_raw > 0:
+                        sell_price = sell_price_raw * (1 - self.config.slippage_rate)
+                        proceeds = units_held = h['units']
+                        proceeds = units_held * sell_price * (1 - self.config.sell_cost_rate)
+                        cash += proceeds
+                        pnl = proceeds - (units_held * h['buy_price'])
+                        pnl_pct = ((sell_price / h['buy_price']) - 1
+                                   - self.config.buy_cost_rate - self.config.sell_cost_rate)
+
+                        self.trades.append({
+                            'buy_date':  h['buy_date'],
+                            'sell_date': trade_date,
+                            'stock_code': code,
+                            'buy_price':  h['buy_price'],
+                            'sell_price': sell_price,
+                            'hold_days':  self.config.hold_days + h['delay_count'],
+                            'delay_count': h['delay_count'],
+                            'return': pnl_pct,
+                            'pnl': pnl,
+                        })
+
+                        logger.debug(f"Sell {code} on {trade_date}: "
+                                     f"buy={h['buy_price']:.2f}, sell={sell_price:.2f}, "
+                                     f"return={pnl_pct:.4f}, delay={h['delay_count']}")
+                        del holdings[code]
 
                 # 第2步：执行前一交易日的选股（T+1 买入）
                 if pending_buy is not None:
@@ -119,6 +147,11 @@ class MicrocapBacktest:
                         new_codes = [c for c in selected_codes if c not in holdings]
                         buy_prices = {}
                         for code in new_codes:
+                            # 一字涨停：无法买入，跳过
+                            if self._is_limit_up(code, trade_date):
+                                self._limit_up_skipped += 1
+                                logger.debug(f"Buy {code} skipped (limit-up) on {trade_date}")
+                                continue
                             # 买入：使用开盘价，向上滑点
                             price_raw = self._get_open_price(code, trade_date)
                             if price_raw is not None and price_raw > 0:
@@ -136,9 +169,16 @@ class MicrocapBacktest:
                                 sell_idx = i + self.config.hold_days
                                 sell_date = trade_dates[sell_idx] if sell_idx < len(trade_dates) else None
 
-                                holdings[code] = (trade_date, buy_price, units, sell_date)
+                                holdings[code] = {
+                                    'buy_date':      trade_date,
+                                    'buy_price':     buy_price,
+                                    'units':         units,
+                                    'sell_date':     sell_date,
+                                    'delay_count':   0,
+                                    'no_price_days': 0,   # 连续无收盘价天数（退市检测）
+                                }
                                 logger.debug(f"Buy {code} on {trade_date}: "
-                                           f"price={buy_price:.2f}, units={units:.2f}")
+                                             f"price={buy_price:.2f}, units={units:.2f}")
 
                 # 第3步：选股（当前交易日，明天 T+1 执行）
                 if i < len(trade_dates) - 1:
@@ -146,12 +186,40 @@ class MicrocapBacktest:
                     if selected:
                         pending_buy = selected
 
-                # 第4步：计算组合价值
+                # 第4步：退市检测 + 计算组合价值
+                # 持仓股连续 3 个交易日无收盘价 → 视为退市/暂停，按 0 价格强制平仓（归零）
+                DELIST_THRESHOLD = 3
+                for code in list(holdings.keys()):
+                    h = holdings[code]
+                    current_price = self._get_close_price(code, trade_date)
+                    if current_price is None or current_price <= 0:
+                        h['no_price_days'] += 1
+                        if h['no_price_days'] >= DELIST_THRESHOLD:
+                            # 归零：记录亏损 100%（含买入成本）
+                            pnl_pct = -1.0 - self.config.buy_cost_rate  # 本金全亏 + 买入手续费
+                            self.trades.append({
+                                'buy_date':    h['buy_date'],
+                                'sell_date':   trade_date,
+                                'stock_code':  code,
+                                'buy_price':   h['buy_price'],
+                                'sell_price':  0.0,
+                                'hold_days':   self.config.hold_days + h['delay_count'],
+                                'delay_count': h['delay_count'],
+                                'return':      pnl_pct,
+                                'pnl':         -(h['units'] * h['buy_price']),
+                                'delist':      True,
+                            })
+                            logger.warning(f"[DELIST] {code} has no price for {DELIST_THRESHOLD} days "
+                                           f"as of {trade_date}, writing off position")
+                            del holdings[code]
+                    else:
+                        h['no_price_days'] = 0  # 恢复计数
+
                 nav = cash
-                for code, (buy_date, buy_price, units, sell_date) in holdings.items():
+                for code, h in holdings.items():
                     current_price = self._get_close_price(code, trade_date)
                     if current_price is not None and current_price > 0:
-                        nav += units * current_price
+                        nav += h['units'] * current_price
 
                 daily_return = (nav / (daily_values[-1]['nav'] if daily_values else 1.0)) - 1
 
@@ -172,8 +240,17 @@ class MicrocapBacktest:
             trades_df = pd.DataFrame(self.trades) if self.trades else pd.DataFrame()
             daily_values_df = pd.DataFrame(daily_values)
 
+            # 加载基准数据（可选）
+            benchmark_df = pd.DataFrame()
+            if self.config.benchmark_code:
+                benchmark_df = load_benchmark(
+                    self.config.benchmark_code,
+                    self.config.start_date,
+                    self.config.end_date,
+                )
+
             # 统计摘要
-            summary = self._calc_summary(trades_df, daily_values_df)
+            summary = self._calc_summary(trades_df, daily_values_df, benchmark_df)
 
             logger.info("[OK] Backtest completed successfully")
             return {
@@ -182,6 +259,7 @@ class MicrocapBacktest:
                 'backtest_summary': summary,
                 'trades_df': trades_df,
                 'daily_values_df': daily_values_df,
+                'benchmark_df': benchmark_df,
             }
 
         except Exception as e:
@@ -242,12 +320,14 @@ class MicrocapBacktest:
                     percentile=1.0,
                     exclude_st=self.config.exclude_st,
                     require_positive_pe=(self.config.factor != 'pure_mv'),
+                    min_avg_turnover=self.config.min_avg_turnover,
                 )
             else:
                 universe = get_daily_universe(
                     trade_date,
                     percentile=self.config.market_cap_percentile,
                     exclude_st=self.config.exclude_st,
+                    min_avg_turnover=self.config.min_avg_turnover,
                 )
 
             if not universe:
@@ -284,7 +364,9 @@ class MicrocapBacktest:
             return []
 
     def _load_prices_for_date(self, trade_date: str) -> None:
-        """批量加载指定日期所有股票的开盘价和收盘价到缓存，带重试。"""
+        """批量加载指定日期所有股票的开盘/收盘/最高/最低价到缓存，带重试。
+        同步更新 _prev_close（用于涨跌停判断）。
+        """
         if trade_date in self._price_cache:
             return
         for attempt in range(3):
@@ -292,14 +374,21 @@ class MicrocapBacktest:
                 conn = get_connection()
                 try:
                     sql = """
-                        SELECT stock_code, open_price, close_price FROM trade_stock_daily
+                        SELECT stock_code, open_price, high_price, low_price, close_price
+                        FROM trade_stock_daily
                         WHERE trade_date = %s AND close_price > 0
                     """
                     df = pd.read_sql(sql, conn, params=[trade_date])
+                    close_dict = dict(zip(df['stock_code'], df['close_price'].astype(float)))
                     self._price_cache[trade_date] = {
                         'open':  dict(zip(df['stock_code'], df['open_price'].astype(float))),
-                        'close': dict(zip(df['stock_code'], df['close_price'].astype(float))),
+                        'high':  dict(zip(df['stock_code'], df['high_price'].astype(float))),
+                        'low':   dict(zip(df['stock_code'], df['low_price'].astype(float))),
+                        'close': close_dict,
                     }
+                    # 当前日期加载完毕后，_prev_close 更新为本日收盘
+                    # （下次加载更晚日期时使用）
+                    self._prev_close.update(close_dict)
                     return
                 finally:
                     conn.close()
@@ -309,7 +398,44 @@ class MicrocapBacktest:
                     time.sleep(3)
                 else:
                     logger.error(f"DB error on {trade_date} after 3 attempts: {e}")
-                    self._price_cache[trade_date] = {'open': {}, 'close': {}}
+                    self._price_cache[trade_date] = {'open': {}, 'high': {}, 'low': {}, 'close': {}}
+
+    def _is_limit_down(self, stock_code: str, trade_date: str) -> bool:
+        """判断股票在指定交易日是否一字跌停（无法卖出）。
+        判断逻辑：high == low（一字板） AND 相对前收盘跌幅 <= -4%。
+        -4% 阈值同时覆盖普通股 -10% 和 ST -5% 的跌停情形。
+        """
+        self._load_prices_for_date(trade_date)
+        cache = self._price_cache[trade_date]
+        high = cache['high'].get(stock_code)
+        low  = cache['low'].get(stock_code)
+        close = cache['close'].get(stock_code)
+        prev_close = self._prev_close.get(stock_code)
+
+        if high is None or low is None or close is None or prev_close is None or prev_close <= 0:
+            return False
+        if abs(high - low) > 0.001:   # 非一字板：有正常价格区间
+            return False
+        pct_chg = (close - prev_close) / prev_close
+        return pct_chg <= -0.04
+
+    def _is_limit_up(self, stock_code: str, trade_date: str) -> bool:
+        """判断股票在指定交易日是否一字涨停（无法买入）。
+        判断逻辑：high == low（一字板） AND 相对前收盘涨幅 >= +4%。
+        """
+        self._load_prices_for_date(trade_date)
+        cache = self._price_cache[trade_date]
+        high = cache['high'].get(stock_code)
+        low  = cache['low'].get(stock_code)
+        close = cache['close'].get(stock_code)
+        prev_close = self._prev_close.get(stock_code)
+
+        if high is None or low is None or close is None or prev_close is None or prev_close <= 0:
+            return False
+        if abs(high - low) > 0.001:
+            return False
+        pct_chg = (close - prev_close) / prev_close
+        return pct_chg >= 0.04
 
     def _get_open_price(self, stock_code: str, trade_date: str) -> Optional[float]:
         """获取股票在指定交易日的开盘价（执行价）。"""
@@ -326,13 +452,15 @@ class MicrocapBacktest:
         return self._price_cache[trade_date]['close'].get(stock_code)
 
     def _calc_summary(self, trades_df: pd.DataFrame,
-                      daily_values_df: pd.DataFrame) -> Dict:
+                      daily_values_df: pd.DataFrame,
+                      benchmark_df: pd.DataFrame = None) -> Dict:
         """
-        计算回测统计摘要。
+        计算回测统计摘要（含基准对比指标）。
 
         Args:
             trades_df: 交易记录 DataFrame
             daily_values_df: 每日净值 DataFrame
+            benchmark_df: 基准日线 DataFrame（可选），列含 trade_date / daily_return
 
         Returns:
             统计摘要字典
@@ -346,6 +474,16 @@ class MicrocapBacktest:
             'sharpe_ratio': 0.0,
             'max_drawdown': 0.0,
             'win_rate': 0.0,
+            'limit_up_skipped': self._limit_up_skipped,
+            'limit_down_delayed': self._limit_down_delayed,
+            'delist_writeoffs': self._delist_writeoffs,
+            # 基准指标（默认空值，有基准数据时填充）
+            'benchmark_code': self.config.benchmark_code,
+            'benchmark_annual_return': None,
+            'excess_annual_return': None,
+            'information_ratio': None,
+            'beta': None,
+            'alpha': None,
         }
 
         if trades_df.empty or daily_values_df.empty:
@@ -381,5 +519,12 @@ class MicrocapBacktest:
             cummax = daily_values_df['nav'].cummax()
             drawdown = (daily_values_df['nav'] - cummax) / cummax
             summary['max_drawdown'] = float(drawdown.min())
+
+        # 基准对比指标
+        if benchmark_df is not None and not benchmark_df.empty and len(daily_values_df) > 1:
+            strat_series = daily_values_df.set_index('trade_date')['daily_return']
+            bench_series = benchmark_df.set_index('trade_date')['daily_return']
+            bench_metrics = calc_benchmark_metrics(strat_series, bench_series)
+            summary.update(bench_metrics)
 
         return summary

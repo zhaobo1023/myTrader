@@ -90,6 +90,9 @@ def main():
                        help='排除 ST/*ST 股票')
     parser.add_argument('--slippage-rate', type=float, default=0.001,
                        help='单边滑点率 (默认0.1%%，微盘股买卖价差+冲击成本)')
+    parser.add_argument('--min-turnover', type=float, default=0.0,
+                       dest='min_avg_turnover',
+                       help='近5日平均成交额最低要求（元），0表示不过滤，实盘建议5000000')
 
     args = parser.parse_args()
 
@@ -113,6 +116,7 @@ def main():
         sell_cost_rate=args.sell_cost_rate,
         slippage_rate=args.slippage_rate,
         exclude_st=args.exclude_st,
+        min_avg_turnover=args.min_avg_turnover,
     )
 
     # 创建输出目录
@@ -140,6 +144,7 @@ def main():
     summary = result['backtest_summary']
     trades_df = result['trades_df']
     daily_values_df = result['daily_values_df']
+    benchmark_df = result.get('benchmark_df', None)
 
     # 交易记录
     if not trades_df.empty:
@@ -159,6 +164,21 @@ def main():
         json.dump(summary, f, indent=2)
     logger.info(f"[OK] Summary saved to: {summary_file}")
 
+    # NAV 对比 CSV（策略 + 基准）
+    if not daily_values_df.empty and benchmark_df is not None and not benchmark_df.empty:
+        nav_compare = daily_values_df[['trade_date', 'nav', 'daily_return']].copy()
+        nav_compare.columns = ['trade_date', 'strategy_nav', 'strategy_return']
+        bench_nav = benchmark_df[['trade_date', 'daily_return']].copy()
+        bench_nav.columns = ['trade_date', 'benchmark_return']
+        bench_nav['benchmark_nav'] = (1 + bench_nav['benchmark_return']).cumprod()
+        # 基准 NAV 基点对齐到 1.0
+        if bench_nav['benchmark_nav'].iloc[0] > 0:
+            bench_nav['benchmark_nav'] = bench_nav['benchmark_nav'] / bench_nav['benchmark_nav'].iloc[0]
+        nav_compare = nav_compare.merge(bench_nav, on='trade_date', how='left')
+        nav_compare_file = os.path.join(config.output_dir, f'nav_vs_benchmark_{date_range_str}.csv')
+        nav_compare.to_csv(nav_compare_file, index=False)
+        logger.info(f"[OK] NAV vs Benchmark saved to: {nav_compare_file}")
+
     # 打印摘要
     logger.info("[OK] Backtest Summary:")
     logger.info(f"     Total Trades: {summary['total_trades']}")
@@ -169,6 +189,15 @@ def main():
     logger.info(f"     Annual Return: {summary['annual_return']:.4f}")
     logger.info(f"     Sharpe Ratio: {summary['sharpe_ratio']:.4f}")
     logger.info(f"     Max Drawdown: {summary['max_drawdown']:.4f}")
+    logger.info(f"     Limit-Up Skipped: {summary.get('limit_up_skipped', 0)}")
+    logger.info(f"     Limit-Down Delayed: {summary.get('limit_down_delayed', 0)}")
+    if summary.get('benchmark_annual_return') is not None:
+        logger.info(f"     --- Benchmark ({summary.get('benchmark_code', '')}) ---")
+        logger.info(f"     Benchmark Annual Return: {summary['benchmark_annual_return']:.4f}")
+        logger.info(f"     Excess Annual Return:    {summary['excess_annual_return']:.4f}")
+        logger.info(f"     Information Ratio:       {summary['information_ratio']:.4f}")
+        logger.info(f"     Beta:                    {summary['beta']:.4f}")
+        logger.info(f"     Alpha (annualized):      {summary['alpha']:.4f}")
 
     # 月度收益统计
     if not daily_values_df.empty:

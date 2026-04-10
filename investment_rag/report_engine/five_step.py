@@ -56,6 +56,7 @@ class FiveStepAnalyzer:
     def __init__(self, db_env: str = "online"):
         self._tools = ReportDataTools(db_env=db_env)
         self._llm = LLMClient()
+        self._db_env = db_env
 
     # ----------------------------------------------------------
     # Public API
@@ -133,6 +134,12 @@ class FiveStepAnalyzer:
             system_prompt=system_prompt,
         )
 
+        # 评分卡（银行行业才生成）
+        if industry_config.needs_bank_indicators:
+            results["scorecard"] = self._generate_scorecard(stock_code, stock_name)
+        else:
+            results["scorecard"] = ""
+
         return results
 
     def generate_tech_section(self, stock_code: str, stock_name: str) -> str:
@@ -155,6 +162,21 @@ class FiveStepAnalyzer:
         except Exception as e:
             logger.error("[FiveStep] Tech section LLM call failed: %s", e)
             return f"[技术面分析] LLM 调用失败: {e}\n\n原始数据:\n{tech_data}"
+
+    # ----------------------------------------------------------
+    # Internal - 评分卡生成
+    # ----------------------------------------------------------
+
+    def _generate_scorecard(self, stock_code: str, stock_name: str) -> str:
+        """生成银行评分卡文本。"""
+        try:
+            from investment_rag.report_engine.bank_scorecard import BankScoreCard
+            sc = BankScoreCard(db_env=self._db_env)
+            result = sc.score(stock_code, stock_name)
+            return result.to_text()
+        except Exception as e:
+            logger.warning("[FiveStep] scorecard generation failed: %s", e)
+            return f"[评分卡] 生成失败: {e}"
 
     # ----------------------------------------------------------
     # Internal - 前步摘要构建
@@ -305,6 +327,11 @@ class FiveStepAnalyzer:
                     industry_extra_data += "\n\n" + income_detail
                 if non_recurring and not any(s in non_recurring for s in _no_data):
                     industry_extra_data += "\n\n" + non_recurring
+                # Flitter诊断预计算（OCI差值、剪刀差、资本消耗速率等信号）
+                bank_diagnostic = self._tools.get_bank_diagnostic(stock_code)
+                _no_data_diag = ("查询失败", "DB模块未加载", "诊断不完整")
+                if bank_diagnostic and not any(s in bank_diagnostic for s in _no_data_diag):
+                    industry_extra_data += "\n\n" + bank_diagnostic
             elif step_config.step_id in ("step2", "step3"):
                 # Step2 / Step3 注入银行对标表用于护城河和估值对标
                 bank_cross_section = self._tools.get_bank_cross_section()

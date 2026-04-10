@@ -55,7 +55,17 @@ def calc_peg(trade_date: str, stock_codes: List[str]) -> pd.DataFrame:
         if df_pe.empty:
             return pd.DataFrame(columns=['stock_code', 'peg'])
 
-        # Step 2: 获取截至 trade_date 的最近两个年报 EPS（不能用 CURDATE，避免前视偏差）
+        # Step 2: 获取截至 trade_date 的最近两个年报 EPS
+        # 保守 PIT 规则：年报最晚 4 月 30 日才披露完毕。
+        # 1-4 月只能使用前一年度及更早的年报，避免使用尚未公告的当年度数据。
+        trade_year = int(trade_date[:4])
+        trade_month = int(trade_date[5:7])
+        if trade_month <= 4:
+            max_report_year = trade_year - 1
+        else:
+            max_report_year = trade_year
+        logger.debug(f"PIT rule: trade_date={trade_date}, max_report_year={max_report_year}")
+
         sql_eps = f"""
             SELECT
                 stock_code,
@@ -63,11 +73,11 @@ def calc_peg(trade_date: str, stock_codes: List[str]) -> pd.DataFrame:
                 eps
             FROM trade_stock_financial
             WHERE stock_code IN ({placeholders})
-            AND report_date <= %s
             AND MONTH(report_date) = 12
+            AND YEAR(report_date) <= %s
             ORDER BY stock_code, report_date DESC
         """
-        params = stock_codes + [trade_date]
+        params = stock_codes + [max_report_year]
         df_eps = pd.read_sql(sql_eps, conn, params=params)
 
     finally:

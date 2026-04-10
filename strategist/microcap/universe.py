@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 def get_daily_universe(trade_date: str, percentile: float = 0.20,
                        exclude_st: bool = True, min_pe_ttm: float = 0.0,
-                       require_positive_pe: bool = True) -> List[str]:
+                       require_positive_pe: bool = True,
+                       min_avg_turnover: float = 0.0) -> List[str]:
     """
     获取指定日期的股票池（市值后 percentile 的股票）。
 
@@ -25,6 +26,8 @@ def get_daily_universe(trade_date: str, percentile: float = 0.20,
         percentile: 市值百分位，0.20 表示市值后 20%
         exclude_st: 是否排除 ST/*ST 股票
         min_pe_ttm: PE_TTM 最小值，排除 <= 此值的股票
+        require_positive_pe: 是否要求 PE_TTM > 0
+        min_avg_turnover: 近 5 日平均成交额最低要求（元），0 表示不过滤
 
     Returns:
         股票代码列表，格式 ['000001.SZ', '600519.SH', ...]
@@ -55,6 +58,32 @@ def get_daily_universe(trade_date: str, percentile: float = 0.20,
         sql += " ORDER BY b.total_mv ASC"
 
         df = pd.read_sql(sql, conn, params=params)
+
+        # 成交额流动性过滤：剔除近 5 日平均成交额低于阈值的股票
+        if min_avg_turnover > 0 and not df.empty:
+            stock_codes = df['stock_code'].tolist()
+            placeholders = ','.join(['%s'] * len(stock_codes))
+            sql_turnover = f"""
+                SELECT stock_code, AVG(amount) AS avg_amount
+                FROM trade_stock_daily
+                WHERE stock_code IN ({placeholders})
+                  AND trade_date <= %s
+                  AND trade_date >= DATE_SUB(%s, INTERVAL 10 DAY)
+                GROUP BY stock_code
+                HAVING COUNT(*) >= 3
+            """
+            df_turnover = pd.read_sql(
+                sql_turnover, conn,
+                params=stock_codes + [trade_date, trade_date]
+            )
+            if not df_turnover.empty:
+                liquid_codes = set(
+                    df_turnover[df_turnover['avg_amount'] >= min_avg_turnover]['stock_code']
+                )
+                before = len(df)
+                df = df[df['stock_code'].isin(liquid_codes)]
+                logger.debug(f"{trade_date}: 流动性过滤: {before} -> {len(df)} "
+                             f"(剔除 {before - len(df)} 只，阈值={min_avg_turnover:.0f}元)")
     finally:
         conn.close()
 

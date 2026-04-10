@@ -54,7 +54,9 @@ def _build_db_config(prefix: str) -> dict:
         'password': os.getenv(f'{prefix}_DB_PASSWORD', ''),
         'database': os.getenv(f'{prefix}_DB_NAME', 'mytrader'),
         'charset': 'utf8mb4',
-        'connect_timeout': int(os.getenv('DB_CONNECT_TIMEOUT', '5')),
+        'connect_timeout': int(os.getenv('DB_CONNECT_TIMEOUT', '10')),
+        'read_timeout':    int(os.getenv('DB_READ_TIMEOUT', '120')),
+        'write_timeout':   int(os.getenv('DB_WRITE_TIMEOUT', '120')),
     }
 
 
