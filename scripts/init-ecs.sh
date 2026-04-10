@@ -50,8 +50,8 @@ if [ ! -f .env ]; then
 DB_ENV=online
 ONLINE_DB_HOST=your-mysql-host
 ONLINE_DB_PORT=3306
-ONLINE_DB_USER=root
-ONLINE_DB_PASSWORD=your-password
+ONLINE_DB_USER=mytrader_user
+ONLINE_DB_PASSWORD=your-secure-password-here
 ONLINE_DB_NAME=trade
 
 REDIS_HOST=127.0.0.1
