@@ -302,7 +302,7 @@ def calc_roe(trade_date: str, stock_codes: List[str]) -> pd.DataFrame:
     计算 ROE 因子（越大越好，选最近年报 ROE 最高的股票）。
 
     ROE = 净资产收益率（来自 trade_stock_financial 年报数据）。
-    只取最近一个年报的 ROE（roe_avg 或 roe 字段）。
+    只取最近一个年报的 ROE（roe 字段）。
 
     选取逻辑：ROE 越高越好，因此外层排名时需反向（取最大的 top_n）。
     为统一接口（越小排名越靠前），返回 -roe（负值），这样 sort 后最小的就是 ROE 最大的。
@@ -322,7 +322,7 @@ def calc_roe(trade_date: str, stock_codes: List[str]) -> pd.DataFrame:
         placeholders = ','.join(['%s'] * len(stock_codes))
         # 取每个股票最近一个年报的 ROE（MONTH=12 的报告期）
         sql = f"""
-            SELECT t1.stock_code, t1.roe_avg AS roe_val
+            SELECT t1.stock_code, t1.roe AS roe_val
             FROM trade_stock_financial t1
             INNER JOIN (
                 SELECT stock_code, MAX(report_date) AS latest_date
@@ -332,7 +332,7 @@ def calc_roe(trade_date: str, stock_codes: List[str]) -> pd.DataFrame:
                 AND MONTH(report_date) = 12
                 GROUP BY stock_code
             ) t2 ON t1.stock_code = t2.stock_code AND t1.report_date = t2.latest_date
-            WHERE t1.roe_avg IS NOT NULL AND t1.roe_avg > 0
+            WHERE t1.roe IS NOT NULL AND t1.roe > 0
         """
         params = stock_codes + [trade_date]
         df = pd.read_sql(sql, conn, params=params)

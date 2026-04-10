@@ -182,7 +182,7 @@ def fetch_one_margin(stock_code: str, start_date: str) -> int:
 # Batch by date (alternative approach: fetch all stocks for a given date)
 # ---------------------------------------------------------------------------
 
-def fetch_by_date_range(start_date: str, end_date: str | None = None) -> int:
+def fetch_by_date_range(start_date: str, end_date: str = None) -> int:
     """
     Bulk fetch: iterate over each trading date and pull all margin data for that day.
     More efficient than per-stock for initial full load.
@@ -287,6 +287,9 @@ def main():
     parser.add_argument("--by-date", action="store_true",
                         help="Fetch by date (bulk) instead of per-stock")
     args = parser.parse_args()
+
+    global DB_ENV
+    DB_ENV = args.envs.split(",")[0]
 
     logger.info(f"DB_ENV={DB_ENV}, start={args.start}")
 

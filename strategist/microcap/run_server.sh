@@ -23,6 +23,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 LOG_DIR="/tmp/microcap_$(date +%Y%m%d_%H%M%S)"
+export LOG_DIR
 mkdir -p "$LOG_DIR"
 
 echo "================================================"
@@ -50,11 +51,16 @@ checks = [
     ("trade_stock_daily_basic", "SELECT COUNT(*) as cnt, MIN(trade_date) as min_d, MAX(trade_date) as max_d FROM trade_stock_daily_basic"),
     ("trade_stock_financial",   "SELECT COUNT(*) as cnt, MIN(report_date) as min_d, MAX(report_date) as max_d FROM trade_stock_financial"),
     ("trade_stock_basic",       "SELECT COUNT(*) as cnt FROM trade_stock_basic"),
-    ("trade_stock_ebit",        "SELECT COUNT(*) as cnt, MIN(report_date) as min_d, MAX(report_date) as max_d FROM trade_stock_ebit"),
+    ("trade_stock_ebit",        "SELECT COUNT(*) as cnt, MIN(report_date) as min_d, MAX(report_date) as max_d FROM trade_stock_ebit", True),
 ]
 
 ok = True
-for name, sql in checks:
+for item in checks:
+    if len(item) == 3:
+        name, sql, optional = item
+    else:
+        name, sql = item
+        optional = False
     try:
         df = pd.read_sql(sql, conn)
         row = df.iloc[0]
@@ -63,17 +69,31 @@ for name, sql in checks:
         max_d = str(row.get('max_d', 'N/A'))
         status = "[OK]" if cnt > 0 else "[WARN] EMPTY"
         print("  {:<8} {:<35} rows={:>10}  {} ~ {}".format(status, name, cnt, min_d, max_d))
-        if cnt == 0:
+        if cnt == 0 and not optional:
             ok = False
     except Exception as e:
-        print("  [ERROR]  {:<35} {}".format(name, e))
-        ok = False
+        if optional:
+            print("  [WARN]   {:<35} {} (optional, skipping)".format(name, e))
+        else:
+            print("  [ERROR]  {:<35} {}".format(name, e))
+            ok = False
 
 conn.close()
 
+ebit_ok = True
 conn2 = get_connection()
 try:
-    df = pd.read_sql("SELECT MIN(trade_date) as min_d FROM trade_stock_daily_basic", conn2)
+    cnt_df = pd.read_sql("SELECT COUNT(*) as cnt FROM trade_stock_ebit", conn2)
+    if int(cnt_df.iloc[0]['cnt']) == 0:
+        ebit_ok = False
+except Exception:
+    ebit_ok = False
+finally:
+    conn2.close()
+
+conn3 = get_connection()
+try:
+    df = pd.read_sql("SELECT MIN(trade_date) as min_d FROM trade_stock_daily_basic", conn3)
     min_date = str(df.iloc[0]['min_d'])
     if min_date > '2022-06-01':
         print("\n  [WARN] trade_stock_daily_basic 最早数据 {}，2022-01-01 前数据缺失".format(min_date))
@@ -81,7 +101,13 @@ try:
     else:
         print("\n  [OK]   trade_stock_daily_basic 覆盖 2022 年以前，数据充足")
 finally:
-    conn2.close()
+    conn3.close()
+
+if not ebit_ok:
+    print("\n  [WARN] trade_stock_ebit 表缺失或为空，peg_ebit_mv 任务将跳过")
+    print("         如需运行，先执行: DB_ENV=online python3 data_analyst/financial_fetcher/tushare_ebit_fetcher.py")
+    with open(os.path.join(os.environ.get('LOG_DIR', '/tmp'), 'ebit_skip'), 'w') as f:
+        f.write('1')
 
 sys.exit(0 if ok else 1)
 PYEOF
@@ -101,6 +127,12 @@ fi
 # ─────────────────────────────────────────────────────────
 echo ""
 echo "[Step 2] 启动并行回测..."
+
+# 判断 EBIT 表是否可用
+EBIT_OK="true"
+if [ -f "$LOG_DIR/ebit_skip" ]; then
+    EBIT_OK="false"
+fi
 
 START=${START:-2022-01-01}
 END=${END:-2026-03-24}
@@ -128,14 +160,19 @@ DB_ENV=$DB_ENV python3 -m strategist.microcap.run_backtest \
 PURE_PID=$!
 echo "  [START] pure_mv_h1 PID=$PURE_PID  log=$PURE_LOG"
 
-# 任务3：peg_ebit_mv h1
-EBIT_LOG="$LOG_DIR/peg_ebit_mv_h1.log"
-DB_ENV=$DB_ENV python3 -m strategist.microcap.run_backtest \
-    --start "$START" --end "$END" \
-    --factor peg_ebit_mv --top-n 10 --hold-days 1 \
-    > "$EBIT_LOG" 2>&1 &
-EBIT_PID=$!
-echo "  [START] peg_ebit_mv_h1 PID=$EBIT_PID  log=$EBIT_LOG"
+# 任务3：peg_ebit_mv h1（需要 trade_stock_ebit 表）
+EBIT_PID=""
+if [ "$EBIT_OK" = "true" ]; then
+    EBIT_LOG="$LOG_DIR/peg_ebit_mv_h1.log"
+    DB_ENV=$DB_ENV python3 -m strategist.microcap.run_backtest \
+        --start "$START" --end "$END" \
+        --factor peg_ebit_mv --top-n 10 --hold-days 1 \
+        > "$EBIT_LOG" 2>&1 &
+    EBIT_PID=$!
+    echo "  [START] peg_ebit_mv_h1 PID=$EBIT_PID  log=$EBIT_LOG"
+else
+    echo "  [SKIP]  peg_ebit_mv_h1 (trade_stock_ebit not available)"
+fi
 
 echo ""
 echo "================================================"
@@ -144,7 +181,9 @@ echo ""
 echo " 查看进度："
 echo "   tail -f $GRID_LOG"
 echo "   tail -f $PURE_LOG"
-echo "   tail -f $EBIT_LOG"
+if [ -n "$EBIT_PID" ]; then
+    echo "   tail -f $EBIT_LOG"
+fi
 echo ""
 echo " 查看所有进程："
 echo "   ps aux | grep run_backtest"

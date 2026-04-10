@@ -97,12 +97,26 @@ def create_table():
 
 
 def get_all_stock_codes() -> List[str]:
-    """获取全部 A 股代码列表（通过 AKShare）"""
+    """获取全部 A 股代码列表（优先从数据库获取，降级到 AKShare）"""
+    # 优先从数据库 trade_stock_basic 获取
     try:
-        # 获取沪深A股列表（不含B股）
+        conn = get_connection(env='online')
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT stock_code FROM trade_stock_basic")
+        codes = [row[0].split('.')[0] for row in cursor.fetchall()]
+        cursor.close()
+        conn.close()
+        if codes:
+            logger.info(f"[OK] 从数据库获取 A 股代码 {len(codes)} 只")
+            return codes
+    except Exception as e:
+        logger.warning(f"[WARN] 从数据库获取股票列表失败: {e}")
+
+    # 降级到 AKShare
+    try:
         df = ak.stock_info_a_code_name()
         codes = df['code'].tolist()
-        logger.info(f"[OK] 获取 A 股代码 {len(codes)} 只")
+        logger.info(f"[OK] 从 AKShare 获取 A 股代码 {len(codes)} 只")
         return codes
     except Exception as e:
         logger.error(f"[ERROR] 获取股票列表失败: {e}")

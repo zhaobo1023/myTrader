@@ -269,6 +269,9 @@ def main():
                         help="Auto-detect start from last loaded date")
     args = parser.parse_args()
 
+    global DB_ENV
+    DB_ENV = args.envs.split(",")[0]
+
     logger.info(f"DB_ENV={DB_ENV}, start={args.start}")
     end_date = args.end or datetime.now().strftime("%Y-%m-%d")
 
