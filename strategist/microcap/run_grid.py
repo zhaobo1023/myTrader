@@ -56,7 +56,8 @@ def calc_monthly_returns(daily_values_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def run_one(factor: str, hold_days: int, start_date: str, end_date: str,
-            top_n: int = 15, slippage_rate: float = 0.001) -> dict:
+            top_n: int = 15, slippage_rate: float = 0.001,
+            min_turnover: float = 3_000_000) -> dict:
     """运行单个策略组合，返回汇总结果。"""
     label = f"{factor}_h{hold_days}"
     logger.info(f"[RUN] {label}  {start_date} ~ {end_date}")
@@ -72,6 +73,7 @@ def run_one(factor: str, hold_days: int, start_date: str, end_date: str,
         sell_cost_rate=0.0013,
         slippage_rate=slippage_rate,
         exclude_st=True,
+        min_avg_turnover=min_turnover,
     )
 
     backtest = MicrocapBacktest(config)
@@ -158,12 +160,12 @@ def print_summary_table(results: list):
 
     df = pd.DataFrame(ok_rows)
     sort_cols = ['factor', 'hold_days']
+    select_cols = ['label', 'factor', 'hold_days', 'total_return', 'annual_return',
+                   'sharpe', 'max_drawdown', 'win_rate', 'total_trades']
     if 'slippage_rate' in df.columns:
         sort_cols.append('slippage_rate')
-    df = df[
-        ['label', 'factor', 'hold_days', 'total_return', 'annual_return',
-         'sharpe', 'max_drawdown', 'win_rate', 'total_trades']
-    ].sort_values(sort_cols)
+        select_cols.insert(3, 'slippage_rate')
+    df = df[select_cols].sort_values(sort_cols)
 
     print("\n" + "=" * 90)
     print("微盘股策略网格测试 - 汇总对比")
@@ -242,8 +244,8 @@ def print_monthly_comparison(results: list):
 
 def _run_one_task(args_tuple):
     """进程池 worker，解包参数后调用 run_one。"""
-    factor, hold_days, start, end, top_n, slippage_rate = args_tuple
-    return run_one(factor, hold_days, start, end, top_n, slippage_rate)
+    factor, hold_days, start, end, top_n, slippage_rate, min_turnover = args_tuple
+    return run_one(factor, hold_days, start, end, top_n, slippage_rate, min_turnover)
 
 
 def main():
@@ -257,14 +259,18 @@ def main():
     parser.add_argument('--slippage', nargs='+', type=float, default=[0.001],
                         help='单边滑点列表，如 --slippage 0.001 0.002 0.003 0.005')
     parser.add_argument('--top-n', type=int, default=15, dest='top_n')
+    parser.add_argument('--min-turnover', type=float, default=3_000_000, dest='min_turnover',
+                        help='日均成交额下限（元），默认 3000000（300万）')
     parser.add_argument('--workers', type=int, default=1,
                         help='并行进程数（默认1，顺序执行）')
+    parser.add_argument('--task-timeout', type=int, default=1800, dest='task_timeout',
+                        help='单个任务超时秒数（默认1800秒）')
     args = parser.parse_args()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     combos = [
-        (f, h, args.start, args.end, args.top_n, s)
+        (f, h, args.start, args.end, args.top_n, s, args.min_turnover)
         for f in args.factors
         for h in args.hold_days
         for s in args.slippage
@@ -273,8 +279,8 @@ def main():
 
     logger.info("=" * 60)
     logger.info(f"网格测试: factors={args.factors}, hold_days={args.hold_days}, slippage={args.slippage}")
-    logger.info(f"日期范围: {args.start} ~ {args.end}, top_n={args.top_n}")
-    logger.info(f"并行进程: {args.workers}, 总组合数: {total}")
+    logger.info(f"日期范围: {args.start} ~ {args.end}, top_n={args.top_n}, min_turnover={args.min_turnover:,.0f}")
+    logger.info(f"并行进程: {args.workers}, 总组合数: {total}, 单任务超时: {args.task_timeout}s")
     logger.info("=" * 60)
 
     results = []
@@ -291,9 +297,13 @@ def main():
                 combo = futures[future]
                 done_count += 1
                 try:
-                    row = future.result()
+                    row = future.result(timeout=args.task_timeout)
                     results.append(row)
                     logger.info(f"[{done_count}/{total}] 完成: {combo[0]}_h{combo[1]}_slip{combo[5]:.3f}")
+                except TimeoutError:
+                    logger.error(f"[{done_count}/{total}] 超时({args.task_timeout}s): {combo[0]}_h{combo[1]}")
+                    results.append({'label': f"{combo[0]}_h{combo[1]}", 'factor': combo[0],
+                                    'hold_days': combo[1], 'status': 'timeout'})
                 except Exception as e:
                     logger.error(f"[{done_count}/{total}] 失败: {combo[0]}_h{combo[1]}: {e}")
                     results.append({'label': f"{combo[0]}_h{combo[1]}", 'status': 'error'})

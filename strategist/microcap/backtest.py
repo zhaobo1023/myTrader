@@ -84,6 +84,15 @@ class MicrocapBacktest:
             self._trade_dates = trade_dates
             self._date_to_idx = {d: i for i, d in enumerate(trade_dates)}
 
+            # 预热 _prev_close：加载第一个交易日前一日的收盘价，确保第一天涨跌停判断有效
+            pre_date = self._get_prev_trade_date(trade_dates[0])
+            if pre_date:
+                self._load_prices_for_date(pre_date)
+                logger.info(f"[OK] Pre-warmed _prev_close with {len(self._prev_close)} stocks from {pre_date}")
+            else:
+                logger.warning("[WARN] Could not find pre-date for _prev_close warm-up; "
+                               "limit-up/down checks on day 1 may be inaccurate")
+
             # 回测主循环
             cash = 1.0                     # 现金余额
             holdings = {}                  # 持仓 {stock_code: dict}
@@ -113,12 +122,12 @@ class MicrocapBacktest:
                     sell_price_raw = self._get_open_price(code, trade_date)
                     if sell_price_raw is not None and sell_price_raw > 0:
                         sell_price = sell_price_raw * (1 - self.config.slippage_rate)
-                        proceeds = units_held = h['units']
+                        units_held = h['units']
                         proceeds = units_held * sell_price * (1 - self.config.sell_cost_rate)
                         cash += proceeds
-                        pnl = proceeds - (units_held * h['buy_price'])
-                        pnl_pct = ((sell_price / h['buy_price']) - 1
-                                   - self.config.buy_cost_rate - self.config.sell_cost_rate)
+                        capital_invested = h.get('capital_invested', units_held * h['buy_price'])
+                        pnl = proceeds - capital_invested
+                        pnl_pct = proceeds / capital_invested - 1
 
                         self.trades.append({
                             'buy_date':  h['buy_date'],
@@ -158,27 +167,34 @@ class MicrocapBacktest:
                                 buy_prices[code] = price_raw * (1 + self.config.slippage_rate)
 
                         if buy_prices:
-                            # 等权分配资金
-                            per_stock_capital = cash / len(buy_prices)
+                            # 等权目标：每只股占总净值的 1/top_n
+                            # 总净值用前一日 NAV（买入发生在 T+1 开盘，基准是昨日 NAV）
+                            prev_nav = daily_values[-1]['nav'] if daily_values else 1.0
+                            target_per_stock = prev_nav / max(len(selected_codes), 1)
+                            # 将可用现金按新股数量均分，取两者中的较小值
+                            available_per_new = cash / len(buy_prices)
                             for code, buy_price in buy_prices.items():
+                                per_stock_capital = min(target_per_stock, available_per_new)
                                 units = (per_stock_capital * (1 - self.config.buy_cost_rate)) / buy_price
-                                buy_cost = units * buy_price
-                                cash -= buy_cost
+                                actual_spent = per_stock_capital  # 每只新股实际花费（含手续费）
+                                cash -= actual_spent
 
                                 # 计算卖出日期（T+hold_days）
                                 sell_idx = i + self.config.hold_days
                                 sell_date = trade_dates[sell_idx] if sell_idx < len(trade_dates) else None
 
                                 holdings[code] = {
-                                    'buy_date':      trade_date,
-                                    'buy_price':     buy_price,
-                                    'units':         units,
-                                    'sell_date':     sell_date,
-                                    'delay_count':   0,
-                                    'no_price_days': 0,   # 连续无收盘价天数（退市检测）
+                                    'buy_date':         trade_date,
+                                    'buy_price':        buy_price,
+                                    'units':            units,
+                                    'capital_invested': actual_spent,  # 买入实际花费（含手续费）
+                                    'sell_date':        sell_date,
+                                    'delay_count':      0,
+                                    'no_price_days':    0,   # 连续无收盘价天数（退市检测）
                                 }
                                 logger.debug(f"Buy {code} on {trade_date}: "
-                                             f"price={buy_price:.2f}, units={units:.2f}")
+                                             f"price={buy_price:.2f}, units={units:.2f}, "
+                                             f"capital={actual_spent:.4f}")
 
                 # 第3步：选股（当前交易日，明天 T+1 执行）
                 if i < len(trade_dates) - 1:
@@ -232,7 +248,41 @@ class MicrocapBacktest:
                     'n_holdings': len(holdings),
                 })
 
-                if (i + 1) % 50 == 0 or i == len(trade_dates) - 1:
+                # 最后一个交易日：强制按收盘价平仓 sell_date=None 的持仓（持有期超出回测范围）
+                if i == len(trade_dates) - 1:
+                    for code in list(holdings.keys()):
+                        h = holdings[code]
+                        if h['sell_date'] is not None:
+                            continue
+                        close_price = self._get_close_price(code, trade_date)
+                        if close_price is not None and close_price > 0:
+                            sell_price = close_price * (1 - self.config.slippage_rate)
+                            units_held = h['units']
+                            proceeds = units_held * sell_price * (1 - self.config.sell_cost_rate)
+                            cash += proceeds
+                            capital_invested = h.get('capital_invested', units_held * h['buy_price'])
+                            pnl = proceeds - capital_invested
+                            pnl_pct = proceeds / capital_invested - 1
+                            self.trades.append({
+                                'buy_date':    h['buy_date'],
+                                'sell_date':   trade_date,
+                                'stock_code':  code,
+                                'buy_price':   h['buy_price'],
+                                'sell_price':  sell_price,
+                                'hold_days':   self.config.hold_days + h['delay_count'],
+                                'delay_count': h['delay_count'],
+                                'return':      pnl_pct,
+                                'pnl':         pnl,
+                                'forced_close': True,
+                            })
+                            logger.debug(f"[FORCE CLOSE] {code} on {trade_date}: "
+                                         f"sell={sell_price:.2f}, return={pnl_pct:.4f}")
+                            del holdings[code]
+
+                # 全市场因子每天 SQL 开销大，每 10 天打一次日志；其余因子每 50 天
+                FULL_MARKET_FACTORS = {'peg_ebit_mv', 'pure_mv'}
+                log_interval = 10 if self.config.factor in FULL_MARKET_FACTORS else 50
+                if (i + 1) % log_interval == 0 or i == len(trade_dates) - 1:
                     logger.info(f"  Progress: {i+1}/{len(trade_dates)} "
                                f"({trade_date}), NAV={nav:.4f}, Holdings={len(holdings)}")
 
@@ -271,6 +321,33 @@ class MicrocapBacktest:
                 'trades_df': pd.DataFrame(),
                 'daily_values_df': pd.DataFrame(),
             }
+
+    def _get_prev_trade_date(self, trade_date: str) -> Optional[str]:
+        """
+        查询给定日期前一个交易日。
+
+        Args:
+            trade_date: 基准日期，格式 'YYYY-MM-DD'
+
+        Returns:
+            前一个交易日字符串，若不存在则返回 None
+        """
+        conn = get_connection()
+        try:
+            sql = """
+                SELECT DISTINCT trade_date
+                FROM trade_stock_daily
+                WHERE trade_date < %s
+                ORDER BY trade_date DESC
+                LIMIT 1
+            """
+            df = pd.read_sql(sql, conn, params=[trade_date])
+        finally:
+            conn.close()
+
+        if df.empty:
+            return None
+        return str(df.iloc[0]['trade_date'])
 
     def _get_trade_dates(self, start_date: str, end_date: str) -> List[str]:
         """

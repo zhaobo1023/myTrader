@@ -152,48 +152,74 @@ def calc_peg_ebit_mv(trade_date: str, stock_codes: List[str],
     if not stock_codes:
         return pd.DataFrame(columns=['stock_code', 'peg_ebit_mv'])
 
+    # PIT 规则：年报最晚 4 月 30 日才披露完毕
+    trade_year = int(trade_date[:4])
+    trade_month = int(trade_date[5:7])
+    max_report_year = trade_year - 1 if trade_month <= 4 else trade_year
+
     conn = get_connection()
     try:
-        placeholders = ','.join(['%s'] * len(stock_codes))
-
-        # Step 1: 获取 PE_TTM + 总市值
-        sql_pe = f"""
-            SELECT stock_code, pe_ttm, total_mv
-            FROM trade_stock_daily_basic
-            WHERE trade_date = %s AND stock_code IN ({placeholders})
-            AND pe_ttm > 0 AND pe_ttm < 1000 AND total_mv > 0
-        """
-        df_pe = pd.read_sql(sql_pe, conn, params=[trade_date] + stock_codes)
+        # Step 1: 分批获取 PE_TTM + 总市值（200 只/批）
+        PE_BATCH = 200
+        pe_chunks = []
+        for batch_start in range(0, len(stock_codes), PE_BATCH):
+            batch = stock_codes[batch_start: batch_start + PE_BATCH]
+            ph = ','.join(['%s'] * len(batch))
+            sql_pe = f"""
+                SELECT stock_code, pe_ttm, total_mv
+                FROM trade_stock_daily_basic
+                WHERE trade_date = %s AND stock_code IN ({ph})
+                AND pe_ttm > 0 AND pe_ttm < 1000 AND total_mv > 0
+            """
+            chunk = pd.read_sql(sql_pe, conn, params=[trade_date] + batch)
+            if not chunk.empty:
+                pe_chunks.append(chunk)
+        df_pe = pd.concat(pe_chunks, ignore_index=True) if pe_chunks else pd.DataFrame()
 
         if df_pe.empty:
             return pd.DataFrame(columns=['stock_code', 'peg_ebit_mv'])
 
-        # Step 2: 获取截至 trade_date 的最近两个年报 EPS（避免前视偏差）
-        sql_eps = f"""
-            SELECT stock_code, YEAR(report_date) AS report_year, eps
-            FROM trade_stock_financial
-            WHERE stock_code IN ({placeholders})
-            AND report_date <= %s
-            AND MONTH(report_date) = 12
-            ORDER BY stock_code, report_date DESC
-        """
-        df_eps = pd.read_sql(sql_eps, conn, params=stock_codes + [trade_date])
-
-        # Step 3: 获取截至 trade_date 的最近年报 EBIT（避免前视偏差）
-        sql_ebit = f"""
-            SELECT t1.stock_code, t1.ebit
-            FROM trade_stock_ebit t1
-            INNER JOIN (
-                SELECT stock_code, MAX(report_date) AS latest_date
-                FROM trade_stock_ebit
-                WHERE stock_code IN ({placeholders})
-                AND report_date <= %s
+        # Step 2: 分批获取年报 EPS（50 只/批），去掉 ORDER BY，使用 PIT 规则
+        EPS_BATCH = 50
+        eps_chunks = []
+        for batch_start in range(0, len(stock_codes), EPS_BATCH):
+            batch = stock_codes[batch_start: batch_start + EPS_BATCH]
+            ph = ','.join(['%s'] * len(batch))
+            sql_eps = f"""
+                SELECT stock_code, YEAR(report_date) AS report_year, eps
+                FROM trade_stock_financial
+                WHERE stock_code IN ({ph})
                 AND MONTH(report_date) = 12
-                GROUP BY stock_code
-            ) t2 ON t1.stock_code = t2.stock_code AND t1.report_date = t2.latest_date
-            WHERE t1.ebit IS NOT NULL AND t1.ebit > 0
-        """
-        df_ebit = pd.read_sql(sql_ebit, conn, params=stock_codes + [trade_date])
+                AND YEAR(report_date) <= %s
+            """
+            chunk = pd.read_sql(sql_eps, conn, params=batch + [max_report_year])
+            if not chunk.empty:
+                eps_chunks.append(chunk)
+        df_eps = pd.concat(eps_chunks, ignore_index=True) if eps_chunks else pd.DataFrame()
+
+        # Step 3: 分批获取最近年报 EBIT（100 只/批）
+        EBIT_BATCH = 100
+        ebit_chunks = []
+        for batch_start in range(0, len(stock_codes), EBIT_BATCH):
+            batch = stock_codes[batch_start: batch_start + EBIT_BATCH]
+            ph = ','.join(['%s'] * len(batch))
+            sql_ebit = f"""
+                SELECT t1.stock_code, t1.ebit
+                FROM trade_stock_ebit t1
+                INNER JOIN (
+                    SELECT stock_code, MAX(report_date) AS latest_date
+                    FROM trade_stock_ebit
+                    WHERE stock_code IN ({ph})
+                    AND MONTH(report_date) = 12
+                    AND YEAR(report_date) <= %s
+                    GROUP BY stock_code
+                ) t2 ON t1.stock_code = t2.stock_code AND t1.report_date = t2.latest_date
+                WHERE t1.ebit IS NOT NULL AND t1.ebit > 0
+            """
+            chunk = pd.read_sql(sql_ebit, conn, params=batch + [max_report_year])
+            if not chunk.empty:
+                ebit_chunks.append(chunk)
+        df_ebit = pd.concat(ebit_chunks, ignore_index=True) if ebit_chunks else pd.DataFrame()
 
     finally:
         conn.close()
@@ -231,17 +257,16 @@ def calc_peg_ebit_mv(trade_date: str, stock_codes: List[str],
     if result.empty:
         return pd.DataFrame(columns=['stock_code', 'peg_ebit_mv'])
 
-    # 漏斗第二层：保留 EBIT 最大的 ebit_pct
+    # 漏斗第二层：保留 EBIT 最大的 ebit_pct；无 EBIT 数据的股票直接丢弃
     if not df_ebit.empty:
         result = result.merge(df_ebit[['stock_code', 'ebit']], on='stock_code', how='left')
         result['ebit'] = pd.to_numeric(result['ebit'], errors='coerce')
-        # 只对有 EBIT 数据的股票做第二层筛选；无数据的直接保留
         has_ebit = result.dropna(subset=['ebit'])
-        no_ebit = result[result['ebit'].isna()]
         if not has_ebit.empty:
             n_ebit = max(1, int(len(has_ebit) * ebit_pct))
-            has_ebit = has_ebit.nlargest(n_ebit, 'ebit')
-        result = pd.concat([has_ebit, no_ebit], ignore_index=True)
+            result = has_ebit.nlargest(n_ebit, 'ebit')
+        else:
+            result = has_ebit  # 空 DataFrame
 
     if result.empty:
         return pd.DataFrame(columns=['stock_code', 'peg_ebit_mv'])
@@ -265,16 +290,23 @@ def calc_pure_mv(trade_date: str, stock_codes: List[str]) -> pd.DataFrame:
     if not stock_codes:
         return pd.DataFrame(columns=['stock_code', 'pure_mv'])
 
+    MV_BATCH = 200
     conn = get_connection()
     try:
-        placeholders = ','.join(['%s'] * len(stock_codes))
-        sql = f"""
-            SELECT stock_code, total_mv AS pure_mv
-            FROM trade_stock_daily_basic
-            WHERE trade_date = %s AND stock_code IN ({placeholders})
-            AND total_mv > 0
-        """
-        df = pd.read_sql(sql, conn, params=[trade_date] + stock_codes)
+        mv_chunks = []
+        for batch_start in range(0, len(stock_codes), MV_BATCH):
+            batch = stock_codes[batch_start: batch_start + MV_BATCH]
+            ph = ','.join(['%s'] * len(batch))
+            sql = f"""
+                SELECT stock_code, total_mv AS pure_mv
+                FROM trade_stock_daily_basic
+                WHERE trade_date = %s AND stock_code IN ({ph})
+                AND total_mv > 0
+            """
+            chunk = pd.read_sql(sql, conn, params=[trade_date] + batch)
+            if not chunk.empty:
+                mv_chunks.append(chunk)
+        df = pd.concat(mv_chunks, ignore_index=True) if mv_chunks else pd.DataFrame()
     finally:
         conn.close()
 
@@ -407,13 +439,14 @@ def calc_ebit_ratio(trade_date: str, stock_codes: List[str]) -> pd.DataFrame:
             return pd.DataFrame(columns=['stock_code', 'ebit_ratio'])
 
         # 获取总市值
+        valid_codes = df_ebit['stock_code'].tolist()
+        mv_placeholders = ','.join(['%s'] * len(valid_codes))
         sql_mv = f"""
             SELECT stock_code, total_mv
             FROM trade_stock_daily_basic
-            WHERE trade_date = %s AND stock_code IN ({placeholders})
+            WHERE trade_date = %s AND stock_code IN ({mv_placeholders})
             AND total_mv > 0
         """
-        valid_codes = df_ebit['stock_code'].tolist()
         df_mv = pd.read_sql(sql_mv, conn, params=[trade_date] + valid_codes)
 
     finally:
