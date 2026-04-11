@@ -11,7 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies to a temporary location
-COPY requirements.txt .
+# Use production dependencies (smaller than full requirements.txt)
+COPY requirements-prod.txt requirements.txt
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 # Final stage - smaller runtime image

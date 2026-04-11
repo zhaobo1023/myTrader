@@ -82,7 +82,21 @@
       "Bash(bash:*)",
       "Bash(/usr/local/bin/python3:*)",
       "Bash(chmod +x /Users/zhaobo/data0/person/myTrader/strategist/microcap/run_server.sh)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(mysql -h 123.56.3.1 -u root -pHao1023@zb -e ':*)",
+      "Bash(mysql -h 123.56.3.1 -u mytrader_user -p'lGgS^uruPhv%AK0ZifeC' -e \"SELECT 'Remote database connection test successful'; SELECT COUNT\\(*\\) as table_count FROM information_schema.tables WHERE table_schema = 'trade';\")",
+      "Bash(mkdir -p /root/app/output/microcap)",
+      "Read(//data/output/**)",
+      "Bash(pkill:*)",
+      "Bash(chmod +x /tmp/check_progress.sh)",
+      "Bash(/tmp/check_progress.sh)",
+      "Bash(chmod +x:*)",
+      "Bash(./start-backend.sh:*)",
+      "Bash(mysql:*)",
+      "Bash(rm -f output/microcap/run_grid.log)",
+      "Bash(echo \"进程已启动，PID: $!\" sleep 3 ps aux)",
+      "Bash(nvm list:*)",
+      "Bash(git reset:*)"
     ],
     "deny": [],
     "ask": []

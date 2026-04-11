@@ -84,3 +84,20 @@ docker-compose*.yml
 .DS_Store
 *.bak
 *.tmp
+
+# Project-specific
+chroma_db/
+nginx_logs/
+*.pid
+*.db
+*.sqlite
+.cache/
+
+# Temporary runtime files
+celerybeat-schedule
+*.sock
+
+# Large generated files
+output/**/*.csv
+output/**/*.png
+output/**/*.json
