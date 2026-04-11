@@ -1,4 +1,4 @@
-.PHONY: dev prod build down logs api-test redis-cli mysql-cli clean help api-local api-https gen-cert trust-cert api-logs api-errors api-access
+.PHONY: dev prod build down logs api-test redis-cli mysql-cli clean help api-local api-https gen-cert trust-cert api-logs api-errors api-access start-ip start-frontend-ip start-backend-ip
 
 # ============================================================
 # myTrader Makefile
@@ -120,3 +120,20 @@ check: ## Check all service health
 	@echo ""
 	@echo "=== Nginx Health ==="
 	@curl -s -o /dev/null -w "HTTP %{http_code}" http://localhost/health || echo "Nginx not reachable"
+
+# ============================================================
+# IP + Port Access (for domains without SSL certificate)
+# ============================================================
+
+start-backend-ip: ## Start backend service accessible via IP:8000
+	./start-backend.sh
+
+start-frontend-ip: ## Start frontend service accessible via IP:3000
+	./start-frontend.sh
+
+start-ip: start-backend-ip ## Start both frontend and backend (IP access mode)
+	@echo ""
+	@echo "服务启动完成!"
+	@echo "前端: http://$$(hostname -I | awk '{print $$1}'):3000"
+	@echo "后端: http://$$(hostname -I | awk '{print $$1}'):8000"
+	@echo "健康检查: http://$$(hostname -I | awk '{print $$1}'):8000/health"

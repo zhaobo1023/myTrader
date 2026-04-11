@@ -11,7 +11,7 @@ services:
       dockerfile: Dockerfile
     container_name: mytrader-api
     ports:
-      - "127.0.0.1:8000:8000"  # 仅绑定到本地，通过 Nginx 代理
+      - "0.0.0.0:8000:8000"  # 绑定到所有网卡，外部可直接访问
     volumes:
       - .:/app
       - ./output:/app/output
