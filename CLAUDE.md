@@ -71,6 +71,13 @@ python -m scheduler summary                           # 查看今日执行摘要
 DB_ENV=online python -m investment_rag.run_report --code 000858 --name 五粮液 --type technical      # 技术面报告（快速）
 DB_ENV=online python -m investment_rag.run_report --code 000858 --name 五粮液 --type fundamental    # 纯基本面五步法报告
 DB_ENV=online python -m investment_rag.run_report --code 000858 --name 五粮液 --type comprehensive  # 综合研报（默认）
+
+# 舆情监控 (sentiment)
+python -m data_analyst.sentiment.run_monitor --task fear-index                                      # 获取恐慌指数
+python -m data_analyst.sentiment.run_monitor --task news-sentiment --stock 002594 --days 3          # 新闻情感分析
+python -m data_analyst.sentiment.run_monitor --task event-detection --keywords "资产重组,回购" --days 3  # 事件检测
+python -m data_analyst.sentiment.run_monitor --task polymarket --keywords "tariff,fed" --min-volume 1000000  # Polymarket监控
+python -m data_analyst.sentiment.run_monitor --help                                                 # 查看所有选项
 ```
 
 ## 项目结构
@@ -93,6 +100,14 @@ myTrader/
 │   │   ├── strategy.py        # POST /api/strategy/* 策略/回测
 │   │   ├── rag.py             # POST /api/rag/* RAG 问答 (SSE)
 │   │   ├── portfolio.py       # GET /api/portfolio/* 持仓聚合
+│   │   ├── sentiment.py       # GET /api/sentiment/* 舆情监控
+│   │   │                      #   - GET /fear-index 恐慌指数
+│   │   │                      #   - GET /fear-index/history 历史数据
+│   │   │                      #   - GET /news 新闻列表
+│   │   │                      #   - POST /news/analyze 情感分析
+│   │   │                      #   - GET /events 事件信号
+│   │   │                      #   - GET /polymarket 预测市场
+│   │   │                      #   - GET /overview 概览数据
 │   │   ├── admin.py           # GET/PUT /api/admin/* 用户管理
 │   │   ├── api_keys.py        # POST/GET/DELETE /api/api-keys/*
 │   │   └── subscription.py    # GET/POST /api/subscription/* 订阅管理
@@ -123,6 +138,16 @@ myTrader/
 │   ├── factors/               # 因子计算与存储
 │   ├── indicators/            # 技术指标计算 (MA/MACD/RSI/KDJ/BOLL/ATR)
 │   ├── market_monitor/        # SVD 市场状态监控
+│   ├── sentiment/             # 舆情监控与感知
+│   │   ├── config.py          # 配置（VIX阈值、事件关键词库）
+│   │   ├── schemas.py         # 数据模型
+│   │   ├── fear_index.py      # 恐慌指数服务 (VIX/OVX/GVZ/US10Y)
+│   │   ├── news_fetcher.py    # 新闻获取 (AKShare)
+│   │   ├── sentiment_analyzer.py  # LLM情感分析 (DashScope)
+│   │   ├── event_detector.py  # 事件检测与信号生成
+│   │   ├── polymarket.py      # Polymarket预测市场
+│   │   ├── storage.py         # 数据库存储
+│   │   └── run_monitor.py     # CLI入口
 │   ├── services/              # 数据监控、报警、定时任务
 │   └── sw_rotation/           # 申万行业轮动分析
 │

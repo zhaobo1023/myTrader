@@ -1,0 +1,62 @@
+# 舆情监控任务定义
+# 定时执行各类舆情监控任务
+
+tasks:
+  # 1. 更新恐慌指数 - 每小时执行
+  - name: update_fear_index
+    description: 更新 VIX/OVX/GVZ/US10Y 恐慌指数
+    schedule: "0 * * * *"  # 每小时整点
+    command: python -m data_analyst.sentiment.run_monitor --task fear-index --env prod
+    timeout: 300
+    retry: 2
+    tags:
+      - sentiment
+      - fear-index
+      - hourly
+    dependencies: []
+    enabled: true
+
+  # 2. 扫描新闻情感 - 每天早上8点
+  - name: scan_news_sentiment
+    description: 扫描重点股票新闻并进行情感分析
+    schedule: "0 8 * * *"  # 每天 08:00
+    command: |
+      python -m data_analyst.sentiment.run_monitor --task news-sentiment --stock 002594 --days 1 --env prod &&
+      python -m data_analyst.sentiment.run_monitor --task news-sentiment --stock 600519 --days 1 --env prod
+    timeout: 600
+    retry: 1
+    tags:
+      - sentiment
+      - news
+      - daily
+    dependencies: []
+    enabled: true
+
+  # 3. 检测事件信号 - 每天早上9点
+  - name: detect_event_signals
+    description: 检测市场事件并生成交易信号
+    schedule: "0 9 * * *"  # 每天 09:00
+    command: python -m data_analyst.sentiment.run_monitor --task event-detection --keywords "资产重组,回购增持,业绩预增" --days 1 --env prod
+    timeout: 600
+    retry: 1
+    tags:
+      - sentiment
+      - events
+      - daily
+    dependencies:
+      - scan_news_sentiment
+    enabled: true
+
+  # 4. 监控 Polymarket - 每天早上10点
+  - name: monitor_polymarket
+    description: 监控 Polymarket 预测市场聪明钱信号
+    schedule: "0 10 * * *"  # 每天 10:00
+    command: python -m data_analyst.sentiment.run_monitor --task polymarket --keywords "tariff,fed,election" --min-volume 1000000 --env prod
+    timeout: 300
+    retry: 1
+    tags:
+      - sentiment
+      - polymarket
+      - daily
+    dependencies: []
+    enabled: true
