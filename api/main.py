@@ -23,6 +23,7 @@ from api.routers.scan_results import router as scan_results_router
 from api.routers.skill_auth import router as skill_auth_router
 from api.routers.skill_gateway import router as skill_gw_router
 from api.routers.market_overview import router as market_overview_router
+from api.routers.sentiment import router as sentiment_router
 
 logger = logging.getLogger('myTrader.api')
 
@@ -120,6 +121,7 @@ app.include_router(scan_results_router)
 app.include_router(skill_auth_router)
 app.include_router(skill_gw_router)
 app.include_router(market_overview_router)
+app.include_router(sentiment_router)
 
 
 @app.get('/')
