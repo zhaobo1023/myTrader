@@ -253,14 +253,14 @@ def main():
     parser.add_argument('--start', default='2022-01-01')
     parser.add_argument('--end',   default='2026-03-24')
     parser.add_argument('--factors',   nargs='+', default=['peg', 'pe', 'roe', 'peg_ebit_mv', 'pure_mv'],
-                        choices=['peg', 'pe', 'roe', 'ebit_ratio', 'peg_ebit_mv', 'pure_mv'])
+                        choices=['peg', 'pe', 'roe', 'ebit_ratio', 'peg_ebit_mv', 'pure_mv', 'pure_mv_mom'])
     parser.add_argument('--hold-days', nargs='+', type=int, default=[1, 3, 5, 10],
                         dest='hold_days')
     parser.add_argument('--slippage', nargs='+', type=float, default=[0.001],
                         help='单边滑点列表，如 --slippage 0.001 0.002 0.003 0.005')
     parser.add_argument('--top-n', type=int, default=15, dest='top_n')
-    parser.add_argument('--min-turnover', type=float, default=3_000_000, dest='min_turnover',
-                        help='日均成交额下限（元），默认 3000000（300万）')
+    parser.add_argument('--min-turnover', type=float, default=5_000_000, dest='min_turnover',
+                        help='日均成交额下限（元），默认 5000000（500万）')
     parser.add_argument('--workers', type=int, default=1,
                         help='并行进程数（默认1，顺序执行）')
     parser.add_argument('--task-timeout', type=int, default=1800, dest='task_timeout',

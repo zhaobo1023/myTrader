@@ -74,7 +74,7 @@ def main():
     parser.add_argument('--end', type=str, default='2025-12-31',
                        help='回测结束日期 (YYYY-MM-DD)')
     parser.add_argument('--factor', type=str, default='peg',
-                       choices=['peg', 'pe', 'roe', 'ebit_ratio', 'peg_ebit_mv', 'pure_mv'],
+                       choices=['peg', 'pe', 'roe', 'ebit_ratio', 'peg_ebit_mv', 'pure_mv', 'pure_mv_mom'],
                        help='因子类型')
     parser.add_argument('--top-n', type=int, default=15,
                        help='每期选股数量')
@@ -90,9 +90,30 @@ def main():
                        help='排除 ST/*ST 股票')
     parser.add_argument('--slippage-rate', type=float, default=0.001,
                        help='单边滑点率 (默认0.1%%，微盘股买卖价差+冲击成本)')
-    parser.add_argument('--min-turnover', type=float, default=0.0,
+    parser.add_argument('--min-turnover', type=float, default=5_000_000.0,
                        dest='min_avg_turnover',
-                       help='近5日平均成交额最低要求（元），0表示不过滤，实盘建议5000000')
+                       help='近5日平均成交额最低要求（元），默认500万')
+    parser.add_argument('--exclude-risk', action='store_true', default=False,
+                       help='启用财务风险过滤（排除亏损股、高负债、负现金流）')
+    parser.add_argument('--max-debt-ratio', type=float, default=0.70,
+                       help='资产负债率上限（默认0.70即70%%），仅--exclude-risk时生效')
+    # 月度日历择时
+    parser.add_argument('--calendar-timing', action='store_true', default=False,
+                       help='启用月度日历择时（弱月减仓）')
+    parser.add_argument('--weak-months', nargs='+', type=int, default=[1, 4, 12],
+                       help='弱月份列表（默认 1 4 12）')
+    parser.add_argument('--weak-month-ratio', type=float, default=0.5,
+                       help='弱月持仓比例（默认0.5，即top_n减半）')
+    # 动量反转因子
+    parser.add_argument('--momentum-lookback', type=int, default=20,
+                       help='动量反转回看天数（默认20）')
+    parser.add_argument('--momentum-weight', type=float, default=0.3,
+                       help='反转权重（0~1，默认0.3）')
+    # 动态市值止盈
+    parser.add_argument('--dynamic-cap-exit', action='store_true', default=False,
+                       help='启用动态市值止盈')
+    parser.add_argument('--cap-exit-percentile', type=float, default=0.50,
+                       help='市值百分位阈值（默认0.50，超过即卖出）')
 
     args = parser.parse_args()
 
@@ -117,6 +138,15 @@ def main():
         slippage_rate=args.slippage_rate,
         exclude_st=args.exclude_st,
         min_avg_turnover=args.min_avg_turnover,
+        exclude_risk=args.exclude_risk,
+        max_debt_ratio=args.max_debt_ratio,
+        calendar_timing=args.calendar_timing,
+        weak_months=tuple(args.weak_months),
+        weak_month_ratio=args.weak_month_ratio,
+        momentum_lookback=args.momentum_lookback,
+        momentum_weight=args.momentum_weight,
+        dynamic_cap_exit=args.dynamic_cap_exit,
+        cap_exit_percentile=args.cap_exit_percentile,
     )
 
     # 创建输出目录
@@ -131,6 +161,11 @@ def main():
     logger.info(f"     Market Cap Percentile: {args.market_cap_percentile}")
     logger.info(f"     Buy Cost Rate: {args.buy_cost_rate:.4f}, Sell Cost Rate: {args.sell_cost_rate:.4f}")
     logger.info(f"     Slippage Rate: {args.slippage_rate:.4f} (one-way)")
+    logger.info(f"     Min Avg Turnover: {config.min_avg_turnover:.0f}")
+    if config.dynamic_cap_exit:
+        logger.info(f"     Dynamic Cap Exit: percentile={config.cap_exit_percentile}")
+    if config.calendar_timing:
+        logger.info(f"     Calendar Timing: weak_months={config.weak_months}, ratio={config.weak_month_ratio}")
 
     # 执行回测
     backtest = MicrocapBacktest(config)
@@ -189,6 +224,12 @@ def main():
     logger.info(f"     Annual Return: {summary['annual_return']:.4f}")
     logger.info(f"     Sharpe Ratio: {summary['sharpe_ratio']:.4f}")
     logger.info(f"     Max Drawdown: {summary['max_drawdown']:.4f}")
+    logger.info(f"     Sortino Ratio: {summary.get('sortino_ratio', 0):.4f}")
+    logger.info(f"     Calmar Ratio: {summary.get('calmar_ratio', 0):.4f}")
+    logger.info(f"     Avg Win: {summary.get('avg_win', 0):.4f}")
+    logger.info(f"     Avg Loss: {summary.get('avg_loss', 0):.4f}")
+    logger.info(f"     Profit/Loss Ratio: {summary.get('profit_loss_ratio', 0):.2f}")
+    logger.info(f"     Avg Hold Days: {summary.get('avg_hold_days', 0):.1f}")
     logger.info(f"     Limit-Up Skipped: {summary.get('limit_up_skipped', 0)}")
     logger.info(f"     Limit-Down Delayed: {summary.get('limit_down_delayed', 0)}")
     if summary.get('benchmark_annual_return') is not None:

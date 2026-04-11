@@ -22,7 +22,7 @@ import numpy as np
 from config.db import get_connection
 from .config import MicrocapConfig
 from .universe import get_daily_universe
-from .factors import calc_peg, calc_pe, calc_roe, calc_ebit_ratio, calc_peg_ebit_mv, calc_pure_mv
+from .factors import calc_peg, calc_pe, calc_roe, calc_ebit_ratio, calc_peg_ebit_mv, calc_pure_mv, calc_pure_mv_mom
 from .factors_cached import init_cache, calc_peg_cached, calc_pe_cached
 from .benchmark import load_benchmark, calc_benchmark_metrics, DEFAULT_BENCHMARK
 
@@ -51,6 +51,7 @@ class MicrocapBacktest:
         self._limit_down_delayed: int = 0          # 跌停顺延卖出次数
         self._delist_writeoffs: int = 0            # 退市归零笔数
         self._use_cached = False                   # 是否使用缓存版本
+        self._cap_thresholds: dict = {}            # {trade_date: threshold_mv} 动态市值止盈
 
     def run(self) -> Dict:
         """
@@ -94,6 +95,10 @@ class MicrocapBacktest:
             # 填充交易日索引（供涨跌停顺延使用）
             self._trade_dates = trade_dates
             self._date_to_idx = {d: i for i, d in enumerate(trade_dates)}
+
+            # 预加载动态市值止盈阈值
+            if self.config.dynamic_cap_exit:
+                self._cap_thresholds = self._preload_cap_thresholds(trade_dates)
 
             # 预热 _prev_close：加载第一个交易日前一日的收盘价，确保第一天涨跌停判断有效
             pre_date = self._get_prev_trade_date(trade_dates[0])
@@ -150,6 +155,7 @@ class MicrocapBacktest:
                             'delay_count': h['delay_count'],
                             'return': pnl_pct,
                             'pnl': pnl,
+                            'cap_exit': h.get('cap_exit', False),
                         })
 
                         logger.debug(f"Sell {code} on {trade_date}: "
@@ -212,6 +218,9 @@ class MicrocapBacktest:
                     selected = self._select_stocks(trade_date)
                     if selected:
                         pending_buy = selected
+
+                # 第3.5步：动态市值止盈检查
+                self._check_cap_exit(trade_date, holdings, trade_dates, i)
 
                 # 第4步：退市检测 + 计算组合价值
                 # 持仓股连续 3 个交易日无收盘价 → 视为退市/暂停，按 0 价格强制平仓（归零）
@@ -291,8 +300,8 @@ class MicrocapBacktest:
                             del holdings[code]
 
                 # 全市场因子每天 SQL 开销大，每 10 天打一次日志；其余因子每 50 天
-                FULL_MARKET_FACTORS = {'peg_ebit_mv', 'pure_mv'}
-                log_interval = 10 if self.config.factor in FULL_MARKET_FACTORS else 50
+                FULL_MARKET_FACTORS_LOG = {'peg_ebit_mv', 'pure_mv', 'pure_mv_mom'}
+                log_interval = 10 if self.config.factor in FULL_MARKET_FACTORS_LOG else 50
                 if (i + 1) % log_interval == 0 or i == len(trade_dates) - 1:
                     logger.info(f"  Progress: {i+1}/{len(trade_dates)} "
                                f"({trade_date}), NAV={nav:.4f}, Holdings={len(holdings)}")
@@ -400,15 +409,27 @@ class MicrocapBacktest:
         try:
             # peg_ebit_mv 和 pure_mv 从全市场选股（不限市值）
             # 其余因子从市值后 percentile 的微盘股池中选
-            FULL_MARKET_FACTORS = {'peg_ebit_mv', 'pure_mv'}
+            FULL_MARKET_FACTORS = {'peg_ebit_mv', 'pure_mv', 'pure_mv_mom'}
 
+            # 公共风险过滤参数
+            risk_kwargs = {}
+            if self.config.exclude_risk:
+                risk_kwargs = {
+                    'exclude_risk': True,
+                    'max_debt_ratio': self.config.max_debt_ratio,
+                    'require_positive_profit': self.config.require_positive_profit,
+                    'require_positive_cashflow': self.config.require_positive_cashflow,
+                }
+
+            no_pe_factors = {'pure_mv', 'pure_mv_mom'}
             if self.config.factor in FULL_MARKET_FACTORS:
                 universe = get_daily_universe(
                     trade_date,
                     percentile=1.0,
                     exclude_st=self.config.exclude_st,
-                    require_positive_pe=(self.config.factor != 'pure_mv'),
+                    require_positive_pe=(self.config.factor not in no_pe_factors),
                     min_avg_turnover=self.config.min_avg_turnover,
+                    **risk_kwargs,
                 )
             else:
                 universe = get_daily_universe(
@@ -416,6 +437,7 @@ class MicrocapBacktest:
                     percentile=self.config.market_cap_percentile,
                     exclude_st=self.config.exclude_st,
                     min_avg_turnover=self.config.min_avg_turnover,
+                    **risk_kwargs,
                 )
 
             if not universe:
@@ -437,6 +459,11 @@ class MicrocapBacktest:
                     'ebit_ratio':  calc_ebit_ratio,
                     'peg_ebit_mv': calc_peg_ebit_mv,
                     'pure_mv':     calc_pure_mv,
+                    'pure_mv_mom': lambda td, codes: calc_pure_mv_mom(
+                        td, codes,
+                        lookback=self.config.momentum_lookback,
+                        weight=self.config.momentum_weight,
+                    ),
                 }
             if self.config.factor not in factor_funcs:
                 logger.warning(f"Unsupported factor: {self.config.factor}")
@@ -446,10 +473,18 @@ class MicrocapBacktest:
             if factors_df.empty:
                 return []
 
+            # 月度日历择时：弱月减少持仓数量
+            effective_top_n = self.config.top_n
+            if self.config.calendar_timing:
+                month = int(trade_date[5:7])
+                if month in self.config.weak_months:
+                    effective_top_n = max(1, int(self.config.top_n * self.config.weak_month_ratio))
+                    logger.debug(f"{trade_date}: weak month {month}, top_n: {self.config.top_n} -> {effective_top_n}")
+
             # 选出因子值最小的 top_n 只
             factors_df = factors_df.dropna(subset=[self.config.factor])
             factors_df = factors_df.sort_values(self.config.factor)
-            top_stocks = factors_df.head(self.config.top_n)['stock_code'].tolist()
+            top_stocks = factors_df.head(effective_top_n)['stock_code'].tolist()
 
             logger.debug(f"{trade_date}: selected {len(top_stocks)} stocks")
 
@@ -458,6 +493,56 @@ class MicrocapBacktest:
         except Exception as e:
             logger.warning(f"Error selecting stocks for {trade_date}: {e}")
             return []
+
+    def _preload_cap_thresholds(self, trade_dates: list) -> dict:
+        """预加载所有交易日的市值百分位阈值，避免每日查询全表。"""
+        conn = get_connection()
+        try:
+            sql = """SELECT trade_date, total_mv FROM trade_stock_daily_basic
+                     WHERE trade_date BETWEEN %s AND %s AND total_mv > 0"""
+            df = pd.read_sql(sql, conn, params=[trade_dates[0], trade_dates[-1]])
+        finally:
+            conn.close()
+        df['trade_date'] = df['trade_date'].astype(str)
+        thresholds = {}
+        for date, group in df.groupby('trade_date'):
+            thresholds[date] = float(group['total_mv'].quantile(self.config.cap_exit_percentile))
+        logger.info(f"[OK] Pre-loaded cap thresholds for {len(thresholds)} days")
+        return thresholds
+
+    def _check_cap_exit(self, trade_date, holdings, trade_dates, current_idx):
+        """每日检查持仓市值是否超过阈值，超过则设 sell_date = 下一个交易日。"""
+        if not self.config.dynamic_cap_exit or not holdings:
+            return
+        threshold = self._cap_thresholds.get(trade_date)
+        if threshold is None:
+            return
+
+        # 只查持仓股的市值（小批量）
+        held_codes = list(holdings.keys())
+        conn = get_connection()
+        try:
+            ph = ','.join(['%s'] * len(held_codes))
+            sql = f"""SELECT stock_code, total_mv FROM trade_stock_daily_basic
+                      WHERE trade_date = %s AND stock_code IN ({ph})"""
+            df = pd.read_sql(sql, conn, params=[trade_date] + held_codes)
+        finally:
+            conn.close()
+        held_mv = dict(zip(df['stock_code'], df['total_mv'].astype(float)))
+
+        next_idx = current_idx + 1
+        if next_idx >= len(trade_dates):
+            return
+        next_date = trade_dates[next_idx]
+
+        for code in list(holdings.keys()):
+            mv = held_mv.get(code)
+            if mv is not None and mv > threshold:
+                h = holdings[code]
+                if h['sell_date'] is None or h['sell_date'] > next_date:
+                    logger.debug(f"[CAP EXIT] {code} mv={mv:.0f} > {threshold:.0f}")
+                    h['sell_date'] = next_date
+                    h['cap_exit'] = True
 
     def _load_prices_for_date(self, trade_date: str) -> None:
         """批量加载指定日期所有股票的开盘/收盘/最高/最低价到缓存，带重试。
@@ -568,8 +653,14 @@ class MicrocapBacktest:
             'total_return': 0.0,
             'annual_return': 0.0,
             'sharpe_ratio': 0.0,
+            'sortino_ratio': 0.0,
+            'calmar_ratio': 0.0,
             'max_drawdown': 0.0,
             'win_rate': 0.0,
+            'profit_loss_ratio': 0.0,
+            'avg_win': 0.0,
+            'avg_loss': 0.0,
+            'avg_hold_days': 0.0,
             'limit_up_skipped': self._limit_up_skipped,
             'limit_down_delayed': self._limit_down_delayed,
             'delist_writeoffs': self._delist_writeoffs,
@@ -602,12 +693,15 @@ class MicrocapBacktest:
             years = n_days / 250  # 250 交易日/年
             summary['annual_return'] = float((final_nav ** (1 / years)) - 1) if years > 0 else 0.0
 
-        # 夏普比率
+        # 夏普比率（扣除无风险利率）
         if len(daily_values_df) > 1:
             daily_returns = daily_values_df['daily_return'].values
-            if np.std(daily_returns) > 0:
+            risk_free_daily = 0.03 / 250
+            excess_daily = daily_returns - risk_free_daily
+            std_daily = float(np.std(daily_returns, ddof=1))
+            if std_daily > 0:
                 summary['sharpe_ratio'] = float(
-                    np.mean(daily_returns) / np.std(daily_returns) * np.sqrt(250)
+                    np.mean(excess_daily) / std_daily * np.sqrt(250)
                 )
 
         # 最大回撤
@@ -615,6 +709,33 @@ class MicrocapBacktest:
             cummax = daily_values_df['nav'].cummax()
             drawdown = (daily_values_df['nav'] - cummax) / cummax
             summary['max_drawdown'] = float(drawdown.min())
+
+        # Sortino ratio（仅惩罚下行波动）
+        if len(daily_values_df) > 1:
+            daily_returns = daily_values_df['daily_return'].values
+            risk_free_daily = 0.03 / 250
+            downside = daily_returns[daily_returns < risk_free_daily] - risk_free_daily
+            if len(downside) > 0:
+                downside_std = float(np.std(downside, ddof=1)) * np.sqrt(250)
+                if downside_std > 0:
+                    summary['sortino_ratio'] = (summary['annual_return'] - 0.03) / downside_std
+
+        # Calmar ratio（年化收益 / 最大回撤绝对值）
+        if summary['max_drawdown'] != 0:
+            summary['calmar_ratio'] = summary['annual_return'] / abs(summary['max_drawdown'])
+
+        # 交易级别统计：盈亏比、平均盈利/亏损、平均持有天数
+        if not trades_df.empty:
+            returns = trades_df['return']
+            wins = returns[returns > 0]
+            losses = returns[returns <= 0]
+            avg_win = float(wins.mean()) if len(wins) > 0 else 0.0
+            avg_loss = float(losses.mean()) if len(losses) > 0 else 0.0
+            summary['avg_win'] = avg_win
+            summary['avg_loss'] = avg_loss
+            summary['profit_loss_ratio'] = abs(avg_win / avg_loss) if avg_loss != 0 else 0.0
+            if 'hold_days' in trades_df.columns:
+                summary['avg_hold_days'] = float(trades_df['hold_days'].mean())
 
         # 基准对比指标
         if benchmark_df is not None and not benchmark_df.empty and len(daily_values_df) > 1:

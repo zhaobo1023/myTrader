@@ -37,8 +37,26 @@ class MicrocapConfig:
     benchmark_code: str = '399303'       # 基准指数代码（399303=国证2000，空字符串跳过）
 
     # 流动性过滤
-    min_avg_turnover: float = 0.0        # 近 5 日平均成交额最低要求（元），0 表示不过滤
-                                         # 建议实盘前设为 5_000_000（500 万）
+    min_avg_turnover: float = 5_000_000.0  # 近 5 日平均成交额最低要求（元），500万下限
+
+    # 财务风险过滤（排除雷区股）
+    exclude_risk: bool = False           # 是否启用财务风险过滤
+    max_debt_ratio: float = 0.70         # 资产负债率上限（排除 > 70%）
+    require_positive_profit: bool = True # 要求最近年报净利润 > 0（排除亏损股）
+    require_positive_cashflow: bool = True  # 要求最近年报经营现金流 > 0
+
+    # 月度日历择时
+    calendar_timing: bool = False            # 是否启用
+    weak_months: tuple = (1, 4, 12)          # 弱月份
+    weak_month_ratio: float = 0.5            # 弱月持仓比例 (top_n * ratio)
+
+    # 动量反转因子 (factor='pure_mv_mom' 时生效)
+    momentum_lookback: int = 20              # 回看天数
+    momentum_weight: float = 0.3             # 反转权重 (0~1)
+
+    # 动态市值止盈
+    dynamic_cap_exit: bool = False           # 是否启用
+    cap_exit_percentile: float = 0.50        # 全市场市值百分位阈值（超过即卖出）
 
     # 输出配置
     output_dir: Optional[str] = None     # 输出目录，None 则使用默认 output/microcap

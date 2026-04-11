@@ -313,6 +313,82 @@ def calc_pure_mv(trade_date: str, stock_codes: List[str]) -> pd.DataFrame:
     return df[['stock_code', 'pure_mv']] if not df.empty else pd.DataFrame(columns=['stock_code', 'pure_mv'])
 
 
+def calc_pure_mv_mom(trade_date: str, stock_codes: List[str],
+                     lookback: int = 20, weight: float = 0.3) -> pd.DataFrame:
+    """
+    市值 + 反转复合因子。
+    score = mv_rank * (1 - weight) + reversal_rank * weight
+    mv_rank: 按市值升序排名（最小=1）
+    reversal_rank: 按 N 日收益升序排名（跌最多=1，"低吸"逻辑）
+    """
+    if not stock_codes:
+        return pd.DataFrame(columns=['stock_code', 'pure_mv_mom'])
+
+    MV_BATCH = 200
+    conn = get_connection()
+    try:
+        # 1. 批量获取当日 total_mv
+        mv_chunks = []
+        for i in range(0, len(stock_codes), MV_BATCH):
+            batch = stock_codes[i:i+MV_BATCH]
+            ph = ','.join(['%s'] * len(batch))
+            sql = f"""SELECT stock_code, total_mv
+                      FROM trade_stock_daily_basic
+                      WHERE trade_date = %s AND stock_code IN ({ph}) AND total_mv > 0"""
+            chunk = pd.read_sql(sql, conn, params=[trade_date] + batch)
+            if not chunk.empty:
+                mv_chunks.append(chunk)
+        df_mv = pd.concat(mv_chunks, ignore_index=True) if mv_chunks else pd.DataFrame()
+        if df_mv.empty:
+            return pd.DataFrame(columns=['stock_code', 'pure_mv_mom'])
+
+        # 2. 批量获取近 lookback*2 自然日的收盘价
+        from datetime import datetime, timedelta
+        dt = datetime.strptime(trade_date, '%Y-%m-%d')
+        start_str = (dt - timedelta(days=lookback * 2)).strftime('%Y-%m-%d')
+        valid_codes = df_mv['stock_code'].tolist()
+
+        price_chunks = []
+        for i in range(0, len(valid_codes), MV_BATCH):
+            batch = valid_codes[i:i+MV_BATCH]
+            ph = ','.join(['%s'] * len(batch))
+            sql = f"""SELECT stock_code, trade_date, close_price
+                      FROM trade_stock_daily
+                      WHERE stock_code IN ({ph})
+                        AND trade_date BETWEEN %s AND %s AND close_price > 0"""
+            chunk = pd.read_sql(sql, conn, params=batch + [start_str, trade_date])
+            if not chunk.empty:
+                price_chunks.append(chunk)
+        df_price = pd.concat(price_chunks, ignore_index=True) if price_chunks else pd.DataFrame()
+    finally:
+        conn.close()
+
+    # 3. 向量化计算 N日收益
+    if df_price.empty:
+        df_mv['pure_mv_mom'] = df_mv['total_mv'].astype(float)
+        return df_mv[['stock_code', 'pure_mv_mom']]
+
+    pivot = df_price.pivot_table(index='trade_date', columns='stock_code',
+                                 values='close_price').sort_index()
+    if len(pivot) >= lookback:
+        current = pivot.iloc[-1]
+        past = pivot.iloc[-lookback]
+        ret = (current - past) / past
+    else:
+        ret = pd.Series(dtype=float)
+
+    df_ret = ret.reset_index()
+    df_ret.columns = ['stock_code', 'ret']
+
+    # 4. 合并排名
+    df = df_mv.merge(df_ret, on='stock_code', how='left')
+    df['mv_rank'] = df['total_mv'].astype(float).rank(method='min')
+    df['reversal_rank'] = df['ret'].rank(method='min')  # 跌最多 = rank 1
+
+    df['pure_mv_mom'] = df['mv_rank'] * (1 - weight) + df['reversal_rank'] * weight
+    return df[['stock_code', 'pure_mv_mom']].dropna(subset=['pure_mv_mom'])
+
+
 def calc_pe(trade_date: str, stock_codes: List[str]) -> pd.DataFrame:
     """
     计算 PE_TTM 因子（越小越便宜）。
