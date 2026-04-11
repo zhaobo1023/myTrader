@@ -23,6 +23,7 @@ from config.db import get_connection
 from .config import MicrocapConfig
 from .universe import get_daily_universe
 from .factors import calc_peg, calc_pe, calc_roe, calc_ebit_ratio, calc_peg_ebit_mv, calc_pure_mv
+from .factors_cached import init_cache, calc_peg_cached, calc_pe_cached
 from .benchmark import load_benchmark, calc_benchmark_metrics, DEFAULT_BENCHMARK
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ class MicrocapBacktest:
         self._limit_up_skipped: int = 0            # 涨停跳过买入次数
         self._limit_down_delayed: int = 0          # 跌停顺延卖出次数
         self._delist_writeoffs: int = 0            # 退市归零笔数
+        self._use_cached = False                   # 是否使用缓存版本
 
     def run(self) -> Dict:
         """
@@ -63,6 +65,15 @@ class MicrocapBacktest:
             - daily_values_df: 每日净值 DataFrame
         """
         try:
+            # 初始化数据缓存（一次性加载所有数据）
+            try:
+                init_cache(self.config.start_date, self.config.end_date)
+                self._use_cached = True
+                logger.info("[OK] 数据缓存初始化成功，将使用缓存版本")
+            except Exception as e:
+                logger.warning(f"缓存初始化失败，使用原版因子计算: {e}")
+                self._use_cached = False
+
             # 获取交易日列表
             trade_dates = self._get_trade_dates(
                 self.config.start_date,
@@ -411,14 +422,22 @@ class MicrocapBacktest:
                 return []
 
             # 因子计算分发
-            factor_funcs = {
-                'peg':         calc_peg,
-                'pe':          calc_pe,
-                'roe':         calc_roe,
-                'ebit_ratio':  calc_ebit_ratio,
-                'peg_ebit_mv': calc_peg_ebit_mv,
-                'pure_mv':     calc_pure_mv,
-            }
+            if self._use_cached and self.config.factor in ['peg', 'pe']:
+                # 使用缓存版本（仅支持 peg 和 pe）
+                factor_funcs = {
+                    'peg': calc_peg_cached,
+                    'pe': calc_pe_cached,
+                }
+            else:
+                # 使用原版（支持所有因子）
+                factor_funcs = {
+                    'peg':         calc_peg,
+                    'pe':          calc_pe,
+                    'roe':         calc_roe,
+                    'ebit_ratio':  calc_ebit_ratio,
+                    'peg_ebit_mv': calc_peg_ebit_mv,
+                    'pure_mv':     calc_pure_mv,
+                }
             if self.config.factor not in factor_funcs:
                 logger.warning(f"Unsupported factor: {self.config.factor}")
                 return []

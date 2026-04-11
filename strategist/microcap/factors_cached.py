@@ -53,6 +53,8 @@ class FactorDataCache:
                 WHERE trade_date BETWEEN %s AND %s
             """
             self.df_daily_basic = pd.read_sql(sql_basic, conn, params=[start_date, end_date])
+            # 转换 trade_date 为字符串格式，确保一致性
+            self.df_daily_basic['trade_date'] = pd.to_datetime(self.df_daily_basic['trade_date']).dt.strftime('%Y-%m-%d')
             logger.info(f"加载日线基础数据: {len(self.df_daily_basic)} 行")
 
             # 2. 加载财务数据 (EPS)
@@ -72,11 +74,20 @@ class FactorDataCache:
 
             # 3. 加载日线价格数据
             sql_daily = f"""
-                SELECT stock_code, trade_date, open, close, high, low
+                SELECT stock_code, trade_date, open_price, close_price, high_price, low_price
                 FROM trade_stock_daily
                 WHERE trade_date BETWEEN %s AND %s
             """
             self.df_daily = pd.read_sql(sql_daily, conn, params=[start_date, end_date])
+            # 重命名列以保持兼容性
+            self.df_daily = self.df_daily.rename(columns={
+                'open_price': 'open',
+                'close_price': 'close',
+                'high_price': 'high',
+                'low_price': 'low'
+            })
+            # 转换 trade_date 为字符串格式
+            self.df_daily['trade_date'] = pd.to_datetime(self.df_daily['trade_date']).dt.strftime('%Y-%m-%d')
             logger.info(f"加载日线价格: {len(self.df_daily)} 行")
 
             self.is_loaded = True

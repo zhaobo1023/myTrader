@@ -239,26 +239,44 @@ class MetricsCalculator:
                 'profit_loss_ratio': 0,
                 'avg_hold_days': 0,
             }
-        
+
+        # 确保日期是 datetime 类型
+        if not pd.api.types.is_datetime64_any_dtype(trades_df['date']):
+            trades_df['date'] = pd.to_datetime(trades_df['date'])
+
         # 配对买卖交易
-        buy_trades = trades_df[trades_df['action'] == 'BUY'].copy()
+        buy_trades = trades_df[trades_df['action'] == 'BUY'].copy().reset_index(drop=True)
         sell_trades = trades_df[trades_df['action'] == 'SELL'].copy()
-        
+
+        # 使用队列来匹配买入和卖出（先进先出）
+        buy_queue = {}  # {stock_code: [buy_indices]}
+
+        for idx, buy in buy_trades.iterrows():
+            code = buy['stock_code']
+            if code not in buy_queue:
+                buy_queue[code] = []
+            buy_queue[code].append(idx)
+
         # 计算每笔交易的收益
         trade_returns = []
         hold_days_list = []
-        
+
         for _, sell in sell_trades.iterrows():
-            # 找到对应的买入
-            buy = buy_trades[buy_trades['stock_code'] == sell['stock_code']]
-            if len(buy) > 0:
-                buy = buy.iloc[-1]  # 取最后一次买入
-                trade_return = (sell['price'] - buy['price']) / buy['price']
-                trade_returns.append(trade_return)
-                
-                # 计算持仓天数
-                hold_days = (sell['date'] - buy['date']).days
-                hold_days_list.append(hold_days)
+            code = sell['stock_code']
+            if code not in buy_queue or len(buy_queue[code]) == 0:
+                continue
+
+            # 取第一个未配对的买入
+            buy_idx = buy_queue[code].pop(0)
+            buy = buy_trades.iloc[buy_idx]
+
+            trade_return = (sell['price'] - buy['price']) / buy['price']
+            trade_returns.append(trade_return)
+
+            # 计算持仓天数
+            date_diff = sell['date'] - buy['date']
+            hold_days = date_diff.days if hasattr(date_diff, 'days') else 0
+            hold_days_list.append(max(0, hold_days))  # 确保非负
         
         if len(trade_returns) == 0:
             return {
@@ -298,7 +316,6 @@ class MetricsCalculator:
             'profit_loss_ratio': profit_loss_ratio,
             'avg_hold_days': avg_hold_days,
         }
-    
     def _calculate_signal_stats(self, trades_df: pd.DataFrame, signal_type: str) -> Dict:
         """计算特定信号类型的统计"""
         if len(trades_df) == 0:

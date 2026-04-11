@@ -59,13 +59,23 @@ def main():
     fetcher = DoctorTaoDataFetcher(use_cache=True)
 
     # 回测时间范围：2023-01-01 到最新
-    start_date = '2023-01-01'
-    end_date = '2026-03-24'
+    # 注意：需要拉取更多历史数据用于计算指标（RPS需要250日，MA需要250日）
+    backtest_start = '2023-01-01'
+    backtest_end = '2026-03-24'
+
+    # 为了计算指标，需要提前拉取 1 年的数据
+    from datetime import timedelta
+    import pandas as pd
+
+    data_start = (pd.to_datetime(backtest_start) - timedelta(days=400)).strftime('%Y-%m-%d')
+
+    print(f"  数据拉取范围: {data_start} ~ {backtest_end}")
+    print(f"  回测范围: {backtest_start} ~ {backtest_end}")
 
     price_dict = fetcher.fetch_daily_price_batch(
         stock_codes,
-        start_date=start_date,
-        end_date=end_date
+        start_date=data_start,
+        end_date=backtest_end
     )
     print(f"  获取到 {len(price_dict)} 只股票的价格数据")
 
@@ -90,6 +100,13 @@ def main():
     indicators_df = IndicatorCalculator.calc_all_indicators(price_df)
     print(f"  指标计算完成，共 {len(indicators_df)} 条记录")
 
+    # 只保留回测时间范围内的数据用于生成信号
+    indicators_df = indicators_df[
+        (indicators_df['trade_date'] >= backtest_start) &
+        (indicators_df['trade_date'] <= backtest_end)
+    ]
+    print(f"  回测时间范围内数据: {len(indicators_df)} 条")
+
     # 生成历史信号（每20个交易日采样）
     all_dates = sorted(indicators_df['trade_date'].unique())
     sample_interval = 20
@@ -107,11 +124,11 @@ def main():
         # 价格过滤
         date_df = date_df[date_df['close'] >= 3.0]
 
-        # 动量信号：RPS>=90, MA20>MA60, 动量斜率>0
+        # 动量信号：RPS>=90, MA20>MA60, RPS斜率>0
         momentum_mask = (
             (date_df['rps'] >= 90) &
             (date_df['ma20'] > date_df['ma60']) &
-            (date_df['momentum_slope'] > 0)
+            (date_df['rps_slope'] > 0)
         )
 
         if momentum_mask.sum() > 0:
