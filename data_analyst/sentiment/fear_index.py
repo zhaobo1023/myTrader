@@ -32,7 +32,11 @@ class FearIndexService:
             ticker = yf.Ticker(self.config['vix_ticker'])
             data = ticker.history(period='1d')
             if not data.empty:
-                return float(data['Close'].iloc[-1])
+                vix_value = float(data['Close'].iloc[-1])
+                if vix_value < 0:
+                    logger.warning(f"Invalid VIX value: {vix_value}, using 0.0")
+                    return 0.0
+                return vix_value
             logger.warning("VIX data is empty")
             return 0.0
         except Exception as e:

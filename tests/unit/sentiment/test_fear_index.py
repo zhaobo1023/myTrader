@@ -91,6 +91,67 @@ def test_fetch_vix_real():
     assert vix >= 0  # VIX 不应为负数
 
 
+def test_calculate_fear_greed_score_boundary():
+    """测试评分边界值"""
+    service = FearIndexService()
+    
+    # 测试最小值
+    score = service.calculate_fear_greed_score(vix=50, us10y=5.0)
+    assert score == 0
+    
+    # 测试最大值
+    score = service.calculate_fear_greed_score(vix=10, us10y=3.0)
+    assert score == 100
+
+
+def test_get_vix_level_all_ranges():
+    """测试所有 VIX 级别范围"""
+    service = FearIndexService()
+    
+    assert '极度平静' in service.get_vix_level(10)
+    assert service.get_vix_level(18) == '正常'
+    assert service.get_vix_level(22) == '焦虑'
+    assert service.get_vix_level(30) == '恐慌'
+    assert service.get_vix_level(40) == '极度恐慌'
+
+
+def test_get_us10y_strategy_all_ranges():
+    """测试所有 US10Y 策略范围"""
+    service = FearIndexService()
+    
+    low_strategy = service.get_us10y_strategy(3.5)
+    assert '成长股' in low_strategy
+    
+    mid_strategy = service.get_us10y_strategy(4.35)
+    assert '分水岭' in mid_strategy
+    
+    high_strategy = service.get_us10y_strategy(4.5)
+    assert '价值股' in high_strategy or '防御' in high_strategy
+
+
+def test_check_risk_contagion_all_scenarios():
+    """测试所有风险传导场景"""
+    service = FearIndexService()
+    
+    # 场景1: 两者都高
+    alert = service.check_risk_contagion(vix=30, ovx=60)
+    assert alert is not None
+    assert '共振' in alert
+    
+    # 场景2: OVX高VIX低
+    alert = service.check_risk_contagion(vix=15, ovx=60)
+    assert alert is not None
+    assert '能源端' in alert
+    
+    # 场景3: 两者都低
+    alert = service.check_risk_contagion(vix=15, ovx=30)
+    assert alert is None
+    
+    # 场景4: VIX高OVX低
+    alert = service.check_risk_contagion(vix=30, ovx=30)
+    assert alert is None
+
+
 @pytest.mark.integration
 def test_get_fear_index_real():
     """实际获取完整恐慌指数（需网络）"""
