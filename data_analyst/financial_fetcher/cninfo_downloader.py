@@ -53,7 +53,7 @@ def search_announcements(stock_code: str, stock_name: str,
 
     url = "https://www.cninfo.com.cn/new/fulltextSearch/full"
     payload = {
-        "searchkey": f"{stock_name} {keyword}",
+        "searchkey": f"{stock_code} {keyword}",
         "sdate": start_date,
         "edate": end_date,
         "isfulltext": "false",
@@ -80,7 +80,7 @@ def search_announcements(stock_code: str, stock_name: str,
             title = title.replace("<em>", "").replace("</em>", "")
 
             # Filter: only full reports, exclude summary/supplement/English
-            if any(kw in title for kw in ["摘要", "英文", "补充", "更正", "说明"]):
+            if any(kw in title for kw in ["摘要", "英文", "补充", "更正", "说明", "督导"]):
                 continue
             if ann_type == "年报" and ("年度报告" not in title or "半年度报告" in title):
                 continue
