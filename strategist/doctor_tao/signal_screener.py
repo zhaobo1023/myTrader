@@ -221,9 +221,24 @@ class SignalScreener:
         return filtered
 
     def _fetch_stock_names(self, codes: List[str]) -> Dict[str, str]:
-        """通过 akshare 查询股票名称"""
+        """从数据库 trade_stock_basic 查询股票名称，失败时降级到 akshare"""
         if not codes:
             return {}
+        # 优先从数据库查
+        try:
+            placeholders = ','.join(['%s'] * len(codes))
+            rows = execute_query(
+                f"SELECT stock_code, stock_name FROM trade_stock_basic WHERE stock_code IN ({placeholders})",
+                tuple(codes),
+            )
+            if rows:
+                result = {r['stock_code']: r['stock_name'] for r in rows}
+                found = sum(1 for v in result.values() if v)
+                print(f"  查询股票名称（数据库）: {found}/{len(codes)} 只匹配")
+                return result
+        except Exception as e:
+            print(f"  数据库查询股票名称失败: {e}，降级到 akshare")
+        # 降级：akshare
         try:
             import akshare as ak
             df = ak.stock_info_a_code_name()
@@ -234,7 +249,7 @@ class SignalScreener:
                 pure_code = code.split('.')[0]
                 result[code] = code_name_map.get(pure_code, '')
             found = sum(1 for v in result.values() if v)
-            print(f"  查询股票名称: {found}/{len(codes)} 只匹配")
+            print(f"  查询股票名称（akshare）: {found}/{len(codes)} 只匹配")
             return result
         except Exception as e:
             print(f"  查询股票名称失败: {e}")
@@ -405,11 +420,14 @@ class SignalScreener:
                 momentum_df = momentum_df[momentum_df['rps'] >= 97]
                 print(f"\n⚠️ 大盘中性，只保留RPS≥97的动量信号: {len(momentum_df)} 只")
 
-        if len(momentum_df) > 0:
-            result_list.append(momentum_df)
-
         if len(reversal_df) > 0:
+            sort_col = 'rps_slope' if 'rps_slope' in reversal_df.columns else 'rps'
+            reversal_df = reversal_df.sort_values(sort_col, ascending=False)
             result_list.append(reversal_df)
+
+        if len(momentum_df) > 0:
+            momentum_df = momentum_df.sort_values('rps', ascending=False)
+            result_list.append(momentum_df)
 
         if result_list:
             result = pd.concat(result_list, ignore_index=True)

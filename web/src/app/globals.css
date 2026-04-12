@@ -1,8 +1,46 @@
 @import "tailwindcss";
 
+/* ============================================================
+   Light design tokens
+   ============================================================ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Backgrounds */
+  --bg-canvas:     #f5f5f7;
+  --bg-panel:      #ffffff;
+  --bg-surface:    #f0f0f2;
+  --bg-elevated:   #e8e8ec;
+
+  /* Text */
+  --text-primary:   #111114;
+  --text-secondary: #3a3a40;
+  --text-tertiary:  #6e6e78;
+  --text-muted:     #9898a4;
+
+  /* Brand accent */
+  --accent:         #5e6ad2;
+  --accent-bg:      #5e6ad2;
+  --accent-hover:   #4f5abf;
+
+  /* Borders */
+  --border-subtle:  rgba(0,0,0,0.06);
+  --border-std:     rgba(0,0,0,0.10);
+  --border-solid:   #d8d8de;
+
+  /* Status */
+  --green:  #1a9e41;
+  --red:    #d63b34;
+  --amber:  #b07d10;
+
+  /* Convenience card/hover surfaces (replaces hardcoded rgba(255,255,255,...)) */
+  --bg-card:        rgba(0,0,0,0.02);
+  --bg-card-hover:  rgba(0,0,0,0.04);
+  --bg-input:       rgba(0,0,0,0.03);
+  --bg-tag:         rgba(0,0,0,0.06);
+  --bg-nav-active:  rgba(0,0,0,0.06);
+  --bg-nav-hover:   rgba(0,0,0,0.03);
+
+  --background: var(--bg-canvas);
+  --foreground: var(--text-primary);
 }
 
 @theme inline {
@@ -12,15 +50,26 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html, body {
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-geist-sans), -apple-system, system-ui, sans-serif;
+  font-feature-settings: "cv01", "ss03";
+  -webkit-font-smoothing: antialiased;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-solid);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b8b8c4;
 }

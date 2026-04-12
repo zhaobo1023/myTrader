@@ -1,11 +1,11 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+// [AUTH-DISABLED] import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAuthStore } from '@/lib/store';
-import Navbar from '@/components/layout/Navbar';
+// [AUTH-DISABLED] import { useAuthStore } from '@/lib/store';
+import AppShell from '@/components/layout/AppShell';
 import {
   watchlistApi,
   scanResultsApi,
@@ -15,36 +15,32 @@ import {
   StockSearchResult,
 } from '@/lib/api-client';
 
-// --- Score badge color helper ---
-function scoreBadgeClass(score: number | null): string {
-  if (score === null) return 'bg-gray-100 text-gray-500';
-  if (score >= 7) return 'bg-green-100 text-green-700 font-semibold';
-  if (score >= 5) return 'bg-blue-100 text-blue-700 font-semibold';
-  if (score >= 3) return 'bg-amber-100 text-amber-700 font-semibold';
-  return 'bg-red-100 text-red-700 font-semibold';
+function scoreBadgeStyle(score: number | null): React.CSSProperties {
+  if (score === null) return { background: 'var(--bg-tag)', color: 'var(--text-muted)' };
+  if (score >= 7) return { background: 'rgba(26,158,65,0.12)', color: 'var(--green)' };
+  if (score >= 5) return { background: 'rgba(94,106,210,0.12)', color: 'var(--accent)' };
+  if (score >= 3) return { background: 'rgba(176,125,16,0.12)', color: 'var(--amber)' };
+  return { background: 'rgba(214,59,52,0.12)', color: 'var(--red)' };
 }
 
-// --- Severity border color ---
-function severityBorderClass(severity: string): string {
+function severityBorderColor(severity: string): string {
   switch (severity) {
-    case 'RED': return 'border-l-4 border-l-red-500';
-    case 'YELLOW': return 'border-l-4 border-l-amber-400';
-    case 'GREEN': return 'border-l-4 border-l-green-500';
-    default: return 'border-l-4 border-l-gray-200';
+    case 'RED':    return 'var(--red)';
+    case 'YELLOW': return 'var(--amber)';
+    case 'GREEN':  return 'var(--green)';
+    default:       return 'var(--border-solid)';
   }
 }
 
-// --- Severity label text ---
-function severityLabel(severity: string): { text: string; cls: string } {
+function severityLabel(severity: string): { text: string; color: string } {
   switch (severity) {
-    case 'RED': return { text: 'Alert', cls: 'text-red-600 bg-red-50 border border-red-200' };
-    case 'YELLOW': return { text: 'Watch', cls: 'text-amber-600 bg-amber-50 border border-amber-200' };
-    case 'GREEN': return { text: 'Signal', cls: 'text-green-600 bg-green-50 border border-green-200' };
-    default: return { text: 'Normal', cls: 'text-gray-500 bg-gray-50 border border-gray-200' };
+    case 'RED':    return { text: 'Alert',  color: 'var(--red)' };
+    case 'YELLOW': return { text: 'Watch',  color: 'var(--amber)' };
+    case 'GREEN':  return { text: 'Signal', color: 'var(--green)' };
+    default:       return { text: 'Normal', color: 'var(--text-muted)' };
   }
 }
 
-// --- Stock Card Component ---
 function StockCard({
   item,
   scan,
@@ -59,57 +55,59 @@ function StockCard({
   const topSignals = scan?.signals?.slice(0, 2) || [];
 
   return (
-    <div className={`bg-white rounded-lg shadow-sm border hover:shadow-md transition-shadow ${severityBorderClass(sev)}`}>
-      <div className="p-4">
-        {/* Header */}
-        <div className="flex items-start justify-between mb-3">
-          <div>
-            <h3 className="font-semibold text-gray-900 text-sm leading-tight">{item.stock_name}</h3>
-            <span className="text-xs text-gray-400 font-mono mt-0.5 block">{item.stock_code}</span>
-          </div>
-          <button
-            onClick={() => onRemove(item.stock_code)}
-            className="text-gray-300 hover:text-red-400 transition-colors text-xs ml-2 mt-0.5"
-            title="Remove from watchlist"
-            aria-label={`Remove ${item.stock_name} from watchlist`}
-          >
-            x
-          </button>
+    <div
+      style={{
+        background: 'var(--bg-panel)',
+        border: '1px solid var(--border-subtle)',
+        borderLeft: `3px solid ${severityBorderColor(sev)}`,
+        borderRadius: '8px',
+        padding: '14px',
+        transition: 'background 0.12s',
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-card-hover)'; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-panel)'; }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+        <div>
+          <div style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-primary)' }}>{item.stock_name}</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-geist-mono)', marginTop: '2px' }}>{item.stock_code}</div>
         </div>
-
-        {/* Score */}
-        {scan ? (
-          <>
-            <div className="flex items-center gap-2 mb-2">
-              <span className={`text-sm px-2 py-0.5 rounded ${scoreBadgeClass(scan.score)}`}>
-                {scan.score?.toFixed(1) ?? '--'} / 10
-              </span>
-              <span className={`text-xs px-1.5 py-0.5 rounded ${sevInfo.cls}`}>
-                {sevInfo.text}
-              </span>
-            </div>
-            <p className="text-xs text-gray-500 mb-2">{scan.score_label || 'Neutral'}</p>
-            {/* Top signals */}
-            {topSignals.length > 0 && (
-              <ul className="space-y-0.5">
-                {topSignals.map((s, i) => (
-                  <li key={i} className="text-xs text-gray-500 truncate">
-                    {s.type}
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p className="text-xs text-gray-300 mt-2">{scan.scan_date}</p>
-          </>
-        ) : (
-          <p className="text-xs text-gray-400 mt-2">No scan data yet</p>
-        )}
+        <button
+          onClick={() => onRemove(item.stock_code)}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '14px', padding: '0 2px', lineHeight: 1 }}
+          title="Remove"
+        >
+          x
+        </button>
       </div>
+
+      {scan ? (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+            <span style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '4px', fontWeight: 510, ...scoreBadgeStyle(scan.score) }}>
+              {scan.score?.toFixed(1) ?? '--'} / 10
+            </span>
+            <span style={{ fontSize: '11px', color: sevInfo.color }}>{sevInfo.text}</span>
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginBottom: '6px' }}>{scan.score_label || 'Neutral'}</div>
+          {topSignals.length > 0 && (
+            <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+              {topSignals.map((s, i) => (
+                <li key={i} style={{ fontSize: '11px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {s.type}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>{scan.scan_date}</div>
+        </>
+      ) : (
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>No scan data yet</div>
+      )}
     </div>
   );
 }
 
-// --- Search Dropdown ---
 function SearchBar({ onAdd }: { onAdd: (code: string, name: string) => Promise<void> }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<StockSearchResult[]>([]);
@@ -119,7 +117,6 @@ function SearchBar({ onAdd }: { onAdd: (code: string, name: string) => Promise<v
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdown on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -134,75 +131,82 @@ function SearchBar({ onAdd }: { onAdd: (code: string, name: string) => Promise<v
     const val = e.target.value;
     setQuery(val);
     if (timerRef.current) clearTimeout(timerRef.current);
-    if (!val.trim()) {
-      setResults([]);
-      setOpen(false);
-      return;
-    }
+    if (!val.trim()) { setResults([]); setOpen(false); return; }
     timerRef.current = setTimeout(async () => {
       setSearching(true);
       try {
         const res = await marketApi.search(val.trim());
         setResults(res.data.slice(0, 8));
         setOpen(true);
-      } catch {
-        setResults([]);
-      } finally {
-        setSearching(false);
-      }
+      } catch { setResults([]); }
+      finally { setSearching(false); }
     }, 300);
-  }, []); // no external deps - timerRef is stable, setters are stable
+  }, []);
 
   const handleAdd = useCallback(async (stock: StockSearchResult) => {
     setAdding(stock.stock_code);
     try {
       await onAdd(stock.stock_code, stock.stock_name);
-      setQuery('');
-      setResults([]);
-      setOpen(false);
-    } finally {
-      setAdding(null);
-    }
+      setQuery(''); setResults([]); setOpen(false);
+    } finally { setAdding(null); }
   }, [onAdd]);
 
   return (
-    <div ref={containerRef} className="relative w-full max-w-xl">
-      <div className="relative">
+    <div ref={containerRef} style={{ position: 'relative', width: '320px' }}>
+      <div style={{ position: 'relative' }}>
         <input
           type="text"
           value={query}
           onChange={handleChange}
           onFocus={() => results.length > 0 && setOpen(true)}
-          placeholder="Search stocks, ETFs..."
-          className="w-full px-4 py-2.5 pr-10 border border-gray-200 rounded-full text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          placeholder="搜索股票、ETF..."
+          style={{
+            width: '100%',
+            padding: '6px 32px 6px 12px',
+            background: 'var(--bg-input)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: '6px',
+            fontSize: '13px',
+            color: 'var(--text-primary)',
+            outline: 'none',
+            boxSizing: 'border-box',
+          }}
+          onFocusCapture={(e) => { (e.target as HTMLInputElement).style.borderColor = 'var(--border-std)'; }}
+          onBlurCapture={(e) => { (e.target as HTMLInputElement).style.borderColor = 'var(--border-subtle)'; }}
         />
-        {searching ? (
-          <div className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-        ) : (
-          <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-        )}
+        <span style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '12px' }}>
+          {searching ? '...' : 'S'}
+        </span>
       </div>
 
       {open && results.length > 0 && (
-        <div className="absolute top-full mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg z-50 overflow-hidden">
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0,
+          background: 'var(--bg-panel)', border: '1px solid var(--border-std)',
+          borderRadius: '8px', overflow: 'hidden', zIndex: 50,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.10)',
+        }}>
           {results.map((stock) => (
             <div
               key={stock.stock_code}
-              className="flex items-center justify-between px-4 py-2.5 hover:bg-gray-50 cursor-pointer"
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)', cursor: 'pointer' }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-card-hover)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
             >
               <div>
-                <span className="text-sm font-medium text-gray-900">{stock.stock_name}</span>
-                <span className="text-xs text-gray-400 font-mono ml-2">{stock.stock_code}</span>
-                {stock.industry && <span className="text-xs text-gray-400 ml-2">{stock.industry}</span>}
+                <span style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-primary)' }}>{stock.stock_name}</span>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-geist-mono)', marginLeft: '8px' }}>{stock.stock_code}</span>
               </div>
               <button
                 onClick={() => handleAdd(stock)}
                 disabled={adding === stock.stock_code}
-                className="text-xs bg-blue-600 text-white px-3 py-1 rounded-full hover:bg-blue-700 disabled:bg-blue-300 ml-4 flex-shrink-0"
+                style={{
+                  fontSize: '11px', background: 'var(--accent-bg)', color: '#fff',
+                  border: 'none', borderRadius: '4px', padding: '3px 10px', cursor: 'pointer',
+                  opacity: adding === stock.stock_code ? 0.5 : 1,
+                }}
               >
-                {adding === stock.stock_code ? '...' : '+ Add'}
+                {adding === stock.stock_code ? '...' : '+ 添加'}
               </button>
             </div>
           ))}
@@ -212,51 +216,39 @@ function SearchBar({ onAdd }: { onAdd: (code: string, name: string) => Promise<v
   );
 }
 
-// --- Main Page ---
 export default function DashboardPage() {
-  const router = useRouter();
-  const { user, fetchUser } = useAuthStore();
+  // [AUTH-DISABLED] const router = useRouter();
+  // [AUTH-DISABLED] const { user, fetchUser } = useAuthStore();
   const queryClient = useQueryClient();
 
-  // Auth guard
-  useEffect(() => {
-    if (!user) {
-      fetchUser().catch(() => router.push('/login'));
-    }
-  }, [user, fetchUser, router]);
+  // [AUTH-DISABLED] useEffect(() => { if (!user) { fetchUser().catch(() => router.push('/login')); } }, [user, fetchUser, router]);
 
-  // Data fetching
   const { data: watchlistData, isLoading: wLoading } = useQuery({
     queryKey: ['watchlist'],
     queryFn: () => watchlistApi.list().then((r) => r.data),
-    enabled: !!user,
+    enabled: true,
   });
 
   const { data: scanResults } = useQuery({
     queryKey: ['scan-results'],
     queryFn: () => scanResultsApi.list().then((r) => r.data),
-    enabled: !!user,
+    enabled: true,
   });
 
-  // Build scan result map keyed by stock_code
   const scanMap = useMemo<Record<string, ScanResult>>(() => {
     if (!scanResults) return {};
     return Object.fromEntries(scanResults.map((r) => [r.stock_code, r]));
   }, [scanResults]);
 
-  // Latest scan date
   const latestScanDate = scanResults && scanResults.length > 0
     ? scanResults.reduce((max, r) => r.scan_date > max ? r.scan_date : max, scanResults[0].scan_date)
     : undefined;
 
-  // Add to watchlist mutation
   const addMutation = useMutation({
-    mutationFn: ({ code, name }: { code: string; name: string }) =>
-      watchlistApi.add(code, name),
+    mutationFn: ({ code, name }: { code: string; name: string }) => watchlistApi.add(code, name),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['watchlist'] }),
   });
 
-  // Remove from watchlist mutation
   const removeMutation = useMutation({
     mutationFn: (code: string) => watchlistApi.remove(code),
     onSuccess: () => {
@@ -269,66 +261,54 @@ export default function DashboardPage() {
     try {
       await addMutation.mutateAsync({ code, name });
     } catch (err: unknown) {
-      if (axios.isAxiosError(err) && err.response?.status === 409) {
-        // Already in watchlist - silently ignore
-        return;
-      }
+      if (axios.isAxiosError(err) && err.response?.status === 409) return;
       throw err;
     }
   }, [addMutation]);
 
-  const handleRemove = useCallback((code: string) => {
-    removeMutation.mutate(code);
-  }, [removeMutation]);
+  const handleRemove = useCallback((code: string) => { removeMutation.mutate(code); }, [removeMutation]);
 
   const watchlistItems = watchlistData?.items || [];
 
+  const topBar = <SearchBar onAdd={handleAdd} />;
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Navbar searchBar={<SearchBar onAdd={handleAdd} />} />
-
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Watchlist Header */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <h2 className="text-lg font-semibold text-gray-900">Watchlist</h2>
-            <span className="text-sm text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
-              {watchlistItems.length}
-            </span>
-          </div>
-          {latestScanDate && (
-            <span className="text-xs text-gray-400">Last scan: {latestScanDate}</span>
-          )}
+    <AppShell topBar={topBar}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <h2 style={{ fontSize: '16px', fontWeight: 510, color: 'var(--text-primary)', margin: 0 }}>自选股</h2>
+          <span style={{ fontSize: '12px', color: 'var(--text-muted)', background: 'var(--bg-tag)', padding: '2px 8px', borderRadius: '10px' }}>
+            {watchlistItems.length}
+          </span>
         </div>
-
-        {/* Stock Grid */}
-        {wLoading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-            {[...Array(5)].map((_, i) => (
-              <div key={i} className="bg-white rounded-lg border h-36 animate-pulse" />
-            ))}
-          </div>
-        ) : watchlistItems.length === 0 ? (
-          <div className="bg-white rounded-lg border p-12 text-center">
-            <svg className="w-10 h-10 text-gray-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <p className="text-gray-500 text-sm">Search stocks above to build your watchlist</p>
-            <p className="text-gray-400 text-xs mt-1">Daily 5-dimension scan results will appear here</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-            {watchlistItems.map((item) => (
-              <StockCard
-                key={item.id}
-                item={item}
-                scan={scanMap[item.stock_code]}
-                onRemove={handleRemove}
-              />
-            ))}
-          </div>
+        {latestScanDate && (
+          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>最近扫描: {latestScanDate}</span>
         )}
-      </main>
-    </div>
+      </div>
+
+      {wLoading ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px' }}>
+          {[...Array(5)].map((_, i) => (
+            <div key={i} style={{ background: 'var(--bg-card)', borderRadius: '8px', height: '140px', opacity: 0.4 }} />
+          ))}
+        </div>
+      ) : watchlistItems.length === 0 ? (
+        <div style={{
+          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+          borderRadius: '12px', padding: '64px 24px', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+            在顶部搜索栏添加股票
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', opacity: 0.6 }}>每日5维度扫描结果将在此显示</div>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px' }}>
+          {watchlistItems.map((item) => (
+            <StockCard key={item.id} item={item} scan={scanMap[item.stock_code]} onRemove={handleRemove} />
+          ))}
+        </div>
+      )}
+    </AppShell>
   );
 }

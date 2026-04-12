@@ -43,3 +43,40 @@ class FundamentalAnalysisResponse(BaseModel):
     growth: List[FundamentalItem]
     score: float
     summary: str
+
+
+class TechReportCard(BaseModel):
+    id: int
+    stock_code: str
+    stock_name: str
+    trade_date: str
+    score: float
+    score_label: str
+    ma_pattern: Optional[str] = None
+    max_severity: str
+    summary: str
+    signal_count: int
+    created_at: str
+    has_html: Optional[bool] = None
+
+
+class TechReportDetail(TechReportCard):
+    signals: List[dict]
+    indicators: dict
+
+
+class TechReportListResponse(BaseModel):
+    total: int
+    items: List[TechReportCard]
+
+
+class TechReportGenerateRequest(BaseModel):
+    stock_code: str
+    stock_name: Optional[str] = ''
+
+
+class TechReportGenerateResponse(BaseModel):
+    generated: bool
+    quota_used: int
+    quota_limit: int = 50
+    report: TechReportDetail

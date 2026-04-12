@@ -6,11 +6,9 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from api.middleware.auth import get_current_user
-from api.models.user import User
 from api.schemas.rag import (
     RAGQueryRequest,
     RAGQueryResponse,
@@ -26,7 +24,6 @@ router = APIRouter(prefix='/api/rag', tags=['rag'])
 @router.post('/query')
 async def rag_query(
     req: RAGQueryRequest,
-    current_user: User = Depends(get_current_user),
 ):
     """
     Query the RAG system with SSE streaming response.
@@ -156,7 +153,6 @@ Answer:"""
 @router.post('/query/sync', response_model=RAGQueryResponse)
 async def rag_query_sync(
     req: RAGQueryRequest,
-    current_user: User = Depends(get_current_user),
 ):
     """
     Non-streaming RAG query. Returns complete response.
@@ -213,7 +209,6 @@ async def rag_query_sync(
 @router.post('/report/generate')
 async def report_generate(
     req: ReportGenerateRequest,
-    current_user: User = Depends(get_current_user),
 ):
     """
     SSE 流式生成智能研报。
@@ -330,7 +325,6 @@ async def report_generate(
 async def report_list(
     stock_code: Optional[str] = None,
     limit: int = 20,
-    current_user: User = Depends(get_current_user),
 ):
     """列举已保存研报（按创建时间倒序）"""
     from investment_rag.report_engine.report_store import ReportStore
@@ -343,7 +337,6 @@ async def report_list(
 @router.get('/report/{report_id}')
 async def report_get(
     report_id: str,
-    current_user: User = Depends(get_current_user),
 ):
     """获取研报 Markdown 内容（Content-Type: text/markdown）"""
     from investment_rag.report_engine.report_store import ReportStore

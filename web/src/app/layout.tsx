@@ -28,7 +28,7 @@ export default function RootLayout({
       lang="zh-CN"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-gray-50 dark:bg-gray-950">
+      <body className="min-h-full flex flex-col" style={{ background: 'var(--bg-canvas)', color: 'var(--text-primary)' }}>
         <QueryProvider>{children}</QueryProvider>
       </body>
     </html>

@@ -16,15 +16,41 @@ interface OverviewCardsProps {
   isLoading: boolean;
 }
 
+const cardStyle: React.CSSProperties = {
+  background: 'var(--bg-card)',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '8px',
+  padding: '16px 20px',
+};
+
+const labelStyle: React.CSSProperties = {
+  fontSize: '11px',
+  color: 'var(--text-muted)',
+  textTransform: 'uppercase',
+  letterSpacing: '0.5px',
+  marginBottom: '8px',
+};
+
+const valueStyle: React.CSSProperties = {
+  fontSize: '28px',
+  fontWeight: 590,
+  color: 'var(--text-primary)',
+  letterSpacing: '-0.5px',
+  lineHeight: 1,
+};
+
+const subStyle: React.CSSProperties = {
+  fontSize: '12px',
+  color: 'var(--text-tertiary)',
+  marginTop: '6px',
+};
+
 export default function OverviewCards({ data, isLoading }: OverviewCardsProps) {
   if (isLoading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '24px' }}>
         {[1, 2, 3, 4].map((i) => (
-          <div key={i} className="bg-white rounded-lg shadow-sm p-6 animate-pulse">
-            <div className="h-4 bg-gray-200 rounded w-1/2 mb-4"></div>
-            <div className="h-8 bg-gray-200 rounded w-3/4"></div>
-          </div>
+          <div key={i} style={{ ...cardStyle, height: '88px', opacity: 0.4 }} />
         ))}
       </div>
     );
@@ -32,82 +58,47 @@ export default function OverviewCards({ data, isLoading }: OverviewCardsProps) {
 
   if (!data) return null;
 
-  const getRegimeColor = (regime: string) => {
-    if (regime.includes('fear')) return 'text-red-600';
-    if (regime.includes('greed')) return 'text-green-600';
-    return 'text-gray-600';
-  };
+  const regime = data.fear_index.market_regime;
+  const regimeColor =
+    regime.includes('fear') ? '#e5534b' :
+    regime.includes('greed') ? '#27a644' :
+    'var(--text-tertiary)';
 
-  const getRegimeLabel = (regime: string) => {
-    const labels: Record<string, string> = {
-      extreme_fear: '极度恐慌',
-      fear: '恐慌',
-      neutral: '中性',
-      greed: '贪婪',
-      extreme_greed: '极度贪婪',
-    };
-    return labels[regime] || regime;
+  const regimeLabel: Record<string, string> = {
+    extreme_fear:  '极度恐慌',
+    fear:          '恐慌',
+    neutral:       '中性',
+    greed:         '贪婪',
+    extreme_greed: '极度贪婪',
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-      {/* 恐慌指数卡片 */}
-      <div className="bg-white rounded-lg shadow-sm p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-gray-600 mb-1">恐慌/贪婪指数</p>
-            <p className={`text-3xl font-bold ${getRegimeColor(data.fear_index.market_regime)}`}>
-              {data.fear_index.fear_greed_score}
-            </p>
-            <p className="text-xs text-gray-500 mt-1">
-              {getRegimeLabel(data.fear_index.market_regime)}
-            </p>
-          </div>
-          <div className="text-4xl">📊</div>
-        </div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '24px' }}>
+      <div style={cardStyle}>
+        <div style={labelStyle}>恐慌/贪婪指数</div>
+        <div style={{ ...valueStyle, color: regimeColor }}>{data.fear_index.fear_greed_score}</div>
+        <div style={subStyle}>{regimeLabel[regime] ?? regime}</div>
       </div>
 
-      {/* VIX 卡片 */}
-      <div className="bg-white rounded-lg shadow-sm p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-gray-600 mb-1">VIX 恐慌指数</p>
-            <p className="text-3xl font-bold text-gray-900">
-              {data.fear_index.vix.toFixed(2)}
-            </p>
-            <p className="text-xs text-gray-500 mt-1">波动率指数</p>
-          </div>
-          <div className="text-4xl">📈</div>
-        </div>
+      <div style={cardStyle}>
+        <div style={labelStyle}>VIX 恐慌指数</div>
+        <div style={valueStyle}>{data.fear_index.vix.toFixed(2)}</div>
+        <div style={subStyle}>波动率指数</div>
       </div>
 
-      {/* US10Y 卡片 */}
-      <div className="bg-white rounded-lg shadow-sm p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-gray-600 mb-1">US10Y 收益率</p>
-            <p className="text-3xl font-bold text-gray-900">
-              {data.fear_index.us10y.toFixed(2)}%
-            </p>
-            <p className="text-xs text-gray-500 mt-1">10年期国债</p>
-          </div>
-          <div className="text-4xl">💰</div>
-        </div>
+      <div style={cardStyle}>
+        <div style={labelStyle}>US10Y 收益率</div>
+        <div style={valueStyle}>{data.fear_index.us10y.toFixed(2)}%</div>
+        <div style={subStyle}>10年期美债</div>
       </div>
 
-      {/* 事件数量卡片 */}
-      <div className="bg-white rounded-lg shadow-sm p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-gray-600 mb-1">事件信号</p>
-            <p className="text-3xl font-bold text-gray-900">{data.event_count}</p>
-            <p className="text-xs text-gray-500 mt-1">
-              <span className="text-green-600">↑{data.bullish_count}</span>
-              {' / '}
-              <span className="text-red-600">↓{data.bearish_count}</span>
-            </p>
-          </div>
-          <div className="text-4xl">🎯</div>
+      <div style={cardStyle}>
+        <div style={labelStyle}>事件信号</div>
+        <div style={valueStyle}>{data.event_count}</div>
+        <div style={subStyle}>
+          <span style={{ color: '#27a644' }}>+{data.bullish_count} 利多</span>
+          {'  '}
+          <span style={{ color: '#e5534b' }}>-{data.bearish_count} 利空</span>
         </div>
       </div>
     </div>

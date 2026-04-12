@@ -34,7 +34,7 @@ class SignalDetector:
         detect signal for a single day
 
         Args:
-            curr: {'log_bias': float}
+            curr: {'log_bias': float, 'trade_date': date}
             prev: {'log_bias': float, 'signal_state': str,
                    'last_breakout_date': date|None, 'last_stall_date': date|None}
 
@@ -42,15 +42,21 @@ class SignalDetector:
             dict with signal_state, last_breakout_date, last_stall_date, prev_state
         """
         lb = curr['log_bias']
+        # use the current row's date, not date.today(), to correctly replay history
+        current_date = curr.get('trade_date') or date.today()
+        if not isinstance(current_date, date):
+            current_date = pd.to_datetime(current_date).date()
+
         prev_state = prev.get('signal_state', 'normal')
         last_stall_date = prev.get('last_stall_date')
         last_breakout_date = prev.get('last_breakout_date')
-        today = date.today()
 
         # check cooldown: if stall happened within cooldown_days, suppress breakout
         in_cooldown = False
         if last_stall_date is not None:
-            if (today - last_stall_date).days < self.cooldown_days:
+            if not isinstance(last_stall_date, date):
+                last_stall_date = pd.to_datetime(last_stall_date).date()
+            if (current_date - last_stall_date).days < self.cooldown_days:
                 in_cooldown = True
 
         # determine state by priority: overheat > stall > breakout > pullback > normal
@@ -58,13 +64,13 @@ class SignalDetector:
             state = 'overheat'
         elif lb < self.stall_threshold:
             state = 'stall'
-            last_stall_date = today
+            last_stall_date = current_date
         elif lb >= self.breakout_threshold:
             if in_cooldown:
                 state = 'normal'
             else:
                 state = 'breakout'
-                last_breakout_date = today
+                last_breakout_date = current_date
         elif lb >= 0:
             # pullback: log_bias in [0, breakout_threshold) AND recently was above breakout
             if prev_state in ('breakout', 'pullback', 'overheat'):
@@ -99,7 +105,10 @@ class SignalDetector:
         out['last_stall_date'] = None
 
         for i in range(len(out)):
-            curr = {'log_bias': out['log_bias'].iloc[i]}
+            curr = {
+                'log_bias': out['log_bias'].iloc[i],
+                'trade_date': out['trade_date'].iloc[i] if 'trade_date' in out.columns else date.today(),
+            }
             prev = {
                 'log_bias': out['log_bias'].iloc[i - 1] if i > 0 else 0.0,
                 'signal_state': out['signal_state'].iloc[i - 1] if i > 0 else 'normal',

@@ -14,6 +14,7 @@
     "axios": "^1.14.0",
     "jwt-decode": "^4.0.0",
     "lightweight-charts": "^5.1.0",
+    "marked": "^18.0.0",
     "next": "16.2.2",
     "react": "19.2.4",
     "react-dom": "19.2.4",

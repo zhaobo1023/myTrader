@@ -178,3 +178,94 @@ def fetch_north_holding_incremental(dry_run: bool = False, envs: str = "local,on
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     mod.main()
+
+
+# ---------------------------------------------------------------------------
+# Sentiment monitoring adapters
+# ---------------------------------------------------------------------------
+
+def run_sentiment_fear_index(dry_run: bool = False, env: str = "online"):
+    """Fetch VIX/OVX/GVZ/US10Y and persist to trade_fear_index."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_sentiment_fear_index: would fetch VIX/OVX/GVZ/US10Y -> trade_fear_index (env=%s)", env)
+        return
+    from data_analyst.sentiment.fear_index import FearIndexService
+    from data_analyst.sentiment.storage import SentimentStorage
+    result = FearIndexService().get_fear_index()
+    logger.info("Fear index: VIX=%.2f score=%d regime=%s", result.vix, result.fear_greed_score, result.market_regime)
+    if result.risk_alert:
+        logger.warning("[WARN] %s", result.risk_alert)
+    ok = SentimentStorage(env=env).save_fear_index(result)
+    if not ok:
+        raise RuntimeError("save_fear_index returned False")
+    logger.info("[OK] fear index saved (env=%s)", env)
+
+
+def run_sentiment_news(dry_run: bool = False, env: str = "online", stock_codes: str = "", days: int = 1):
+    """Fetch news for stocks, run LLM sentiment, persist to trade_news_sentiment."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_sentiment_news: stocks=%s days=%d -> trade_news_sentiment (env=%s)", stock_codes, days, env)
+        return
+    if not stock_codes:
+        logger.warning("[WARN] run_sentiment_news: stock_codes empty, skip")
+        return
+    from data_analyst.sentiment.news_fetcher import NewsFetcher
+    from data_analyst.sentiment.sentiment_analyzer import SentimentAnalyzer
+    from data_analyst.sentiment.storage import SentimentStorage
+    fetcher = NewsFetcher()
+    analyzer = SentimentAnalyzer()
+    storage = SentimentStorage(env=env)
+    total = 0
+    for code in [c.strip() for c in stock_codes.split(",") if c.strip()]:
+        try:
+            news_list = fetcher.fetch_stock_news(code, days=days)
+            if not news_list:
+                continue
+            results = analyzer.analyze_batch(news_list)
+            if storage.save_news_sentiment(results):
+                total += len(results)
+                logger.info("[OK] saved %d records for %s", len(results), code)
+        except Exception as e:
+            logger.error("[RED] news sentiment failed for %s: %s", code, e)
+    logger.info("[OK] run_sentiment_news done: %d total saved (env=%s)", total, env)
+
+
+def run_sentiment_events(dry_run: bool = False, env: str = "online",
+                         keywords: str = "资产重组,回购,业绩预增,业绩预减,减持,违规,退市", days: int = 1):
+    """Detect keyword-based events from CCTV news and persist to trade_event_signal."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_sentiment_events: keywords=%s days=%d -> trade_event_signal (env=%s)", keywords, days, env)
+        return
+    from data_analyst.sentiment.news_fetcher import NewsFetcher
+    from data_analyst.sentiment.event_detector import EventDetector
+    from data_analyst.sentiment.storage import SentimentStorage
+    kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
+    news_list = NewsFetcher().fetch_keyword_news(kw_list, days=days)
+    if not news_list:
+        logger.info("[OK] no news found for keywords, nothing saved")
+        return
+    events = EventDetector().detect_events(news_list)
+    logger.info("detected %d event signals from %d news items", len(events), len(news_list))
+    if events:
+        ok = SentimentStorage(env=env).save_event_signals(events)
+        if not ok:
+            raise RuntimeError("save_event_signals returned False")
+    logger.info("[OK] run_sentiment_events done (env=%s)", env)
+
+
+def run_sentiment_polymarket(dry_run: bool = False, env: str = "online",
+                              keywords: str = "tariff,fed,election,china,oil", min_volume: float = 1000000.0):
+    """Fetch Polymarket smart-money signals and persist to trade_polymarket_snapshot."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_sentiment_polymarket: keywords=%s min_volume=%.0f -> trade_polymarket_snapshot (env=%s)", keywords, min_volume, env)
+        return
+    from data_analyst.sentiment.polymarket import PolymarketService
+    from data_analyst.sentiment.storage import SentimentStorage
+    kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
+    events = PolymarketService().detect_smart_money_signals(kw_list, min_volume=min_volume)
+    logger.info("found %d Polymarket smart money signals", len(events))
+    if events:
+        ok = SentimentStorage(env=env).save_polymarket_snapshot(events)
+        if not ok:
+            raise RuntimeError("save_polymarket_snapshot returned False")
+    logger.info("[OK] run_sentiment_polymarket done (env=%s)", env)

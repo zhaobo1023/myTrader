@@ -16,8 +16,11 @@ from api.schemas.strategy import (
     BacktestStatusResponse,
     StrategyResponse,
     StrategyCreateRequest,
+    PresetStrategyCard,
+    PresetRunDetail,
 )
 from api.services import backtest_service
+from api.services import preset_strategy_service
 
 logger = logging.getLogger('myTrader.api')
 router = APIRouter(prefix='/api/strategy', tags=['strategy'])
@@ -118,3 +121,32 @@ async def create_strategy(
         params=req.params,
     )
     return {'id': strategy_id, 'message': 'Strategy created'}
+
+
+# ---------------------------------------------------------------------------
+# Preset strategy endpoints
+# ---------------------------------------------------------------------------
+
+@router.get('/preset', response_model=list[PresetStrategyCard])
+async def list_preset_strategies():
+    """List all preset strategies with today's run and recent runs."""
+    try:
+        return preset_strategy_service.list_preset_strategies()
+    except Exception as e:
+        logger.error('[PRESET] list failed: %s', e)
+        raise HTTPException(status_code=500, detail=f'Failed to list preset strategies: {str(e)}')
+
+
+@router.post('/preset/{key}/trigger')
+async def trigger_preset_strategy(key: str):
+    """Trigger today's run for a preset strategy."""
+    return preset_strategy_service.trigger_strategy_run(key)
+
+
+@router.get('/preset/{key}/runs/{run_id}', response_model=PresetRunDetail)
+async def get_preset_run_detail(key: str, run_id: int):
+    """Get full run detail including signals list."""
+    detail = preset_strategy_service.get_run_detail(run_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail=f'Run {run_id} not found')
+    return detail

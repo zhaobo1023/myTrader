@@ -1,376 +1,588 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import Navbar from '@/components/layout/Navbar';
+import React, { useState } from 'react';
+import AppShell from '@/components/layout/AppShell';
 import apiClient from '@/lib/api-client';
-import { useAuthStore } from '@/lib/store';
-import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useBacktestSSE } from '@/hooks/useBacktestSSE';
 
-interface Strategy {
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface StrategyWarning {
+  type: 'danger' | 'warning' | 'info';
+  title: string;
+  body: string;
+}
+
+interface PresetStrategyMeta {
+  key: string;
+  name: string;
+  description: string;
+  params_desc: string;
+  warnings: StrategyWarning[];
+}
+
+interface PresetRunSummary {
   id: number;
-  name: string;
-  description: string | null;
-  params: Record<string, unknown> | null;
-  is_active: boolean;
-  created_at: string;
-}
-
-interface BacktestJob {
-  job_id: number;
+  run_date: string;
   status: string;
-  progress: number;
-  stage: string | null;
-  total_return: number | null;
-  annual_return: number | null;
-  max_drawdown: number | null;
-  sharpe_ratio: number | null;
-  ic: number | null;
-  icir: number | null;
-  error_msg: string | null;
-  created_at: string;
+  signal_count: number;
+  momentum_count: number;
+  reversal_count: number;
+  market_status: string;
+  market_message: string;
+  triggered_at: string;
   finished_at: string | null;
+  error_msg: string | null;
 }
 
-interface BacktestForm {
-  name: string;
-  strategy_type: string;
-  start_date: string;
-  end_date: string;
-  initial_cash: number;
-  commission: number;
-  position_pct: number;
+interface SignalRow {
+  stock_code: string;
+  stock_name: string;
+  signal_type: string;
+  // momentum_reversal fields
+  rps?: number | null;
+  close?: number | null;
+  ma20?: number | null;
+  ma250?: number | null;
+  volume_ratio?: number | null;
+  // microcap fields
+  total_mv?: number | null;
+  circ_mv?: number | null;
+  pe_ttm?: number | null;
+  pb?: number | null;
 }
 
-const defaultForm: BacktestForm = {
-  name: '',
-  strategy_type: 'xgboost',
-  start_date: '2024-01-01',
-  end_date: '2025-12-31',
-  initial_cash: 1000000,
-  commission: 0.0002,
-  position_pct: 95,
+interface PresetRunDetail extends PresetRunSummary {
+  signals: SignalRow[];
+}
+
+interface PresetStrategyCard {
+  meta: PresetStrategyMeta;
+  today_run: PresetRunSummary | null;
+  recent_runs: PresetRunSummary[];
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const TIMEOUT_HOURS = 3;
+
+function isTimedOut(run: PresetRunSummary): boolean {
+  if (run.status !== 'failed' && run.status !== 'running') return false;
+  const triggered = new Date(run.triggered_at).getTime();
+  return Date.now() - triggered > TIMEOUT_HOURS * 3600 * 1000;
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  done: '已完成', failed: '失败', running: '执行中', pending: '等待中',
 };
 
-export default function StrategyPage() {
-  const router = useRouter();
-  const { user } = useAuthStore();
+function statusBadge(status: string): React.CSSProperties {
+  if (status === 'done')    return { color: '#27a644', background: 'rgba(39,166,68,0.1)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 510 };
+  if (status === 'failed')  return { color: '#e5534b', background: 'rgba(229,83,75,0.1)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 510 };
+  if (status === 'running') return { color: 'var(--accent)', background: 'rgba(113,112,255,0.1)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 510 };
+  return { color: 'var(--text-muted)', background: 'var(--bg-tag)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 510 };
+}
+
+function warningBannerStyle(type: string): { container: React.CSSProperties; title: React.CSSProperties; body: React.CSSProperties } {
+  if (type === 'danger') return {
+    container: { background: 'rgba(229,83,75,0.07)', border: '1px solid rgba(229,83,75,0.25)', borderRadius: '7px', padding: '10px 14px', marginBottom: '8px' },
+    title: { color: '#e5534b', fontWeight: 600, fontSize: '12px', marginBottom: '3px' },
+    body: { color: 'rgba(229,83,75,0.85)', fontSize: '12px', lineHeight: '1.5' },
+  };
+  if (type === 'warning') return {
+    container: { background: 'rgba(210,161,28,0.08)', border: '1px solid rgba(210,161,28,0.28)', borderRadius: '7px', padding: '10px 14px', marginBottom: '8px' },
+    title: { color: '#c79a14', fontWeight: 600, fontSize: '12px', marginBottom: '3px' },
+    body: { color: 'rgba(182,142,20,0.9)', fontSize: '12px', lineHeight: '1.5' },
+  };
+  return {
+    container: { background: 'rgba(113,112,255,0.06)', border: '1px solid rgba(113,112,255,0.2)', borderRadius: '7px', padding: '10px 14px', marginBottom: '8px' },
+    title: { color: 'var(--accent)', fontWeight: 600, fontSize: '12px', marginBottom: '3px' },
+    body: { color: 'rgba(113,112,255,0.8)', fontSize: '12px', lineHeight: '1.5' },
+  };
+}
+
+function marketBadge(ms: string): React.CSSProperties {
+  if (ms === 'bullish') return { color: '#27a644', background: 'rgba(39,166,68,0.1)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px' };
+  if (ms === 'bearish') return { color: '#e5534b', background: 'rgba(229,83,75,0.1)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px' };
+  if (ms === 'neutral') return { color: '#d2a11c', background: 'rgba(210,161,28,0.1)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px' };
+  return { color: 'var(--text-muted)', padding: '2px 8px', fontSize: '11px' };
+}
+
+function fmt(v: number | null | undefined, digits = 2): string {
+  if (v == null) return '--';
+  return v.toFixed(digits);
+}
+
+// ---------------------------------------------------------------------------
+// Strategy Card Component
+// ---------------------------------------------------------------------------
+
+function StrategyCard({ card }: { card: PresetStrategyCard }) {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'strategies' | 'backtest'>('backtest');
-  const [form, setForm] = useState<BacktestForm>(defaultForm);
-  const [activeJobId, setActiveJobId] = useState<number | null>(null);
+  const [expandedRunId, setExpandedRunId] = useState<number | null>(null);
+  const [runDetail, setRunDetail] = useState<PresetRunDetail | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [warningsExpanded, setWarningsExpanded] = useState(false);
 
-  useEffect(() => {
-    if (!user) router.push('/login');
-  }, [user, router]);
+  const today = new Date().toISOString().split('T')[0];
+  const todayRun = card.today_run;
 
-  const { status: backtestStatus, isStreaming } = useBacktestSSE(activeJobId);
-
-  const { data: strategies } = useQuery<Strategy[]>({
-    queryKey: ['strategies'],
-    queryFn: () => apiClient.get('/api/strategy/strategies').then((r) => r.data),
-    enabled: !!user && activeTab === 'strategies',
-  });
-
-  const { data: backtests } = useQuery<{ count: number; data: BacktestJob[] }>({
-    queryKey: ['backtests'],
-    queryFn: () => apiClient.get('/api/strategy/backtests').then((r) => r.data),
-    enabled: !!user,
-  });
-
-  const submitBacktest = useMutation({
-    mutationFn: (params: BacktestForm) =>
-      apiClient.post('/api/strategy/backtest', params).then((r) => r.data),
-    onSuccess: (data) => {
-      setActiveJobId(data.job_id);
-      queryClient.invalidateQueries({ queryKey: ['backtests'] });
-    },
-  });
-
-  const createStrategy = useMutation({
-    mutationFn: (data: { name: string; description: string }) =>
-      apiClient.post('/api/strategy/strategies', data).then((r) => r.data),
+  const triggerMutation = useMutation({
+    mutationFn: () =>
+      apiClient.post(`/api/strategy/preset/${card.meta.key}/trigger`).then((r) => r.data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['strategies'] });
+      queryClient.invalidateQueries({ queryKey: ['preset-strategies'] });
+    },
+    onError: (err: { response?: { data?: { detail?: string } } }) => {
+      const msg = err?.response?.data?.detail || '触发失败';
+      alert(msg);
     },
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    submitBacktest.mutate(form);
-  };
+  async function toggleExpand(runId: number) {
+    if (expandedRunId === runId) {
+      setExpandedRunId(null);
+      setRunDetail(null);
+      return;
+    }
+    setExpandedRunId(runId);
+    setLoadingDetail(true);
+    try {
+      const res = await apiClient.get(`/api/strategy/preset/${card.meta.key}/runs/${runId}`);
+      setRunDetail(res.data);
+    } catch {
+      setRunDetail(null);
+    } finally {
+      setLoadingDetail(false);
+    }
+  }
 
-  const statusColor = (s: string) => {
-    if (s === 'done') return 'text-green-600 bg-green-50';
-    if (s === 'failed') return 'text-red-600 bg-red-50';
-    if (s === 'running') return 'text-blue-600 bg-blue-50';
-    return 'text-gray-600 bg-gray-50';
-  };
+  // Determine trigger button state
+  function renderTriggerButton() {
+    const isPending = triggerMutation.isPending;
 
-  const pctColor = (v: number | null | undefined) => {
-    if (v == null) return 'text-gray-400';
-    if (v >= 0) return 'text-green-600';
-    return 'text-red-600';
-  };
+    if (isPending) {
+      return (
+        <button disabled style={btnStyle('gray')}>
+          提交中...
+        </button>
+      );
+    }
+
+    if (!todayRun) {
+      return (
+        <button onClick={() => triggerMutation.mutate()} style={btnStyle('accent')}>
+          触发执行
+        </button>
+      );
+    }
+
+    const { status } = todayRun;
+
+    if (status === 'done') {
+      return (
+        <button disabled style={btnStyle('green')}>
+          今日已完成
+        </button>
+      );
+    }
+
+    if (status === 'pending' || status === 'running') {
+      return (
+        <button disabled style={btnStyle('gray')}>
+          <span style={{ display: 'inline-block', animation: 'spin 1s linear infinite', marginRight: '5px' }}>&#9696;</span>
+          执行中...
+        </button>
+      );
+    }
+
+    if (status === 'failed') {
+      return (
+        <button onClick={() => triggerMutation.mutate()} style={btnStyle('orange')}>
+          重新触发
+        </button>
+      );
+    }
+
+    return null;
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Navbar />
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Strategy & Backtest</h1>
-          <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-            <button
-              onClick={() => setActiveTab('backtest')}
-              className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-                activeTab === 'backtest' ? 'bg-white shadow-sm font-medium' : 'text-gray-600'
-              }`}
-            >
-              Backtest
-            </button>
-            <button
-              onClick={() => setActiveTab('strategies')}
-              className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-                activeTab === 'strategies' ? 'bg-white shadow-sm font-medium' : 'text-gray-600'
-              }`}
-            >
-              Strategies
-            </button>
+    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px', marginBottom: '20px', overflow: 'hidden' }}>
+      {/* Card Header */}
+      <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: 590, color: 'var(--text-primary)', margin: 0 }}>
+                {card.meta.name}
+              </h2>
+              {todayRun && (
+                <span style={statusBadge(todayRun.status)}>{STATUS_LABEL[todayRun.status] ?? todayRun.status}</span>
+              )}
+            </div>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: '0 0 4px' }}>
+              {card.meta.description}
+            </p>
+            <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+              参数：{card.meta.params_desc}
+            </p>
+          </div>
+          <div style={{ marginLeft: '16px', flexShrink: 0 }}>
+            {renderTriggerButton()}
           </div>
         </div>
 
-        {activeTab === 'backtest' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Backtest Form */}
-            <div className="bg-white rounded-lg border p-4">
-              <h2 className="text-lg font-medium mb-4">New Backtest</h2>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-                  <input
-                    type="text"
-                    required
-                    value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    placeholder="My Backtest"
-                  />
+        {/* Warning banners — first danger shown inline, rest behind toggle */}
+        {card.meta.warnings && card.meta.warnings.length > 0 && (() => {
+          const first = card.meta.warnings[0];
+          const rest = card.meta.warnings.slice(1);
+          const s0 = warningBannerStyle(first.type);
+          return (
+            <div style={{ marginTop: '14px' }}>
+              {/* Always-visible first warning (body collapsed by default) */}
+              <div style={{ ...s0.container, marginBottom: rest.length > 0 ? '6px' : '0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={s0.title}>{first.title}</div>
+                  {rest.length > 0 && (
+                    <button
+                      onClick={() => setWarningsExpanded((v) => !v)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', color: 'var(--text-muted)', padding: '0 2px', flexShrink: 0 }}
+                    >
+                      {warningsExpanded ? '收起' : '查看更多风险提示'}
+                    </button>
+                  )}
                 </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
-                    <input
-                      type="date"
-                      required
-                      value={form.start_date}
-                      onChange={(e) => setForm({ ...form, start_date: e.target.value })}
-                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
-                    <input
-                      type="date"
-                      required
-                      value={form.end_date}
-                      onChange={(e) => setForm({ ...form, end_date: e.target.value })}
-                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Initial Cash</label>
-                    <input
-                      type="number"
-                      value={form.initial_cash}
-                      onChange={(e) => setForm({ ...form, initial_cash: Number(e.target.value) })}
-                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Commission</label>
-                    <input
-                      type="number"
-                      step="0.0001"
-                      value={form.commission}
-                      onChange={(e) => setForm({ ...form, commission: Number(e.target.value) })}
-                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Position %</label>
-                    <input
-                      type="number"
-                      value={form.position_pct}
-                      onChange={(e) => setForm({ ...form, position_pct: Number(e.target.value) })}
-                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={submitBacktest.isPending || isStreaming}
-                  className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:bg-blue-300"
-                >
-                  {submitBacktest.isPending ? 'Submitting...' : isStreaming ? 'Running...' : 'Run Backtest'}
-                </button>
-              </form>
-
-              {/* Live Progress */}
-              {backtestStatus && isStreaming && (
-                <div className="mt-4 p-3 bg-gray-50 rounded-md">
-                  <div className="flex justify-between text-sm mb-2">
-                    <span className="text-gray-600">{backtestStatus.stage || 'Processing...'}</span>
-                    <span className="font-medium">{backtestStatus.progress}%</span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div
-                      className="bg-blue-600 h-2 rounded-full transition-all duration-500"
-                      style={{ width: `${backtestStatus.progress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Result */}
-              {backtestStatus && backtestStatus.status === 'done' && (
-                <div className="mt-4 p-4 bg-green-50 rounded-md border border-green-200">
-                  <h3 className="text-sm font-medium text-green-800 mb-3">Backtest Complete</h3>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div>
-                      <span className="text-gray-500">Total Return</span>
-                      <p className={`font-medium ${pctColor(backtestStatus.total_return)}`}>
-                        {backtestStatus.total_return != null ? `${backtestStatus.total_return.toFixed(2)}%` : '--'}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-gray-500">Annual Return</span>
-                      <p className={`font-medium ${pctColor(backtestStatus.annual_return)}`}>
-                        {backtestStatus.annual_return != null ? `${backtestStatus.annual_return.toFixed(2)}%` : '--'}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-gray-500">Max Drawdown</span>
-                      <p className="font-medium text-red-600">
-                        {backtestStatus.max_drawdown != null ? `${backtestStatus.max_drawdown.toFixed(2)}%` : '--'}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-gray-500">Sharpe Ratio</span>
-                      <p className="font-medium">
-                        {backtestStatus.sharpe_ratio != null ? backtestStatus.sharpe_ratio.toFixed(2) : '--'}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-gray-500">IC</span>
-                      <p className="font-medium">
-                        {backtestStatus.ic != null ? backtestStatus.ic.toFixed(4) : '--'}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-gray-500">ICIR</span>
-                      <p className="font-medium">
-                        {backtestStatus.icir != null ? backtestStatus.icir.toFixed(4) : '--'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {backtestStatus && backtestStatus.status === 'failed' && (
-                <div className="mt-4 p-4 bg-red-50 rounded-md border border-red-200">
-                  <h3 className="text-sm font-medium text-red-800">Backtest Failed</h3>
-                  <p className="text-sm text-red-600 mt-1">{backtestStatus.error_msg || 'Unknown error'}</p>
-                </div>
-              )}
-            </div>
-
-            {/* Backtest History */}
-            <div className="bg-white rounded-lg border p-4">
-              <h2 className="text-lg font-medium mb-4">History</h2>
-              {backtests && backtests.data.length > 0 ? (
-                <div className="max-h-[600px] overflow-y-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-gray-50">
-                        <th className="text-left px-3 py-2 font-medium text-gray-500">Job</th>
-                        <th className="text-left px-3 py-2 font-medium text-gray-500">Status</th>
-                        <th className="text-right px-3 py-2 font-medium text-gray-500">Return</th>
-                        <th className="text-right px-3 py-2 font-medium text-gray-500">MaxDD</th>
-                        <th className="text-right px-3 py-2 font-medium text-gray-500">Sharpe</th>
-                        <th className="text-right px-3 py-2 font-medium text-gray-500">IC</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {backtests.data.map((job) => (
-                        <tr
-                          key={job.job_id}
-                          className="border-b last:border-0 hover:bg-gray-50 cursor-pointer"
-                          onClick={() => setActiveJobId(job.job_id)}
-                        >
-                          <td className="px-3 py-2 font-mono text-xs">{job.job_id}</td>
-                          <td className="px-3 py-2">
-                            <span className={`text-xs px-2 py-0.5 rounded-full ${statusColor(job.status)}`}>
-                              {job.status}
-                            </span>
-                          </td>
-                          <td className={`px-3 py-2 text-right ${pctColor(job.total_return)}`}>
-                            {job.total_return != null ? `${job.total_return.toFixed(2)}%` : '--'}
-                          </td>
-                          <td className="px-3 py-2 text-right text-red-600">
-                            {job.max_drawdown != null ? `${job.max_drawdown.toFixed(2)}%` : '--'}
-                          </td>
-                          <td className="px-3 py-2 text-right">
-                            {job.sharpe_ratio != null ? job.sharpe_ratio.toFixed(2) : '--'}
-                          </td>
-                          <td className="px-3 py-2 text-right">
-                            {job.ic != null ? job.ic.toFixed(4) : '--'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="py-8 text-center text-gray-400">No backtest history</div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'strategies' && (
-          <div className="bg-white rounded-lg border p-4">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-medium">My Strategies</h2>
-            </div>
-            {strategies && strategies.length > 0 ? (
-              <div className="space-y-3">
-                {strategies.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between px-4 py-3 border rounded-lg hover:bg-gray-50">
-                    <div>
-                      <p className="font-medium text-gray-900">{s.name}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">{s.description || 'No description'}</p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${s.is_active ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
-                        {s.is_active ? 'Active' : 'Inactive'}
-                      </span>
-                      <span className="text-xs text-gray-400">{s.created_at.split('T')[0]}</span>
-                    </div>
-                  </div>
-                ))}
+                <div style={s0.body}>{first.body}</div>
               </div>
-            ) : (
-              <div className="py-8 text-center text-gray-400">No strategies yet</div>
+
+              {/* Collapsible rest */}
+              {warningsExpanded && rest.map((w, i) => {
+                const s = warningBannerStyle(w.type);
+                return (
+                  <div key={i} style={{ ...s.container, marginBottom: i === rest.length - 1 ? '0' : '6px' }}>
+                    <div style={s.title}>{w.title}</div>
+                    <div style={s.body}>{w.body}</div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+
+        {/* Today run error */}
+        {todayRun?.status === 'failed' && (
+          <div style={{ marginTop: '10px', padding: '10px 14px', background: 'rgba(229,83,75,0.06)', border: '1px solid rgba(229,83,75,0.2)', borderRadius: '6px', fontSize: '12px' }}>
+            <div style={{ color: '#e5534b', marginBottom: todayRun.error_msg ? '6px' : '0' }}>
+              执行失败，可点击「重新触发」重试。
+              若问题持续，请联系管理员：
+              <a href="mailto:zhaobo_1023@163.com" style={{ color: '#e5534b', textDecoration: 'underline', marginLeft: '4px' }}>
+                zhaobo_1023@163.com
+              </a>
+            </div>
+            {todayRun.error_msg && (
+              <div style={{ color: 'rgba(229,83,75,0.7)', fontFamily: 'var(--font-geist-mono)', fontSize: '11px', wordBreak: 'break-all', borderTop: '1px solid rgba(229,83,75,0.15)', paddingTop: '6px', marginTop: '2px' }}>
+                {todayRun.error_msg}
+              </div>
             )}
           </div>
         )}
-      </main>
+      </div>
+
+      {/* Recent runs table */}
+      {card.recent_runs.length > 0 && (
+        <div style={{ padding: '0' }}>
+          <div style={{ padding: '12px 20px 8px', fontSize: '12px', color: 'var(--text-muted)', fontWeight: 510 }}>
+            最近执行记录
+          </div>
+          <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--border-subtle)', borderTop: '1px solid var(--border-subtle)' }}>
+                {(card.meta.key === 'microcap_pure_mv'
+                  ? ['日期', '状态', '候选数', '交易日', '操作']
+                  : ['日期', '状态', '总信号', '动量', '反转', '大盘', '操作']
+                ).map((h) => (
+                  <th
+                    key={h}
+                    style={{
+                      padding: '7px 12px',
+                      textAlign: h === '操作' ? 'right' : 'left',
+                      color: 'var(--text-muted)',
+                      fontWeight: 400,
+                      background: 'var(--bg-card-hover)',
+                    }}
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {card.recent_runs.map((run) => (
+                <React.Fragment key={run.id}>
+                  <tr
+                    style={{
+                      borderBottom: expandedRunId === run.id ? 'none' : '1px solid var(--border-subtle)',
+                      background: expandedRunId === run.id ? 'var(--bg-card-hover)' : 'transparent',
+                      transition: 'background 0.12s',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (expandedRunId !== run.id)
+                        (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-card-hover)';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (expandedRunId !== run.id)
+                        (e.currentTarget as HTMLTableRowElement).style.background = 'transparent';
+                    }}
+                  >
+                    <td style={{ padding: '8px 12px', color: run.run_date === today ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: run.run_date === today ? 510 : 400 }}>
+                      {run.run_date}
+                      {run.run_date === today && <span style={{ marginLeft: '5px', fontSize: '10px', color: 'var(--accent)' }}>今日</span>}
+                    </td>
+                    <td style={{ padding: '8px 12px' }}>
+                      <span style={statusBadge(run.status)}>{STATUS_LABEL[run.status] ?? run.status}</span>
+                    </td>
+                    <td style={{ padding: '8px 12px', color: 'var(--text-primary)', fontWeight: 510 }}>
+                      {run.status === 'done' ? run.signal_count : '--'}
+                    </td>
+                    {card.meta.key === 'microcap_pure_mv' ? (
+                      <td style={{ padding: '8px 12px', color: 'var(--text-secondary)', fontSize: '11px' }}>
+                        {run.market_message ? run.market_message.replace('trade_date=', '') : '--'}
+                      </td>
+                    ) : (
+                      <>
+                        <td style={{ padding: '8px 12px', color: 'var(--text-secondary)' }}>
+                          {run.status === 'done' ? run.momentum_count : '--'}
+                        </td>
+                        <td style={{ padding: '8px 12px', color: 'var(--text-secondary)' }}>
+                          {run.status === 'done' ? run.reversal_count : '--'}
+                        </td>
+                        <td style={{ padding: '8px 12px' }}>
+                          {run.market_status ? (
+                            <span style={marketBadge(run.market_status)}>{run.market_status}</span>
+                          ) : '--'}
+                        </td>
+                      </>
+                    )}
+                    <td style={{ padding: '8px 12px', textAlign: 'right' }}>
+                      {run.status === 'done' && (
+                        <button
+                          onClick={() => toggleExpand(run.id)}
+                          style={{
+                            fontSize: '11px',
+                            color: expandedRunId === run.id ? 'var(--text-muted)' : 'var(--accent)',
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                          }}
+                        >
+                          {expandedRunId === run.id ? '收起' : '展开'}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+
+                  {/* Expanded signals detail */}
+                  {expandedRunId === run.id && (
+                    <tr key={`detail-${run.id}`}>
+                      <td colSpan={card.meta.key === 'microcap_pure_mv' ? 5 : 7} style={{ padding: '0', borderBottom: '1px solid var(--border-subtle)' }}>
+                        <div style={{ padding: '12px 20px', background: 'var(--bg-elevated)' }}>
+                          {loadingDetail && (
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '10px 0' }}>加载中...</div>
+                          )}
+                          {!loadingDetail && runDetail && runDetail.id === run.id && (
+                            <>
+                              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                                {card.meta.key === 'microcap_pure_mv'
+                                  ? `持仓候选（${runDetail.signals.length} 只）· ${runDetail.market_message || ''}`
+                                  : <>信号明细（{runDetail.signals.length} 只）· 大盘：<span style={marketBadge(runDetail.market_status)}>{runDetail.market_status || '--'}</span>
+                                    {runDetail.market_message && <span style={{ marginLeft: '8px', color: 'var(--text-tertiary)' }}>{runDetail.market_message}</span>}
+                                  </>
+                                }
+                              </div>
+                              {runDetail.signals.length === 0 ? (
+                                <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>无信号</div>
+                              ) : card.meta.key === 'microcap_pure_mv' ? (
+                                <div style={{ overflowX: 'auto' }}>
+                                  <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
+                                    <thead>
+                                      <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                                        {['#', '代码', '名称', '总市值(亿)', '流通市值(亿)', 'PE-TTM', 'PB'].map((h) => (
+                                          <th key={h} style={{ padding: '5px 10px', textAlign: h === '代码' || h === '名称' ? 'left' : 'right', color: 'var(--text-muted)', fontWeight: 400 }}>
+                                            {h}
+                                          </th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {runDetail.signals.map((sig, idx) => (
+                                        <tr
+                                          key={`${sig.stock_code}-${idx}`}
+                                          style={{ borderBottom: '1px solid var(--border-subtle)' }}
+                                          onMouseEnter={(e) => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-card)'; }}
+                                          onMouseLeave={(e) => { (e.currentTarget as HTMLTableRowElement).style.background = 'transparent'; }}
+                                        >
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-muted)', fontWeight: 400 }}>{idx + 1}</td>
+                                          <td style={{ padding: '5px 10px', fontFamily: 'var(--font-geist-mono)', color: 'var(--text-secondary)' }}>{sig.stock_code}</td>
+                                          <td style={{ padding: '5px 10px', color: 'var(--text-primary)' }}>{sig.stock_name || '--'}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-primary)', fontWeight: 510 }}>
+                                            {sig.total_mv != null ? sig.total_mv.toFixed(2) : '--'}
+                                          </td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>
+                                            {sig.circ_mv != null ? sig.circ_mv.toFixed(2) : '--'}
+                                          </td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.pe_ttm, 1)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.pb, 2)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              ) : (
+                                <div style={{ overflowX: 'auto' }}>
+                                  <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
+                                    <thead>
+                                      <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                                        {['代码', '名称', '类型', 'RPS', '收盘', 'MA20', 'MA250', '量比'].map((h) => (
+                                          <th key={h} style={{ padding: '5px 10px', textAlign: h === '代码' || h === '名称' || h === '类型' ? 'left' : 'right', color: 'var(--text-muted)', fontWeight: 400 }}>
+                                            {h}
+                                          </th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {runDetail.signals.map((sig, idx) => (
+                                        <tr
+                                          key={`${sig.stock_code}-${idx}`}
+                                          style={{ borderBottom: '1px solid var(--border-subtle)' }}
+                                          onMouseEnter={(e) => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-card)'; }}
+                                          onMouseLeave={(e) => { (e.currentTarget as HTMLTableRowElement).style.background = 'transparent'; }}
+                                        >
+                                          <td style={{ padding: '5px 10px', fontFamily: 'var(--font-geist-mono)', color: 'var(--text-secondary)' }}>{sig.stock_code}</td>
+                                          <td style={{ padding: '5px 10px', color: 'var(--text-primary)' }}>{sig.stock_name || '--'}</td>
+                                          <td style={{ padding: '5px 10px' }}>
+                                            <span style={{
+                                              fontSize: '10px',
+                                              padding: '1px 6px',
+                                              borderRadius: '3px',
+                                              background: sig.signal_type === 'momentum' ? 'rgba(39,166,68,0.12)' : 'rgba(113,112,255,0.12)',
+                                              color: sig.signal_type === 'momentum' ? '#27a644' : 'var(--accent)',
+                                            }}>
+                                              {sig.signal_type === 'momentum' ? '动量' : '反转'}
+                                            </span>
+                                          </td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.rps ?? null, 1)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-primary)', fontWeight: 510 }}>{fmt(sig.close ?? null)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.ma20 ?? null)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.ma250 ?? null)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: (sig.volume_ratio ?? 0) > 1.5 ? '#27a644' : 'var(--text-secondary)' }}>{fmt(sig.volume_ratio ?? null)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {card.recent_runs.length === 0 && (
+        <div style={{ padding: '24px 20px', fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center' }}>
+          暂无执行记录，点击「触发执行」开始首次运行
+        </div>
+      )}
     </div>
+  );
+}
+
+// Button style helper
+function btnStyle(variant: 'accent' | 'gray' | 'green' | 'orange' | 'red'): React.CSSProperties {
+  const base: React.CSSProperties = {
+    padding: '7px 16px',
+    fontSize: '12px',
+    fontWeight: 510,
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    transition: 'opacity 0.12s',
+  };
+  if (variant === 'accent')  return { ...base, background: 'var(--accent-bg)', color: '#fff' };
+  if (variant === 'green')   return { ...base, background: 'rgba(39,166,68,0.15)', color: '#27a644', cursor: 'not-allowed', opacity: 0.8 };
+  if (variant === 'orange')  return { ...base, background: 'rgba(210,161,28,0.18)', color: '#c79a14' };
+  if (variant === 'red')     return { ...base, background: 'rgba(229,83,75,0.12)', color: '#e5534b', cursor: 'not-allowed', opacity: 0.8 };
+  return { ...base, background: 'var(--bg-card-hover)', color: 'var(--text-muted)', cursor: 'not-allowed', opacity: 0.7 };
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
+export default function StrategyPage() {
+  const queryClient = useQueryClient();
+
+  const { data: cards, isLoading, error } = useQuery<PresetStrategyCard[]>({
+    queryKey: ['preset-strategies'],
+    queryFn: () => apiClient.get('/api/strategy/preset').then((r) => r.data),
+    // Poll every 10 seconds when any strategy has a pending/running run
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return false;
+      const hasActive = data.some(
+        (c) => c.today_run && (c.today_run.status === 'pending' || c.today_run.status === 'running')
+      );
+      return hasActive ? 10000 : false;
+    },
+  });
+
+  return (
+    <AppShell>
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+      `}</style>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+        <h1 style={{ fontSize: '20px', fontWeight: 590, color: 'var(--text-primary)', letterSpacing: '-0.3px', margin: 0 }}>
+          选股策略
+        </h1>
+        <button
+          onClick={() => queryClient.invalidateQueries({ queryKey: ['preset-strategies'] })}
+          style={{ fontSize: '12px', color: 'var(--text-muted)', background: 'none', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '5px 12px', cursor: 'pointer' }}
+        >
+          刷新
+        </button>
+      </div>
+
+      {isLoading && (
+        <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '40px 0', textAlign: 'center' }}>
+          加载中...
+        </div>
+      )}
+
+      {error && (
+        <div style={{ fontSize: '13px', color: '#e5534b', padding: '20px', background: 'rgba(229,83,75,0.06)', borderRadius: '8px' }}>
+          加载失败，请检查 API 服务
+        </div>
+      )}
+
+      {cards && cards.map((card) => (
+        <StrategyCard key={card.meta.key} card={card} />
+      ))}
+    </AppShell>
   );
 }

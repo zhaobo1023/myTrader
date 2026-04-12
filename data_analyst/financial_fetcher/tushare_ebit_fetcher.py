@@ -59,16 +59,21 @@ DEFAULT_START_DATE = '2020-12-31'  # 2020 年报
 DEFAULT_END_DATE = '2026-12-31'  # 2026 年报
 
 def _to_em_symbol(stock_code: str) -> str:
-    """转换为东方财富格式: 600519 -> sh600519"""
+    """转换为东方财富格式: 600519 -> sh600519, 920xxx -> bj920xxx"""
     code = stock_code.strip()
-    if code.startswith(("sh", "sz", "SH", "SZ")):
+    if code.startswith(("sh", "sz", "bj", "SH", "SZ", "BJ")):
         return code.lower()
-    prefix = "sh" if code.startswith("6") else "sz"
+    if code.startswith(("92", "8", "4")):
+        prefix = "bj"
+    elif code.startswith("6"):
+        prefix = "sh"
+    else:
+        prefix = "sz"
     return prefix + code
 
 
-def create_table():
-    """创建 trade_stock_ebit 表（online 环境）"""
+def create_table(env='online'):
+    """创建 trade_stock_ebit 表"""
     sql = """
     CREATE TABLE IF NOT EXISTS trade_stock_ebit (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -84,23 +89,23 @@ def create_table():
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='EBIT数据（来自Tushare）'
     """
     try:
-        conn = get_connection(env='online')
+        conn = get_connection(env=env)
         cursor = conn.cursor()
         cursor.execute(sql)
         conn.commit()
         cursor.close()
         conn.close()
-        logger.info("[OK] 表 trade_stock_ebit 已创建或已存在")
+        logger.info(f"[OK] 表 trade_stock_ebit 已创建或已存在 (env={env})")
     except Exception as e:
         logger.error(f"[ERROR] 创建表失败: {e}")
         raise
 
 
-def get_all_stock_codes() -> List[str]:
+def get_all_stock_codes(env='online') -> List[str]:
     """获取全部 A 股代码列表（优先从数据库获取，降级到 AKShare）"""
     # 优先从数据库 trade_stock_basic 获取
     try:
-        conn = get_connection(env='online')
+        conn = get_connection(env=env)
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT stock_code FROM trade_stock_basic")
         codes = [row[0].split('.')[0] for row in cursor.fetchall()]
@@ -123,11 +128,11 @@ def get_all_stock_codes() -> List[str]:
         return []
 
 
-def get_existing_report_dates() -> Dict[str, set]:
+def get_existing_report_dates(env='online') -> Dict[str, set]:
     """查询数据库中已有的 (stock_code, report_date) 组合"""
     rows = execute_query(
         "SELECT stock_code, report_date FROM trade_stock_ebit",
-        env='online'
+        env=env
     )
     result = {}
     for row in rows:
@@ -212,17 +217,21 @@ def fetch_ebit_data(stock_code: str, start_date: str, end_date: str) -> Tuple[st
             logger.info(f"[OK] {stock_code} 拉取 EBIT {len(records)} 条")
         return stock_code, records
 
+    except (TypeError, KeyError, AttributeError) as e:
+        logger.warning(f"[WARN] {stock_code} AKShare API 内部错误（可能不支持该股票）: {e}")
+        return stock_code, []
     except Exception as e:
         logger.error(f"[ERROR] {stock_code} 拉取 EBIT 失败: {e}")
         return stock_code, []
 
 
-def save_ebit_data(records: List[dict]) -> int:
+def save_ebit_data(records: List[dict], env='online') -> int:
     """
     将 EBIT 数据批量保存到数据库
 
     Args:
         records: 数据列表
+        env: 数据库环境
 
     Returns:
         插入行数
@@ -254,7 +263,7 @@ def save_ebit_data(records: List[dict]) -> int:
     """
 
     try:
-        affected = execute_many(insert_sql, data_tuples, env='online')
+        affected = execute_many(insert_sql, data_tuples, env=env)
         logger.info(f"[OK] 写入/更新 {affected} 条记录")
         return affected
     except Exception as e:
@@ -262,11 +271,11 @@ def save_ebit_data(records: List[dict]) -> int:
         return 0
 
 
-def main(test_mode: bool = False, start_date: str = DEFAULT_START_DATE, end_date: str = DEFAULT_END_DATE):
+def main(test_mode: bool = False, start_date: str = DEFAULT_START_DATE, end_date: str = DEFAULT_END_DATE, env: str = 'online'):
     """主函数"""
     logger.info("=" * 60)
     logger.info("EBIT 数据拉取器 (来自 AKShare)")
-    logger.info(f"环境: online")
+    logger.info(f"环境: {env}")
     logger.info(f"日期范围: {start_date} 到 {end_date}")
 
     if test_mode:
@@ -277,7 +286,7 @@ def main(test_mode: bool = False, start_date: str = DEFAULT_START_DATE, end_date
 
     # 创建表
     logger.info("\n[1/3] 创建表...")
-    create_table()
+    create_table(env=env)
 
     # 获取股票列表
     logger.info("\n[2/3] 获取股票列表...")
@@ -285,7 +294,7 @@ def main(test_mode: bool = False, start_date: str = DEFAULT_START_DATE, end_date
         all_codes = [TEST_STOCK]
         logger.info(f"[测试模式] 只拉取 {TEST_STOCK}")
     else:
-        all_codes = get_all_stock_codes()
+        all_codes = get_all_stock_codes(env=env)
         if not all_codes:
             logger.error("[ERROR] 无法获取股票列表")
             return
@@ -293,13 +302,12 @@ def main(test_mode: bool = False, start_date: str = DEFAULT_START_DATE, end_date
 
     # 获取已有数据
     logger.info("\n[3/3] 拉取 EBIT 数据...")
-    existing = get_existing_report_dates()
+    existing = get_existing_report_dates(env=env)
 
     # 准备任务
     tasks = []
     skip_count = 0
     for code in all_codes:
-        # 跳过已有完整数据的股票（简化处理：只判断是否有任何数据）
         if code in existing and len(existing[code]) > 0:
             skip_count += 1
             continue
@@ -309,7 +317,7 @@ def main(test_mode: bool = False, start_date: str = DEFAULT_START_DATE, end_date
 
     if not tasks:
         logger.info("[OK] 全部已是最新，无需更新")
-        _print_summary()
+        _print_summary(env=env)
         return
 
     # 执行拉取
@@ -364,7 +372,7 @@ def main(test_mode: bool = False, start_date: str = DEFAULT_START_DATE, end_date
     # 批量保存
     logger.info(f"\n保存数据到数据库...")
     if all_fetched_records:
-        saved = save_ebit_data(all_fetched_records)
+        saved = save_ebit_data(all_fetched_records, env=env)
         logger.info(f"[OK] 保存 {saved} 条记录")
 
     elapsed = time.time() - start_time
@@ -377,10 +385,10 @@ def main(test_mode: bool = False, start_date: str = DEFAULT_START_DATE, end_date
         if len(fail_list) <= 20:
             logger.info(f"        {fail_list}")
 
-    _print_summary()
+    _print_summary(env=env)
 
 
-def _print_summary():
+def _print_summary(env='online'):
     """打印数据库概况"""
     try:
         summary = execute_query(
@@ -391,7 +399,7 @@ def _print_summary():
                    MAX(report_date) as max_date
             FROM trade_stock_ebit
             """,
-            env='online'
+            env=env
         )
         if summary:
             row = summary[0]
@@ -408,6 +416,9 @@ if __name__ == "__main__":
     parser.add_argument('--test', action='store_true', help='测试模式（只拉取 000858）')
     parser.add_argument('--start-date', type=str, default=DEFAULT_START_DATE, help='开始日期 (YYYY-MM-DD)')
     parser.add_argument('--end-date', type=str, default=DEFAULT_END_DATE, help='结束日期 (YYYY-MM-DD)')
+    parser.add_argument('--env', type=str, default=None, choices=['local', 'online'],
+                        help='目标数据库环境 (default: DB_ENV)')
 
     args = parser.parse_args()
-    main(test_mode=args.test, start_date=args.start_date, end_date=args.end_date)
+    env = args.env or os.getenv('DB_ENV', 'local')
+    main(test_mode=args.test, start_date=args.start_date, end_date=args.end_date, env=env)

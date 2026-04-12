@@ -12,7 +12,7 @@ import logging
 from typing import List, Optional
 from datetime import datetime, timedelta
 
-from config.db import execute_query, execute_insert, execute_batch_insert
+from config.db import execute_query, execute_update, execute_many
 
 from data_analyst.sentiment.schemas import (
     FearIndexResult,
@@ -76,7 +76,7 @@ class SentimentStorage:
                 result.timestamp,
             )
             
-            execute_insert(sql, params, env=self.env)
+            execute_update(sql, params, env=self.env)
             logger.info(f"Saved fear index for {result.timestamp.strftime('%Y-%m-%d')}")
             return True
             
@@ -155,7 +155,7 @@ class SentimentStorage:
                 )
                 params_list.append(params)
             
-            execute_batch_insert(sql, params_list, env=self.env)
+            execute_many(sql, params_list, env=self.env)
             logger.info(f"Saved {len(items)} news sentiment records")
             return True
             
@@ -203,7 +203,7 @@ class SentimentStorage:
                 )
                 params_list.append(params)
             
-            execute_batch_insert(sql, params_list, env=self.env)
+            execute_many(sql, params_list, env=self.env)
             logger.info(f"Saved {len(signals)} event signals")
             return True
             
@@ -250,7 +250,7 @@ class SentimentStorage:
                 )
                 params_list.append(params)
             
-            execute_batch_insert(sql, params_list, env=self.env)
+            execute_many(sql, params_list, env=self.env)
             logger.info(f"Saved {len(events)} Polymarket snapshots")
             return True
             

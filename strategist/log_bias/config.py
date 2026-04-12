@@ -7,21 +7,21 @@ from typing import Dict
 
 DEFAULT_ETFS: Dict[str, str] = {
     # tech growth
-    '159995.SZ': 'chipETF',
-    '515050.SH': '5GETF',
-    '516160.SH': 'newEnergyCarETF',
-    '515790.SH': 'solarETF',
-    '159941.SZ': 'nasdaqETF',
+    '159995.SZ': '芯片ETF',
+    '515050.SH': '5G ETF',
+    '516160.SH': '新能源车ETF',
+    '515790.SH': '光伏ETF',
+    '159941.SZ': '纳指ETF',
     # consumer & pharma
-    '512690.SH': 'liquorETF',
-    '512010.SH': 'pharmaETF',
+    '512690.SH': '白酒ETF',
+    '512010.SH': '医药ETF',
     # cyclical & finance
-    '512880.SH': 'securitiesETF',
-    '515220.SH': 'coalETF',
-    '518880.SH': 'goldETF',
+    '512880.SH': '券商ETF',
+    '515220.SH': '煤炭ETF',
+    '518880.SH': '黄金ETF',
     # broad base
-    '510300.SH': 'hs300ETF',
-    '588000.SH': 'star50ETF',
+    '510300.SH': '沪深300ETF',
+    '588000.SH': '科创50ETF',
 }
 
 OVERHEAT_THRESHOLD = 15.0

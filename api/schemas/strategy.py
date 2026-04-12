@@ -56,3 +56,45 @@ class StrategyCreateRequest(BaseModel):
     name: str = Field(..., max_length=200)
     description: Optional[str] = None
     params: Optional[Dict[str, Any]] = None
+
+
+# ---------------------------------------------------------------------------
+# Preset strategy schemas
+# ---------------------------------------------------------------------------
+
+class StrategyWarning(BaseModel):
+    type: str   # 'danger' | 'warning' | 'info'
+    title: str
+    body: str
+
+
+class PresetStrategyMeta(BaseModel):
+    key: str
+    name: str
+    description: str
+    params_desc: str
+    warnings: List[StrategyWarning] = []
+
+
+class PresetRunSummary(BaseModel):
+    id: int
+    run_date: str
+    status: str
+    signal_count: int
+    momentum_count: int
+    reversal_count: int
+    market_status: str
+    market_message: str
+    triggered_at: str
+    finished_at: Optional[str]
+    error_msg: Optional[str]
+
+
+class PresetRunDetail(PresetRunSummary):
+    signals: List[Dict[str, Any]]
+
+
+class PresetStrategyCard(BaseModel):
+    meta: PresetStrategyMeta
+    today_run: Optional[PresetRunSummary]
+    recent_runs: List[PresetRunSummary]

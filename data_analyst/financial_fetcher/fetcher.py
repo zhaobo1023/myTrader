@@ -41,20 +41,30 @@ def _report_type(month: int) -> str:
 
 
 def _to_em_symbol(stock_code: str) -> str:
-    """convert 6-digit code to east money format (e.g. 600015 -> sh600015)"""
+    """convert 6-digit code to east money format (e.g. 600015 -> sh600015, 920xxx -> bj920xxx)"""
     code = stock_code.strip()
-    if code.startswith(("sh", "sz", "SH", "SZ")):
-        return code
-    prefix = "sh" if code.startswith("6") else "sz"
+    if code.startswith(("sh", "sz", "bj", "SH", "SZ", "BJ")):
+        return code.lower()
+    if code.startswith(("92", "8", "4")):
+        prefix = "bj"
+    elif code.startswith("6"):
+        prefix = "sh"
+    else:
+        prefix = "sz"
     return prefix + code
 
 
 def _to_secucode(stock_code: str) -> str:
-    """convert 6-digit code to SECUCODE format (e.g. 600015 -> 600015.SH)"""
+    """convert 6-digit code to SECUCODE format (e.g. 600015 -> 600015.SH, 920xxx -> 920xxx.BJ)"""
     code = stock_code.strip()
     if "." in code:
         return code.upper()
-    suffix = "SH" if code.startswith("6") else "SZ"
+    if code.startswith(("92", "8", "4")):
+        suffix = "BJ"
+    elif code.startswith("6"):
+        suffix = "SH"
+    else:
+        suffix = "SZ"
     return f"{code}.{suffix}"
 
 

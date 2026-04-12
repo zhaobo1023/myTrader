@@ -19,14 +19,14 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// Redirect to login on 401
+// [AUTH-DISABLED] 401 redirect disabled during dev — re-enable before prod
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
-      localStorage.removeItem('access_token');
-      window.location.href = '/login';
-    }
+    // if (error.response?.status === 401 && typeof window !== 'undefined') {
+    //   localStorage.removeItem('access_token');
+    //   window.location.href = '/login';
+    // }
     return Promise.reject(error);
   }
 );
