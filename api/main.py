@@ -24,6 +24,8 @@ from api.routers.skill_auth import router as skill_auth_router
 from api.routers.skill_gateway import router as skill_gw_router
 from api.routers.market_overview import router as market_overview_router
 from api.routers.sentiment import router as sentiment_router
+from api.routers.sw_rotation import router as sw_rotation_router
+from api.routers.portfolio_mgmt import router as portfolio_mgmt_router
 
 logger = logging.getLogger('myTrader.api')
 
@@ -122,6 +124,8 @@ app.include_router(skill_auth_router)
 app.include_router(skill_gw_router)
 app.include_router(market_overview_router)
 app.include_router(sentiment_router)
+app.include_router(sw_rotation_router)
+app.include_router(portfolio_mgmt_router)
 
 
 @app.get('/')
