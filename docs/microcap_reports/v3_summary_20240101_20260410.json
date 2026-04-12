@@ -1,0 +1,92 @@
+{
+  "metadata": {
+    "generated_at": "2026-04-12",
+    "date_range": "2024-01-01 ~ 2026-04-10",
+    "status": "5/7 completed",
+    "note": "v3_momentum and v3_full failed due to OOM"
+  },
+  "strategies": {
+    "v3_v2_baseline": {
+      "description": "pure_mv + h20 + 风控",
+      "total_return": 0.6057,
+      "annual_returns": {
+        "2024": -0.0935,
+        "2025": 0.5931,
+        "2026": 0.1119
+      },
+      "monthly_volatility": 0.0854,
+      "rank": 1
+    },
+    "v3_v3_calendar": {
+      "description": "日历择时 (弱月1/4/8/12持仓减半)",
+      "total_return": 0.5994,
+      "annual_returns": {
+        "2024": -0.0632,
+        "2025": 0.5807,
+        "2026": 0.0801
+      },
+      "monthly_volatility": 0.0887,
+      "vs_baseline_bps": -63,
+      "rank": 2
+    },
+    "v3_v3_calendar_1_12": {
+      "description": "日历择时 (弱月1/12持仓减半)",
+      "total_return": 0.4401,
+      "annual_returns": {
+        "2024": -0.1178,
+        "2025": 0.4540,
+        "2026": 0.1227
+      },
+      "monthly_volatility": 0.0841,
+      "vs_baseline_bps": -1656,
+      "rank": 3
+    },
+    "v3_v3_cap_exit_50": {
+      "description": "动态市值止盈 (50%分位)",
+      "total_return": 0.6057,
+      "annual_returns": {
+        "2024": -0.0935,
+        "2025": 0.5931,
+        "2026": 0.1119
+      },
+      "monthly_volatility": 0.0854,
+      "vs_baseline_bps": 0,
+      "note": "Data identical to baseline - stop loss not triggered",
+      "rank": 1
+    },
+    "v3_v3_cap_exit_40": {
+      "description": "动态市值止盈 (40%分位)",
+      "total_return": 0.6057,
+      "annual_returns": {
+        "2024": -0.0935,
+        "2025": 0.5931,
+        "2026": 0.1119
+      },
+      "monthly_volatility": 0.0854,
+      "vs_baseline_bps": 0,
+      "note": "Data identical to baseline - stop loss not triggered",
+      "rank": 1
+    }
+  },
+  "findings": {
+    "best_strategy": "v3_v2_baseline",
+    "best_2024_bear_market": "v3_v3_calendar",
+    "best_2025_bull_market": "v3_v2_baseline",
+    "best_2026_stable": "v3_v3_calendar_1_12",
+    "calendar_timing_effective": false,
+    "cap_exit_effective": false
+  },
+  "recommendations": {
+    "primary_strategy": "v2_baseline",
+    "optional_enhancement": "calendar_timing (1/4/8/12) for bear markets",
+    "avoid": "calendar_1_12, cap_exit_50/40",
+    "pending_tests": ["v3_momentum", "v3_full"]
+  },
+  "technical_notes": {
+    "oom_error": true,
+    "oom_memory_kb": 2035420,
+    "completed_strategies": 5,
+    "failed_strategies": 2,
+    "execution_time_hours": 2
+  }
+}
