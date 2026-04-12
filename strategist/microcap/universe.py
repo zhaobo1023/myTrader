@@ -3,6 +3,7 @@
 动态股票池构建
 
 每日市值后 percentile 的股票列表，排除 ST/*ST 和 PE_TTM <= 0 的股票。
+支持财务风险过滤（亏损、高负债、负经营现金流）。
 """
 import logging
 from typing import List
@@ -17,7 +18,11 @@ logger = logging.getLogger(__name__)
 def get_daily_universe(trade_date: str, percentile: float = 0.20,
                        exclude_st: bool = True, min_pe_ttm: float = 0.0,
                        require_positive_pe: bool = True,
-                       min_avg_turnover: float = 0.0) -> List[str]:
+                       min_avg_turnover: float = 0.0,
+                       exclude_risk: bool = False,
+                       max_debt_ratio: float = 0.70,
+                       require_positive_profit: bool = True,
+                       require_positive_cashflow: bool = True) -> List[str]:
     """
     获取指定日期的股票池（市值后 percentile 的股票）。
 
@@ -28,6 +33,10 @@ def get_daily_universe(trade_date: str, percentile: float = 0.20,
         min_pe_ttm: PE_TTM 最小值，排除 <= 此值的股票
         require_positive_pe: 是否要求 PE_TTM > 0
         min_avg_turnover: 近 5 日平均成交额最低要求（元），0 表示不过滤
+        exclude_risk: 是否启用财务风险过滤
+        max_debt_ratio: 资产负债率上限（0.70 = 70%），排除超过此值的股票
+        require_positive_profit: 要求最近年报净利润 > 0
+        require_positive_cashflow: 要求最近年报经营现金流 > 0
 
     Returns:
         股票代码列表，格式 ['000001.SZ', '600519.SH', ...]
@@ -84,6 +93,51 @@ def get_daily_universe(trade_date: str, percentile: float = 0.20,
                 df = df[df['stock_code'].isin(liquid_codes)]
                 logger.debug(f"{trade_date}: 流动性过滤: {before} -> {len(df)} "
                              f"(剔除 {before - len(df)} 只，阈值={min_avg_turnover:.0f}元)")
+
+        # 财务风险过滤：排除亏损、高负债、负经营现金流的股票
+        if exclude_risk and not df.empty:
+            stock_codes = df['stock_code'].tolist()
+            trade_year = int(trade_date[:4])
+            trade_month = int(trade_date[5:7])
+            # PIT 规则：4月底前用前年年报，之后用上年年报
+            report_year = trade_year - 1 if trade_month <= 4 else trade_year
+            placeholders = ','.join(['%s'] * len(stock_codes))
+            sql_fin = f"""
+                SELECT f1.stock_code, f1.net_profit, f1.debt_ratio, f1.operating_cashflow
+                FROM trade_stock_financial f1
+                INNER JOIN (
+                    SELECT stock_code, MAX(report_date) AS latest_date
+                    FROM trade_stock_financial
+                    WHERE stock_code IN ({placeholders})
+                      AND report_date <= %s
+                      AND MONTH(report_date) = 12
+                    GROUP BY stock_code
+                ) f2 ON f1.stock_code = f2.stock_code AND f1.report_date = f2.latest_date
+            """
+            try:
+                report_cutoff = f'{report_year}-12-31'
+                df_fin = pd.read_sql(sql_fin, conn, params=stock_codes + [report_cutoff])
+                if not df_fin.empty:
+                    exclude_codes = set()
+                    if require_positive_profit:
+                        loss_codes = set(df_fin[df_fin['net_profit'] <= 0]['stock_code'])
+                        exclude_codes |= loss_codes
+                    if max_debt_ratio < 1.0:
+                        # debt_ratio in DB is percentage (e.g., 70 means 70%)
+                        high_debt = set(df_fin[df_fin['debt_ratio'] > max_debt_ratio * 100]['stock_code'])
+                        exclude_codes |= high_debt
+                    if require_positive_cashflow:
+                        neg_cf = set(df_fin[
+                            (df_fin['operating_cashflow'].notna()) &
+                            (df_fin['operating_cashflow'] <= 0)
+                        ]['stock_code'])
+                        exclude_codes |= neg_cf
+                    before = len(df)
+                    df = df[~df['stock_code'].isin(exclude_codes)]
+                    logger.debug(f"{trade_date}: 财务风险过滤: {before} -> {len(df)} "
+                                 f"(剔除 {before - len(df)} 只)")
+            except Exception as e:
+                logger.warning(f"{trade_date}: 财务风险过滤失败: {e}")
     finally:
         conn.close()
 

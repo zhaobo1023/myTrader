@@ -23,7 +23,9 @@ from config.db import get_connection
 from .config import MicrocapConfig
 from .universe import get_daily_universe
 from .factors import calc_peg, calc_pe, calc_roe, calc_ebit_ratio, calc_peg_ebit_mv, calc_pure_mv, calc_pure_mv_mom
-from .factors_cached import init_cache, calc_peg_cached, calc_pe_cached
+from .factors_cached import (init_cache, calc_peg_cached, calc_pe_cached,
+                              calc_pure_mv_cached, calc_pure_mv_mom_cached,
+                              get_universe_cached)
 from .benchmark import load_benchmark, calc_benchmark_metrics, DEFAULT_BENCHMARK
 
 logger = logging.getLogger(__name__)
@@ -422,33 +424,59 @@ class MicrocapBacktest:
                 }
 
             no_pe_factors = {'pure_mv', 'pure_mv_mom'}
-            if self.config.factor in FULL_MARKET_FACTORS:
-                universe = get_daily_universe(
-                    trade_date,
-                    percentile=1.0,
-                    exclude_st=self.config.exclude_st,
-                    require_positive_pe=(self.config.factor not in no_pe_factors),
-                    min_avg_turnover=self.config.min_avg_turnover,
-                    **risk_kwargs,
-                )
+
+            # 使用缓存版 universe（仅在缓存已就绪时使用，避免 DB 查询）
+            if self._use_cached:
+                try:
+                    universe_percentile = 1.0 if self.config.factor in FULL_MARKET_FACTORS else self.config.market_cap_percentile
+                    universe = get_universe_cached(
+                        trade_date,
+                        percentile=universe_percentile,
+                        exclude_st=self.config.exclude_st,
+                        require_positive_pe=(self.config.factor not in no_pe_factors),
+                        min_avg_turnover=self.config.min_avg_turnover,
+                        **risk_kwargs,
+                    )
+                except Exception as e:
+                    logger.debug(f"缓存 universe 失败，回退 DB 查询: {e}")
+                    universe = None
             else:
-                universe = get_daily_universe(
-                    trade_date,
-                    percentile=self.config.market_cap_percentile,
-                    exclude_st=self.config.exclude_st,
-                    min_avg_turnover=self.config.min_avg_turnover,
-                    **risk_kwargs,
-                )
+                universe = None
+
+            if universe is None:
+                if self.config.factor in FULL_MARKET_FACTORS:
+                    universe = get_daily_universe(
+                        trade_date,
+                        percentile=1.0,
+                        exclude_st=self.config.exclude_st,
+                        require_positive_pe=(self.config.factor not in no_pe_factors),
+                        min_avg_turnover=self.config.min_avg_turnover,
+                        **risk_kwargs,
+                    )
+                else:
+                    universe = get_daily_universe(
+                        trade_date,
+                        percentile=self.config.market_cap_percentile,
+                        exclude_st=self.config.exclude_st,
+                        min_avg_turnover=self.config.min_avg_turnover,
+                        **risk_kwargs,
+                    )
 
             if not universe:
                 return []
 
             # 因子计算分发
-            if self._use_cached and self.config.factor in ['peg', 'pe']:
-                # 使用缓存版本（仅支持 peg 和 pe）
+            if self._use_cached and self.config.factor in ['peg', 'pe', 'pure_mv', 'pure_mv_mom']:
+                # 使用缓存版本（支持 peg/pe/pure_mv/pure_mv_mom）
                 factor_funcs = {
-                    'peg': calc_peg_cached,
-                    'pe': calc_pe_cached,
+                    'peg':         calc_peg_cached,
+                    'pe':          calc_pe_cached,
+                    'pure_mv':     calc_pure_mv_cached,
+                    'pure_mv_mom': lambda td, codes: calc_pure_mv_mom_cached(
+                        td, codes,
+                        lookback=self.config.momentum_lookback,
+                        weight=self.config.momentum_weight,
+                    ),
                 }
             else:
                 # 使用原版（支持所有因子）
@@ -495,7 +523,23 @@ class MicrocapBacktest:
             return []
 
     def _preload_cap_thresholds(self, trade_dates: list) -> dict:
-        """预加载所有交易日的市值百分位阈值，避免每日查询全表。"""
+        """预加载所有交易日的市值百分位阈值，优先使用内存缓存。"""
+        # 优先从因子缓存中读取（零 DB 查询）
+        if self._use_cached:
+            try:
+                from .factors_cached import _cache as _factor_cache
+                if _factor_cache.is_loaded and _factor_cache.df_daily_basic is not None:
+                    df = _factor_cache.df_daily_basic[
+                        _factor_cache.df_daily_basic['total_mv'] > 0
+                    ][['trade_date', 'total_mv']].copy()
+                    thresholds = {}
+                    for date, group in df.groupby('trade_date'):
+                        thresholds[date] = float(group['total_mv'].quantile(self.config.cap_exit_percentile))
+                    logger.info(f"[OK] Pre-loaded cap thresholds (from cache) for {len(thresholds)} days")
+                    return thresholds
+            except Exception:
+                pass
+
         conn = get_connection()
         try:
             sql = """SELECT trade_date, total_mv FROM trade_stock_daily_basic
@@ -518,17 +562,30 @@ class MicrocapBacktest:
         if threshold is None:
             return
 
-        # 只查持仓股的市值（小批量）
+        # 只查持仓股的市值（优先使用内存缓存）
         held_codes = list(holdings.keys())
-        conn = get_connection()
-        try:
-            ph = ','.join(['%s'] * len(held_codes))
-            sql = f"""SELECT stock_code, total_mv FROM trade_stock_daily_basic
-                      WHERE trade_date = %s AND stock_code IN ({ph})"""
-            df = pd.read_sql(sql, conn, params=[trade_date] + held_codes)
-        finally:
-            conn.close()
-        held_mv = dict(zip(df['stock_code'], df['total_mv'].astype(float)))
+        held_mv = {}
+        if self._use_cached:
+            try:
+                from .factors_cached import _cache as _factor_cache
+                if _factor_cache.is_loaded and _factor_cache.df_daily_basic is not None:
+                    df = _factor_cache.df_daily_basic[
+                        (_factor_cache.df_daily_basic['trade_date'] == trade_date) &
+                        (_factor_cache.df_daily_basic['stock_code'].isin(held_codes))
+                    ][['stock_code', 'total_mv']]
+                    held_mv = dict(zip(df['stock_code'], df['total_mv'].astype(float)))
+            except Exception:
+                pass
+        if not held_mv:
+            conn = get_connection()
+            try:
+                ph = ','.join(['%s'] * len(held_codes))
+                sql = f"""SELECT stock_code, total_mv FROM trade_stock_daily_basic
+                          WHERE trade_date = %s AND stock_code IN ({ph})"""
+                df = pd.read_sql(sql, conn, params=[trade_date] + held_codes)
+            finally:
+                conn.close()
+            held_mv = dict(zip(df['stock_code'], df['total_mv'].astype(float)))
 
         next_idx = current_idx + 1
         if next_idx >= len(trade_dates):
@@ -546,10 +603,34 @@ class MicrocapBacktest:
 
     def _load_prices_for_date(self, trade_date: str) -> None:
         """批量加载指定日期所有股票的开盘/收盘/最高/最低价到缓存，带重试。
+        优先从因子缓存（内存）读取，避免 DB 查询。
         同步更新 _prev_close（用于涨跌停判断）。
         """
         if trade_date in self._price_cache:
             return
+
+        # 尝试从内存因子缓存读取（零 DB 查询）
+        if self._use_cached:
+            try:
+                from .factors_cached import _cache as _factor_cache
+                if _factor_cache.is_loaded and _factor_cache.df_daily is not None:
+                    df = _factor_cache.df_daily[
+                        (_factor_cache.df_daily['trade_date'] == trade_date) &
+                        (_factor_cache.df_daily['close'] > 0)
+                    ][['stock_code', 'open', 'high', 'low', 'close']]
+                    if not df.empty:
+                        close_dict = dict(zip(df['stock_code'], df['close'].astype(float)))
+                        self._price_cache[trade_date] = {
+                            'open':  dict(zip(df['stock_code'], df['open'].astype(float))),
+                            'high':  dict(zip(df['stock_code'], df['high'].astype(float))),
+                            'low':   dict(zip(df['stock_code'], df['low'].astype(float))),
+                            'close': close_dict,
+                        }
+                        self._prev_close.update(close_dict)
+                        return
+            except Exception:
+                pass
+
         for attempt in range(3):
             try:
                 conn = get_connection()
