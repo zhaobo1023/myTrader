@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import AppShell from '@/components/layout/AppShell';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -12,6 +12,9 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 interface RunSummary {
   id: number;
   run_date: string;
+  week_label: string | null;
+  week_number: number | null;
+  week_year: number | null;
   status: string;
   industry_count: number;
   hot_count: number;
@@ -847,7 +850,7 @@ function SwRotationCard() {
                   <tr style={{ background: expandedId === run.id ? 'var(--bg-panel)' : 'transparent' }}>
                     <td style={{ padding: '7px 14px', color: 'var(--text-secondary)',
                       borderBottom: '1px solid var(--border-subtle)' }}>
-                      {fmtDate(run.run_date)}
+                      {run.week_label || fmtDate(run.run_date)}
                     </td>
                     <td style={{ padding: '7px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
                       <span style={{

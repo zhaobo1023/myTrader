@@ -14,6 +14,26 @@ logger = logging.getLogger('myTrader.api')
 SW_ROTATION_TIMEOUT_HOURS = 3
 
 
+def _get_week_info(d: date) -> dict:
+    """返回日期的周信息（第几周）"""
+    from datetime import timedelta
+
+    # 使用 ISO 周数（一年中的第几周）
+    iso_year, iso_week, _ = d.isocalendar()
+
+    # 计算周的周一和周日
+    monday = d - timedelta(days=d.weekday())
+    sunday = monday + timedelta(days=6)
+
+    return {
+        'year': iso_year,
+        'week_number': iso_week,
+        'week_label': f'{iso_year}年第{iso_week}周',
+        'monday': monday.strftime('%Y-%m-%d'),
+        'sunday': sunday.strftime('%Y-%m-%d'),
+    }
+
+
 def _friday_of_week(d: date) -> date:
     """Return the Friday of the given date's week (Mon=0 ... Sun=6)."""
     days_ahead = 4 - d.weekday()  # 4 = Friday
@@ -235,6 +255,15 @@ def _fmt_row(r: dict) -> dict:
             return v.isoformat()
         return str(v)
 
+    # 从 triggered_at 提取周信息
+    week_info = None
+    if r.get('triggered_at'):
+        try:
+            triggered_date = datetime.fromisoformat(str(r['triggered_at'])).date()
+            week_info = _get_week_info(triggered_date)
+        except Exception:
+            pass
+
     return {
         'id': r['id'],
         'run_date': _dt(r['run_date']),
@@ -247,6 +276,10 @@ def _fmt_row(r: dict) -> dict:
         'triggered_at': _dt(r.get('triggered_at')),
         'finished_at': _dt(r.get('finished_at')),
         'error_msg': r.get('error_msg'),
+        # 新增周信息
+        'week_label': week_info['week_label'] if week_info else None,
+        'week_number': week_info['week_number'] if week_info else None,
+        'week_year': week_info['year'] if week_info else None,
     }
 
 
