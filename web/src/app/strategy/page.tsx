@@ -132,8 +132,8 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
   const todayRun = card.today_run;
 
   const triggerMutation = useMutation({
-    mutationFn: () =>
-      apiClient.post(`/api/strategy/preset/${card.meta.key}/trigger`).then((r) => r.data),
+    mutationFn: (force: boolean = false): Promise<any> =>
+      apiClient.post(`/api/strategy/preset/${card.meta.key}/trigger?force=${force}`).then((r) => r.data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['preset-strategies'] });
     },
@@ -175,7 +175,7 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
 
     if (!todayRun) {
       return (
-        <button onClick={() => triggerMutation.mutate()} style={btnStyle('accent')}>
+        <button onClick={() => triggerMutation.mutate(false)} style={btnStyle('accent')}>
           触发执行
         </button>
       );
@@ -185,9 +185,22 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
 
     if (status === 'done') {
       return (
-        <button disabled style={btnStyle('green')}>
-          今日已完成
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button disabled style={btnStyle('green')}>
+            今日已完成
+          </button>
+          <button
+            onClick={() => triggerMutation.mutate(true)}
+            style={{
+              ...btnStyle('gray'),
+              fontSize: '12px',
+              padding: '6px 12px',
+            }}
+            title="强制重新运行今日任务（即使已完成）"
+          >
+            强制重新触发
+          </button>
+        </div>
       );
     }
 
@@ -202,7 +215,7 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
 
     if (status === 'failed') {
       return (
-        <button onClick={() => triggerMutation.mutate()} style={btnStyle('orange')}>
+        <button onClick={() => triggerMutation.mutate(false)} style={btnStyle('orange')}>
           重新触发
         </button>
       );

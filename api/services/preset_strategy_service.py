@@ -146,16 +146,20 @@ def get_run_detail(run_id: int) -> Optional[dict]:
     return summary
 
 
-def trigger_strategy_run(strategy_key: str) -> dict:
+def trigger_strategy_run(strategy_key: str, force: bool = False) -> dict:
     """
     Trigger a new preset strategy run for today.
 
     Rules:
     - status pending/running (not timed out) -> 409 already in progress
-    - status done -> 409 already done today
+    - status done -> 409 already done today (unless force=True)
     - status running but timed out -> mark failed, allow re-trigger
     - status failed -> allow re-trigger
     - no record today -> insert new record
+
+    Args:
+        strategy_key: Strategy identifier (e.g., 'microcap_pure_mv')
+        force: If True, allow re-running even if already done today
     """
     # Validate strategy key
     valid_keys = {s['key'] for s in PRESET_STRATEGIES}
@@ -180,7 +184,11 @@ def trigger_strategy_run(strategy_key: str) -> dict:
         status = row['status']
 
         if status == 'done':
-            raise HTTPException(status_code=409, detail='今日已完成，不可重复触发')
+            if not force:
+                raise HTTPException(status_code=409, detail='今日已完成，不可重复触发')
+            # force=True: delete the completed run and allow re-trigger
+            logger.info('[PRESET] Force re-trigger for %s on %s, deleting previous run %s',
+                       strategy_key, today_str, row['id'])
 
         if status in ('pending', 'running'):
             if _is_timeout(row):

@@ -138,9 +138,12 @@ async def list_preset_strategies():
 
 
 @router.post('/preset/{key}/trigger')
-async def trigger_preset_strategy(key: str):
+async def trigger_preset_strategy(
+    key: str,
+    force: bool = Query(False, description='Force re-run even if already done today'),
+):
     """Trigger today's run for a preset strategy."""
-    return preset_strategy_service.trigger_strategy_run(key)
+    return preset_strategy_service.trigger_strategy_run(key, force=force)
 
 
 @router.get('/preset/{key}/runs/{run_id}', response_model=PresetRunDetail)
