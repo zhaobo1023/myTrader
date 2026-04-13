@@ -212,6 +212,8 @@ export const themePoolApi = {
   // Stocks
   listStocks: (themeId: number, params?: { human_status?: string; sort_by?: string }) =>
     apiClient.get<{ items: ThemeStockItem[]; total: number }>(`/api/theme-pool/themes/${themeId}/stocks`, { params }),
+  getPriceHistory: (themeId: number, days: number = 60) =>
+    apiClient.get<{ stocks: { stock_code: string; stock_name: string; entry_date: string; entry_price: number | null; prices: { date: string; open: number; high: number; low: number; close: number; volume: number }[] }[] }>(`/api/theme-pool/themes/${themeId}/price-history`, { params: { days } }),
   addStock: (themeId: number, stock_code: string, stock_name: string, reason?: string) =>
     apiClient.post<ThemeStockItem>(`/api/theme-pool/themes/${themeId}/stocks`, { stock_code, stock_name, reason }),
   batchAddStocks: (themeId: number, stocks: Array<{ stock_code: string; stock_name: string; reason?: string }>) =>
@@ -222,6 +224,8 @@ export const themePoolApi = {
     apiClient.patch(`/api/theme-pool/stocks/${stockId}/status`, { human_status }),
   updateNote: (stockId: number, note: string | null) =>
     apiClient.patch(`/api/theme-pool/stocks/${stockId}/note`, { note }),
+  updateReason: (stockId: number, reason: string | null) =>
+    apiClient.patch(`/api/theme-pool/stocks/${stockId}/reason`, { reason }),
 
   // Votes
   vote: (stockId: number, vote: number) =>

@@ -194,7 +194,7 @@ async def add_stock(
 async def list_stocks(
     db: AsyncSession,
     theme_id: int,
-    current_user_id: int,
+    voter_ip: str,
     human_status_filter: str = None,
     sort_by: str = 'total_score',
 ) -> list:
@@ -220,13 +220,13 @@ async def list_stocks(
         .subquery()
     )
 
-    # current user's vote subquery
+    # current IP's vote subquery
     my_vote_sq = (
         select(
             ThemePoolVote.theme_stock_id,
             ThemePoolVote.vote.label('my_vote'),
         )
-        .where(ThemePoolVote.user_id == current_user_id)
+        .where(ThemePoolVote.voter_ip == voter_ip)
         .subquery()
     )
 
@@ -359,6 +359,20 @@ async def update_note(
     return stock
 
 
+async def update_reason(
+    db: AsyncSession,
+    stock_id: int,
+    reason: str,
+) -> ThemePoolStock:
+    stock = await db.get(ThemePoolStock, stock_id)
+    if not stock:
+        return None
+    stock.reason = reason
+    await db.flush()
+    await db.refresh(stock)
+    return stock
+
+
 # ------------------------------------------------------------------
 # Voting
 # ------------------------------------------------------------------
@@ -366,17 +380,17 @@ async def update_note(
 async def vote_stock(
     db: AsyncSession,
     stock_id: int,
-    user_id: int,
+    voter_ip: str,
     vote_value: int,
 ) -> dict:
     if vote_value not in (1, -1):
         raise ValueError('vote must be 1 or -1')
 
-    # upsert: check existing vote
+    # upsert: check existing vote from this IP
     existing = await db.execute(
         select(ThemePoolVote).where(
             ThemePoolVote.theme_stock_id == stock_id,
-            ThemePoolVote.user_id == user_id,
+            ThemePoolVote.voter_ip == voter_ip,
         )
     )
     vote_obj = existing.scalar_one_or_none()
@@ -387,31 +401,31 @@ async def vote_stock(
     else:
         vote_obj = ThemePoolVote(
             theme_stock_id=stock_id,
-            user_id=user_id,
+            voter_ip=voter_ip,
             vote=vote_value,
         )
         db.add(vote_obj)
 
     await db.flush()
-    return await _get_vote_summary(db, stock_id, user_id)
+    return await _get_vote_summary(db, stock_id, voter_ip)
 
 
 async def remove_vote(
     db: AsyncSession,
     stock_id: int,
-    user_id: int,
+    voter_ip: str,
 ) -> dict:
     await db.execute(
         delete(ThemePoolVote).where(
             ThemePoolVote.theme_stock_id == stock_id,
-            ThemePoolVote.user_id == user_id,
+            ThemePoolVote.voter_ip == voter_ip,
         )
     )
     await db.flush()
-    return await _get_vote_summary(db, stock_id, user_id)
+    return await _get_vote_summary(db, stock_id, voter_ip)
 
 
-async def _get_vote_summary(db: AsyncSession, stock_id: int, user_id: int) -> dict:
+async def _get_vote_summary(db: AsyncSession, stock_id: int, voter_ip: str) -> dict:
     result = await db.execute(
         select(
             func.sum(case((ThemePoolVote.vote == 1, 1), else_=0)).label('up'),
@@ -422,11 +436,11 @@ async def _get_vote_summary(db: AsyncSession, stock_id: int, user_id: int) -> di
     up = int(row.up or 0)
     down = int(row.down or 0)
 
-    # current user's vote
+    # current IP's vote
     my = await db.execute(
         select(ThemePoolVote.vote).where(
             ThemePoolVote.theme_stock_id == stock_id,
-            ThemePoolVote.user_id == user_id,
+            ThemePoolVote.voter_ip == voter_ip,
         )
     )
     my_vote = my.scalar_one_or_none()
@@ -454,3 +468,58 @@ async def _get_latest_close(stock_code: str) -> float:
     except Exception as e:
         logger.warning('[THEME_POOL] failed to get close price for %s: %s', stock_code, str(e))
     return None
+
+
+async def get_price_history(db: AsyncSession, theme_id: int, days: int = 60) -> list:
+    """Get daily close prices for all stocks in a theme.
+
+    Returns the most recent `days` trading days of price data.
+    If stock has entry_price, marks the entry date for reference.
+    """
+    from config.db import execute_query
+
+    # Get all stocks
+    result = await db.execute(
+        select(ThemePoolStock).where(ThemePoolStock.theme_id == theme_id)
+    )
+    stocks = result.scalars().all()
+
+    if not stocks:
+        return []
+
+    history = []
+    for stock in stocks:
+        try:
+            rows = list(execute_query(
+                "SELECT trade_date, open_price, high_price, low_price, close_price, volume "
+                "FROM trade_stock_daily "
+                "WHERE stock_code = %s "
+                "ORDER BY trade_date DESC LIMIT %s",
+                (stock.stock_code, days),
+                env='online',
+            ))
+            if rows:
+                # Reverse to chronological order
+                rows.reverse()
+                prices = [
+                    {
+                        'date': str(r['trade_date']),
+                        'open': float(r['open_price']) if r.get('open_price') else None,
+                        'high': float(r['high_price']) if r.get('high_price') else None,
+                        'low': float(r['low_price']) if r.get('low_price') else None,
+                        'close': float(r['close_price']) if r.get('close_price') else None,
+                        'volume': float(r['volume']) if r.get('volume') else None,
+                    }
+                    for r in rows
+                ]
+                history.append({
+                    'stock_code': stock.stock_code,
+                    'stock_name': stock.stock_name,
+                    'entry_date': str(stock.entry_date),
+                    'entry_price': float(stock.entry_price) if stock.entry_price else None,
+                    'prices': prices,
+                })
+        except Exception as e:
+            logger.warning('[THEME_POOL] price history failed for %s: %s', stock.stock_code, e)
+
+    return history

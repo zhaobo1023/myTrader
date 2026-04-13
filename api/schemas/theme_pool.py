@@ -68,6 +68,10 @@ class NoteUpdateRequest(BaseModel):
     note: Optional[str] = None
 
 
+class ReasonUpdateRequest(BaseModel):
+    reason: Optional[str] = Field(None, max_length=500)
+
+
 # ------------------------------------------------------------------
 # Score response
 # ------------------------------------------------------------------

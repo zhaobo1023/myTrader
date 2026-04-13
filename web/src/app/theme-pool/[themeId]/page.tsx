@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import AppShell from '@/components/layout/AppShell';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -8,6 +8,7 @@ import {
   themePoolApi, marketApi,
   ThemePoolItem, ThemeStockItem, StockSearchResult,
 } from '@/lib/api-client';
+import MiniSparkline from '@/components/market/MiniSparkline';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -225,14 +226,19 @@ function HumanStatusSelect({ stockId, current, onChanged }: {
 }) {
   const mut = useMutation({
     mutationFn: (s: string) => themePoolApi.updateHumanStatus(stockId, s),
-    onSuccess: onChanged,
+    onSettled: () => onChanged(),
   });
 
   return (
     <select
       value={current}
-      onChange={(e) => mut.mutate(e.target.value)}
+      onChange={(e) => {
+        const val = e.target.value;
+        if (val !== current) mut.mutate(val);
+      }}
       onClick={(e) => e.stopPropagation()}
+      onBlur={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
       style={{
         padding: '2px 4px', borderRadius: '4px', fontSize: '11px',
         border: '1px solid var(--border-subtle)', background: 'var(--bg-canvas)',
@@ -244,6 +250,203 @@ function HumanStatusSelect({ stockId, current, onChanged }: {
         <option key={k} value={k}>{v}</option>
       ))}
     </select>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Price Sparkline (inline in table)
+// ---------------------------------------------------------------------------
+
+function PriceSparkline({ prices, entryPrice }: {
+  prices: { date: string; close: number }[];
+  entryPrice: number | null;
+}) {
+  if (!prices || prices.length < 2) return <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>-</span>;
+
+  const lastClose = prices[prices.length - 1].close;
+  const isUp = entryPrice ? lastClose >= entryPrice : lastClose >= prices[0].close;
+  const color = isUp ? '#16a34a' : '#ef4444';
+
+  return <MiniSparkline data={prices} valueKey="close" width={80} height={28} color={color} />;
+}
+
+// ---------------------------------------------------------------------------
+// Expanded K-line Chart (candlestick-like OHLC)
+// ---------------------------------------------------------------------------
+
+function ExpandedChart({ stock }: {
+  stock: { stock_code: string; stock_name: string; entry_price: number | null; entry_date: string; prices: { date: string; open: number; high: number; low: number; close: number; volume: number }[] };
+}) {
+  if (!stock.prices || stock.prices.length < 2) {
+    return <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: '12px' }}>No price data</div>;
+  }
+
+  const prices = stock.prices;
+  const w = 600;
+  const h = 200;
+  const pad = { top: 10, right: 50, bottom: 24, left: 50 };
+  const chartW = w - pad.left - pad.right;
+  const chartH = h - pad.top - pad.bottom;
+
+  const closes = prices.map(p => p.close);
+  const allHighs = prices.map(p => p.high);
+  const allLows = prices.map(p => p.low);
+  const minV = Math.min(...allLows);
+  const maxV = Math.max(...allHighs);
+  const range = maxV - minV || 1;
+
+  // Entry price line position
+  const entryY = stock.entry_price
+    ? pad.top + (1 - (stock.entry_price - minV) / range) * chartH
+    : null;
+
+  const toX = (i: number) => pad.left + (i / (prices.length - 1)) * chartW;
+  const toY = (v: number) => pad.top + (1 - (v - minV) / range) * chartH;
+
+  const candleW = Math.max(1, chartW / prices.length * 0.6);
+  const lastClose = closes[closes.length - 1];
+  const isUp = stock.entry_price ? lastClose >= stock.entry_price : lastClose >= closes[0];
+  const lineColor = isUp ? '#16a34a' : '#ef4444';
+
+  return (
+    <div style={{ padding: '12px 16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+        <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+          {stock.stock_code} {stock.stock_name}
+        </span>
+        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+          {prices[0].date} ~ {prices[prices.length - 1].date}
+          {stock.entry_price && <span style={{ marginLeft: '8px' }}>Entry: {stock.entry_price.toFixed(2)}</span>}
+        </span>
+      </div>
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: 'block' }}>
+        {/* Grid lines */}
+        {[0, 0.25, 0.5, 0.75, 1].map((pct, i) => {
+          const y = pad.top + pct * chartH;
+          const val = maxV - pct * range;
+          return (
+            <g key={i}>
+              <line x1={pad.left} y1={y} x2={w - pad.right} y2={y} stroke="#e5e7eb" strokeWidth="0.5" />
+              <text x={pad.left - 4} y={y + 3} textAnchor="end" fontSize="9" fill="#9ca3af">{val.toFixed(1)}</text>
+            </g>
+          );
+        })}
+        {/* Entry price line */}
+        {entryY !== null && (
+          <line x1={pad.left} y1={entryY} x2={w - pad.right} y2={entryY} stroke="#f59e0b" strokeWidth="1" strokeDasharray="4,3" />
+        )}
+        {/* Candles */}
+        {prices.map((p, i) => {
+          const x = toX(i);
+          const isGreen = p.close >= p.open;
+          const bodyTop = toY(Math.max(p.open, p.close));
+          const bodyBot = toY(Math.min(p.open, p.close));
+          const bodyH = Math.max(1, bodyBot - bodyTop);
+          return (
+            <g key={i}>
+              {/* Wick */}
+              <line x1={x} y1={toY(p.high)} x2={x} y2={toY(p.low)} stroke={isGreen ? '#16a34a' : '#ef4444'} strokeWidth="1" />
+              {/* Body */}
+              <rect x={x - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={isGreen ? '#16a34a' : '#ef4444'} rx="0.5" />
+            </g>
+          );
+        })}
+        {/* Close price line */}
+        <polyline
+          points={prices.map((p, i) => `${toX(i)},${toY(p.close)}`).join(' ')}
+          fill="none" stroke={lineColor} strokeWidth="1" opacity="0.5"
+        />
+      </svg>
+      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+        Return: <span style={{ color: stock.entry_price ? (lastClose >= stock.entry_price ? '#16a34a' : '#ef4444') : 'var(--text-muted)' }}>
+          {stock.entry_price ? `${((lastClose - stock.entry_price) / stock.entry_price * 100).toFixed(1)}%` : '-'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Comparison Chart (normalized to 100)
+// ---------------------------------------------------------------------------
+
+function ComparisonChart({ stocks }: {
+  stocks: { stock_code: string; stock_name: string; entry_price: number | null; prices: { date: string; close: number }[] }[];
+}) {
+  if (!stocks || stocks.length === 0) return null;
+
+  // Normalize all stocks to 100 at their first data point
+  const series = stocks.map(s => {
+    if (!s.prices || s.prices.length < 2) return null;
+    const base = s.prices[0].close;
+    if (!base) return null;
+    return {
+      code: s.stock_code,
+      name: s.stock_name,
+      data: s.prices.map(p => ({ date: p.date, value: (p.close / base) * 100 })),
+    };
+  }).filter(Boolean) as { code: string; name: string; data: { date: string; value: number }[] }[];
+
+  if (series.length === 0) return null;
+
+  const w = 700;
+  const h = 220;
+  const pad = { top: 10, right: 10, bottom: 24, left: 40 };
+  const chartW = w - pad.left - pad.right;
+  const chartH = h - pad.top - pad.bottom;
+
+  const allVals = series.flatMap(s => s.data.map(d => d.value));
+  const minV = Math.min(...allVals);
+  const maxV = Math.max(...allVals);
+  const range = maxV - minV || 1;
+  const numPoints = Math.max(...series.map(s => s.data.length));
+  const toX = (i: number) => pad.left + (i / (numPoints - 1)) * chartW;
+  const toY = (v: number) => pad.top + (1 - (v - minV) / range) * chartH;
+
+  const colors = ['#3b82f6', '#ef4444', '#16a34a', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+
+  return (
+    <div style={{ padding: '12px 16px' }}>
+      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+        Normalized Comparison (base=100)
+      </div>
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: 'block' }}>
+        {/* 100 baseline */}
+        {minV < 100 && maxV > 100 && (
+          <line x1={pad.left} y1={toY(100)} x2={w - pad.right} y2={toY(100)} stroke="#9ca3af" strokeWidth="0.5" strokeDasharray="4,3" />
+        )}
+        {/* Y-axis labels */}
+        {[0, 0.5, 1].map((pct, i) => {
+          const val = minV + pct * range;
+          const y = pad.top + pct * chartH;
+          return <text key={i} x={pad.left - 4} y={y + 3} textAnchor="end" fontSize="9" fill="#9ca3af">{val.toFixed(0)}</text>;
+        })}
+        {/* Lines */}
+        {series.map((s, si) => (
+          <polyline
+            key={s.code}
+            points={s.data.map((d, i) => `${toX(i)},${toY(d.value)}`).join(' ')}
+            fill="none"
+            stroke={colors[si % colors.length]}
+            strokeWidth="1.5"
+            strokeLinejoin="round"
+          />
+        ))}
+      </svg>
+      {/* Legend */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginTop: '6px' }}>
+        {series.map((s, i) => {
+          const last = s.data[s.data.length - 1].value;
+          const isUp = last >= 100;
+          return (
+            <span key={s.code} style={{ fontSize: '11px', color: colors[i % colors.length], display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <span style={{ width: '10px', height: '2px', background: colors[i % colors.length], display: 'inline-block' }} />
+              {s.code} {s.name} <span style={{ color: isUp ? '#16a34a' : '#ef4444' }}>({last.toFixed(1)})</span>
+            </span>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -260,6 +463,9 @@ export default function ThemeDetailPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [sortBy, setSortBy] = useState('total_score');
   const [editNote, setEditNote] = useState<{ id: number; note: string } | null>(null);
+  const [editReason, setEditReason] = useState<{ id: number; reason: string } | null>(null);
+  const [expandedStock, setExpandedStock] = useState<number | null>(null);
+  const [showComparison, setShowComparison] = useState(false);
 
   // Fetch theme detail
   const { data: theme } = useQuery({
@@ -277,6 +483,27 @@ export default function ThemeDetailPage() {
   });
 
   const stocks = stocksData?.items || [];
+
+  // Fetch price history
+  interface PriceStock {
+    stock_code: string;
+    stock_name: string;
+    entry_date: string;
+    entry_price: number | null;
+    prices: { date: string; open: number; high: number; low: number; close: number; volume: number }[];
+  }
+  const { data: priceData } = useQuery({
+    queryKey: ['theme-price-history', themeId],
+    queryFn: () => themePoolApi.getPriceHistory(themeId, 60).then((r) => r.data),
+    staleTime: 5 * 60 * 1000,
+  });
+  const priceMap = useMemo(() => {
+    const m = new Map<string, PriceStock>();
+    if (priceData?.stocks) {
+      for (const s of priceData.stocks) m.set(s.stock_code, s);
+    }
+    return m;
+  }, [priceData]);
 
   // Status change mutation
   const statusMut = useMutation({
@@ -312,6 +539,12 @@ export default function ThemeDetailPage() {
     onSuccess: () => { setEditNote(null); refetchStocks(); },
   });
 
+  // Reason mutation
+  const reasonMut = useMutation({
+    mutationFn: ({ id, reason }: { id: number; reason: string }) => themePoolApi.updateReason(id, reason),
+    onSuccess: () => { setEditReason(null); refetchStocks(); },
+  });
+
   function refetchStocks() {
     queryClient.invalidateQueries({ queryKey: ['theme-stocks', themeId] });
   }
@@ -322,15 +555,16 @@ export default function ThemeDetailPage() {
   // Table headers
   const columns = [
     { key: 'stock', label: '股票', width: '130px' },
-    { key: 'recommender', label: '推荐人', width: '80px' },
-    { key: 'reason', label: '推荐理由', width: '120px' },
-    { key: 'rps_20', label: 'RPS20', width: '55px' },
-    { key: 'tech', label: '技术面', width: '50px' },
-    { key: 'fund', label: '基本面', width: '50px' },
-    { key: 'total', label: '综合', width: '50px' },
-    { key: 'return_5d', label: '5日%', width: '55px' },
-    { key: 'return_20d', label: '20日%', width: '55px' },
-    { key: 'votes', label: '投票', width: '70px' },
+    { key: 'recommender', label: '推荐人', width: '70px' },
+    { key: 'reason', label: '推荐理由', width: '110px' },
+    { key: 'rps_20', label: 'RPS20', width: '50px' },
+    { key: 'tech', label: '技术面', width: '45px' },
+    { key: 'fund', label: '基本面', width: '45px' },
+    { key: 'total', label: '综合', width: '45px' },
+    { key: 'return_5d', label: '5日%', width: '50px' },
+    { key: 'return_20d', label: '20日%', width: '50px' },
+    { key: 'trend', label: '走势', width: '95px' },
+    { key: 'votes', label: '投票', width: '65px' },
     { key: 'status', label: '标记', width: '85px' },
     { key: 'actions', label: '', width: '60px' },
   ];
@@ -491,8 +725,8 @@ export default function ThemeDetailPage() {
                 const sc = s.latest_score;
                 const isExcluded = s.human_status === 'excluded';
                 return (
+                  <React.Fragment key={s.id}>
                   <tr
-                    key={s.id}
                     style={{
                       borderBottom: '1px solid var(--border-subtle)',
                       opacity: isExcluded ? 0.45 : 1,
@@ -508,10 +742,12 @@ export default function ThemeDetailPage() {
                       {s.recommender_email?.split('@')[0] || '-'}
                     </td>
                     {/* Reason */}
-                    <td style={{ padding: '8px 6px', color: 'var(--text-secondary)', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                      title={s.reason || ''}
+                    <td
+                      style={{ padding: '8px 6px', color: 'var(--text-secondary)', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+                      title={s.reason || 'Click to edit'}
+                      onClick={(e) => { e.stopPropagation(); setEditReason({ id: s.id, reason: s.reason || '' }); }}
                     >
-                      {s.reason || '-'}
+                      {s.reason || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>add</span>}
                     </td>
                     {/* RPS */}
                     <td style={{ padding: '8px 6px', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
@@ -536,6 +772,14 @@ export default function ThemeDetailPage() {
                     {/* 20D return */}
                     <td style={{ padding: '8px 6px', color: returnColor(sc?.return_20d), fontVariantNumeric: 'tabular-nums' }}>
                       {pct(sc?.return_20d)}
+                    </td>
+                    {/* Trend sparkline */}
+                    <td
+                      style={{ padding: '8px 6px', cursor: 'pointer' }}
+                      onClick={(e) => { e.stopPropagation(); setExpandedStock(expandedStock === s.id ? null : s.id); }}
+                      title="Click to expand"
+                    >
+                      <PriceSparkline prices={priceMap.get(s.stock_code)?.prices || []} entryPrice={priceMap.get(s.stock_code)?.entry_price || null} />
                     </td>
                     {/* Votes */}
                     <td style={{ padding: '8px 6px' }}>
@@ -582,12 +826,42 @@ export default function ThemeDetailPage() {
                       </div>
                     </td>
                   </tr>
+                  {expandedStock === s.id && (
+                    <tr>
+                      <td colSpan={columns.length} style={{ padding: 0, borderBottom: '1px solid var(--border-subtle)' }}>
+                        {priceMap.get(s.stock_code) && (
+                          <ExpandedChart stock={priceMap.get(s.stock_code)!} />
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 );
               })
             )}
           </tbody>
         </table>
       </div>
+
+      {/* Comparison chart panel */}
+      {priceData?.stocks && priceData.stocks.length > 0 && (
+        <div style={{ marginTop: '16px', border: '1px solid var(--border-subtle)', borderRadius: '8px', overflow: 'hidden' }}>
+          <div
+            style={{
+              padding: '8px 16px', fontSize: '12px', fontWeight: 500,
+              background: 'var(--bg-panel)', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              borderBottom: showComparison ? '1px solid var(--border-subtle)' : 'none',
+              color: 'var(--text-primary)',
+            }}
+            onClick={() => setShowComparison(!showComparison)}
+          >
+            <span>Relative Performance Comparison</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{showComparison ? 'Collapse' : 'Expand'}</span>
+          </div>
+          {showComparison && <ComparisonChart stocks={priceData.stocks} />}
+        </div>
+      )}
 
       {/* Note edit modal */}
       {editNote && (
@@ -631,6 +905,55 @@ export default function ThemeDetailPage() {
                 }}
               >
                 保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reason edit modal */}
+      {editReason && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }} onClick={() => setEditReason(null)}>
+          <div style={{
+            background: 'var(--bg-panel)', borderRadius: '10px', padding: '20px',
+            width: '400px', maxWidth: '90vw',
+          }} onClick={(e) => e.stopPropagation()}>
+            <h4 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
+              Edit Reason
+            </h4>
+            <textarea
+              value={editReason.reason}
+              onChange={(e) => setEditReason({ ...editReason, reason: e.target.value })}
+              rows={3}
+              placeholder="Recommendation reason..."
+              style={{
+                width: '100%', padding: '8px 10px', borderRadius: '6px', fontSize: '12px',
+                border: '1px solid var(--border-subtle)', background: 'var(--bg-canvas)',
+                color: 'var(--text-primary)', outline: 'none', resize: 'vertical', boxSizing: 'border-box',
+              }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px' }}>
+              <button
+                onClick={() => setEditReason(null)}
+                style={{
+                  padding: '6px 12px', borderRadius: '6px', fontSize: '11px',
+                  border: '1px solid var(--border-subtle)', background: 'transparent',
+                  color: 'var(--text-secondary)', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => reasonMut.mutate({ id: editReason.id, reason: editReason.reason })}
+                style={{
+                  padding: '6px 12px', borderRadius: '6px', fontSize: '11px',
+                  border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer',
+                }}
+              >
+                Save
               </button>
             </div>
           </div>
