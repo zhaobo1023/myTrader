@@ -153,17 +153,18 @@ class ThemePoolScore(Base):
 class ThemePoolVote(Base):
     __tablename__ = 'theme_pool_votes'
     __table_args__ = (
-        UniqueConstraint('theme_stock_id', 'voter_ip', name='uq_stock_ip_vote'),
+        UniqueConstraint('theme_stock_id', 'user_id', name='uq_stock_user_vote'),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     theme_stock_id = Column(Integer, ForeignKey('theme_pool_stocks.id', ondelete='CASCADE'), nullable=False)
-    voter_ip = Column(String(45), nullable=False)  # IPv4 or IPv6
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
     vote = Column(SmallInteger, nullable=False)  # 1=up, -1=down
     voted_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # relationships
     stock = relationship('ThemePoolStock', back_populates='votes')
+    user = relationship('User', foreign_keys=[user_id])
 
     def __repr__(self):
-        return f'<ThemePoolVote stock={self.theme_stock_id} ip={self.voter_ip} vote={self.vote}>'
+        return f'<ThemePoolVote stock={self.theme_stock_id} user={self.user_id} vote={self.vote}>'

@@ -5,7 +5,7 @@ Theme Pool Router - thematic stock selection endpoints
 Prefix: /api/theme-pool
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_db
@@ -43,14 +43,6 @@ async def _get_user_or_dev(
     await db.flush()
     await db.refresh(dev_user)
     return dev_user
-
-
-def _get_client_ip(request: Request) -> str:
-    """Extract client IP from request, handling X-Forwarded-For proxy."""
-    forwarded = request.headers.get('x-forwarded-for')
-    if forwarded:
-        return forwarded.split(',')[0].strip()
-    return request.client.host if request.client else '127.0.0.1'
 
 
 # ==================================================================
@@ -279,15 +271,14 @@ async def list_stocks(
     theme_id: int,
     human_status: str = Query(None, description='normal/focused/watching/excluded'),
     sort_by: str = Query('total_score', description='total_score/added_at/return_5d/return_20d/rps_20'),
-    request: Request = None,
+    current_user: User = Depends(_get_user_or_dev),
     db: AsyncSession = Depends(get_db),
 ):
     """List all stocks in a theme pool with latest scores and vote counts."""
     theme = await svc.get_theme(db, theme_id)
     if not theme:
         raise HTTPException(status_code=404, detail='Theme not found')
-    voter_ip = _get_client_ip(request) if request else '127.0.0.1'
-    items = await svc.list_stocks(db, theme_id, voter_ip, human_status, sort_by)
+    items = await svc.list_stocks(db, theme_id, current_user.id, human_status, sort_by)
     return StockListResponse(
         items=[StockResponse(**item) for item in items],
         total=len(items),
@@ -379,16 +370,15 @@ async def update_reason(
 async def vote_stock(
     stock_id: int,
     req: VoteRequest,
-    request: Request = None,
+    current_user: User = Depends(_get_user_or_dev),
     db: AsyncSession = Depends(get_db),
 ):
-    """Vote on a stock (1=up, -1=down). Re-voting changes existing vote. One vote per IP."""
+    """Vote on a stock (1=up, -1=down). Re-voting changes existing vote. One vote per user."""
     stock = await db.get(ThemePoolStock, stock_id)
     if not stock:
         raise HTTPException(status_code=404, detail='Stock not found')
-    voter_ip = _get_client_ip(request) if request else '127.0.0.1'
     try:
-        result = await svc.vote_stock(db, stock_id, voter_ip, req.vote)
+        result = await svc.vote_stock(db, stock_id, current_user.id, req.vote)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return VoteResponse(**result)
@@ -422,13 +412,12 @@ async def trigger_score(
 @router.delete('/stocks/{stock_id}/vote', response_model=VoteResponse)
 async def remove_vote(
     stock_id: int,
-    request: Request = None,
+    current_user: User = Depends(_get_user_or_dev),
     db: AsyncSession = Depends(get_db),
 ):
-    """Remove current IP's vote on a stock."""
+    """Remove current user's vote on a stock."""
     stock = await db.get(ThemePoolStock, stock_id)
     if not stock:
         raise HTTPException(status_code=404, detail='Stock not found')
-    voter_ip = _get_client_ip(request) if request else '127.0.0.1'
-    result = await svc.remove_vote(db, stock_id, voter_ip)
+    result = await svc.remove_vote(db, stock_id, current_user.id)
     return VoteResponse(**result)

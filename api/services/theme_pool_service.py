@@ -194,7 +194,7 @@ async def add_stock(
 async def list_stocks(
     db: AsyncSession,
     theme_id: int,
-    voter_ip: str,
+    user_id: int,
     human_status_filter: str = None,
     sort_by: str = 'total_score',
 ) -> list:
@@ -220,13 +220,13 @@ async def list_stocks(
         .subquery()
     )
 
-    # current IP's vote subquery
+    # current user's vote subquery
     my_vote_sq = (
         select(
             ThemePoolVote.theme_stock_id,
             ThemePoolVote.vote.label('my_vote'),
         )
-        .where(ThemePoolVote.voter_ip == voter_ip)
+        .where(ThemePoolVote.user_id == user_id)
         .subquery()
     )
 
@@ -380,17 +380,17 @@ async def update_reason(
 async def vote_stock(
     db: AsyncSession,
     stock_id: int,
-    voter_ip: str,
+    user_id: int,
     vote_value: int,
 ) -> dict:
     if vote_value not in (1, -1):
         raise ValueError('vote must be 1 or -1')
 
-    # upsert: check existing vote from this IP
+    # upsert: check existing vote from this user
     existing = await db.execute(
         select(ThemePoolVote).where(
             ThemePoolVote.theme_stock_id == stock_id,
-            ThemePoolVote.voter_ip == voter_ip,
+            ThemePoolVote.user_id == user_id,
         )
     )
     vote_obj = existing.scalar_one_or_none()
@@ -401,31 +401,31 @@ async def vote_stock(
     else:
         vote_obj = ThemePoolVote(
             theme_stock_id=stock_id,
-            voter_ip=voter_ip,
+            user_id=user_id,
             vote=vote_value,
         )
         db.add(vote_obj)
 
     await db.flush()
-    return await _get_vote_summary(db, stock_id, voter_ip)
+    return await _get_vote_summary(db, stock_id, user_id)
 
 
 async def remove_vote(
     db: AsyncSession,
     stock_id: int,
-    voter_ip: str,
+    user_id: int,
 ) -> dict:
     await db.execute(
         delete(ThemePoolVote).where(
             ThemePoolVote.theme_stock_id == stock_id,
-            ThemePoolVote.voter_ip == voter_ip,
+            ThemePoolVote.user_id == user_id,
         )
     )
     await db.flush()
-    return await _get_vote_summary(db, stock_id, voter_ip)
+    return await _get_vote_summary(db, stock_id, user_id)
 
 
-async def _get_vote_summary(db: AsyncSession, stock_id: int, voter_ip: str) -> dict:
+async def _get_vote_summary(db: AsyncSession, stock_id: int, user_id: int) -> dict:
     result = await db.execute(
         select(
             func.sum(case((ThemePoolVote.vote == 1, 1), else_=0)).label('up'),
@@ -436,11 +436,11 @@ async def _get_vote_summary(db: AsyncSession, stock_id: int, voter_ip: str) -> d
     up = int(row.up or 0)
     down = int(row.down or 0)
 
-    # current IP's vote
+    # current user's vote
     my = await db.execute(
         select(ThemePoolVote.vote).where(
             ThemePoolVote.theme_stock_id == stock_id,
-            ThemePoolVote.voter_ip == voter_ip,
+            ThemePoolVote.user_id == user_id,
         )
     )
     my_vote = my.scalar_one_or_none()
