@@ -283,3 +283,48 @@ def run_theme_pool_score(dry_run: bool = False, env: str = "online"):
 
     from api.tasks.theme_pool_score import run_theme_pool_score as _score
     _score(dry_run=False, env=env)
+
+
+# ---------------------------------------------------------------------------
+# Market Dashboard adapters
+# ---------------------------------------------------------------------------
+
+def run_dashboard_fetch(dry_run: bool = False, env: str = "online", trade_date: str = ""):
+    """Fetch new market-level indicators for the dashboard (volume, advance/decline, etc.)."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_dashboard_fetch: would fetch dashboard indicators (env=%s)", env)
+        return
+
+    _clear_proxy()
+    from data_analyst.market_dashboard.fetcher import fetch_all
+    fetch_all(trade_date=trade_date or None, env=env)
+
+
+def run_dashboard_compute(dry_run: bool = False):
+    """Compute the 6-section dashboard and warm Redis cache."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_dashboard_compute: would compute dashboard signals")
+        return
+
+    from data_analyst.market_dashboard.calculator import compute_dashboard
+    import json
+
+    result = compute_dashboard()
+    logger.info("Dashboard computed: temperature=%s trend=%s sentiment=%s",
+                result.get('temperature', {}).get('level', '?'),
+                result.get('trend', {}).get('level', '?'),
+                result.get('sentiment', {}).get('level', '?'))
+
+    # Try to warm Redis cache
+    try:
+        import redis
+        import os
+        r = redis.Redis(
+            host=os.getenv('REDIS_HOST', 'localhost'),
+            port=int(os.getenv('REDIS_PORT', '6379')),
+            db=0,
+        )
+        r.setex('market_overview:dashboard', 6 * 3600, json.dumps(result, default=str))
+        logger.info("[OK] Dashboard cache warmed in Redis")
+    except Exception as e:
+        logger.warning("[WARN] Failed to warm Redis cache: %s", e)

@@ -237,6 +237,106 @@ export const themePoolApi = {
 export const marketOverviewApi = {
   summary: () =>
     apiClient.get<MarketOverviewSummary>('/api/market-overview/summary'),
+  dashboard: () =>
+    apiClient.get<MarketDashboardData>('/api/market-overview/dashboard'),
+  signalLog: (days: number = 7) =>
+    apiClient.get<SignalLogEntry[]>('/api/market-overview/signal-log', { params: { days } }),
   invalidateCache: () =>
     apiClient.delete('/api/market-overview/cache'),
 };
+
+// ============================================================
+// Market Dashboard types (6-section dashboard)
+// ============================================================
+
+export interface DashboardIndicator {
+  value: number | string | null;
+  signal?: string;
+  unit?: string;
+  change?: string;
+  [key: string]: unknown;
+}
+
+export interface TemperatureSection {
+  available: boolean;
+  score?: number;
+  level?: string;
+  level_label?: string;
+  indicators?: Record<string, DashboardIndicator>;
+  volume_series?: SeriesPoint[];
+  error?: string;
+}
+
+export interface TrendSection {
+  available: boolean;
+  level?: string;
+  level_label?: string;
+  indices?: Record<string, { name: string; close: number | null; change_pct: number | null }>;
+  indicators?: {
+    ma_position?: { above: string[]; below: string[] };
+    ma_alignment?: string;
+    macd_weekly?: { status: string; histogram?: string; dif?: number; dea?: number; hist?: number };
+    adx?: { value: number | null; signal: string };
+    svd?: { state: string; state_label: string; top1_ratio?: number; is_mutation: boolean; date?: string };
+  };
+  trend_series?: SeriesPoint[];
+  error?: string;
+}
+
+export interface SentimentSection {
+  available: boolean;
+  score?: number;
+  level?: string;
+  level_label?: string;
+  indicators?: Record<string, DashboardIndicator>;
+  sentiment_series?: SeriesPoint[];
+  error?: string;
+}
+
+export interface StyleSection {
+  available: boolean;
+  scale?: { direction: string; strength: string; label: string; strength_label: string; signals?: Record<string, number>; total?: number };
+  style?: { direction: string; strength: string; label: string; strength_label: string; signals?: Record<string, number>; total?: number };
+  anchor_5y?: { deviation_pct: number | null; signal: string; signal_text?: string; current?: number; ma5y?: number };
+  error?: string;
+}
+
+export interface StockBondSection {
+  available: boolean;
+  level?: string;
+  level_label?: string;
+  spread?: { earnings_yield?: number; cn_bond?: number; spread_cn?: number; signal?: string; pe?: number };
+  dividend?: { div_yield?: number; spread?: number; signal?: string };
+  fund_rolling?: { current_pct?: number; signal?: string; signal_text?: string };
+  spread_series?: SeriesPoint[];
+  error?: string;
+}
+
+export interface MacroSection {
+  available: boolean;
+  level?: string;
+  level_label?: string;
+  macro_score?: number;
+  indicators?: Record<string, DashboardIndicator>;
+  error?: string;
+}
+
+export interface SignalLogEntry {
+  date: string;
+  section: string;
+  from: string;
+  to: string;
+  detail: string;
+}
+
+export interface MarketDashboardData {
+  updated_at: string;
+  temperature: TemperatureSection;
+  trend: TrendSection;
+  sentiment: SentimentSection;
+  style: StyleSection;
+  stock_bond: StockBondSection;
+  macro: MacroSection;
+  signal_log: SignalLogEntry[];
+  error?: string;
+}
