@@ -136,7 +136,9 @@ function SearchBar({ onAdd }: { onAdd: (code: string, name: string) => Promise<v
       setSearching(true);
       try {
         const res = await marketApi.search(val.trim());
-        setResults(res.data.slice(0, 8));
+        // API 返回 { count, data: [] } 结构
+        const results = Array.isArray(res.data) ? res.data : [];
+        setResults(results.slice(0, 8));
         setOpen(true);
       } catch { setResults([]); }
       finally { setSearching(false); }
