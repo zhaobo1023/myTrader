@@ -47,6 +47,7 @@ interface SignalRow {
   ma20?: number | null;
   ma250?: number | null;
   volume_ratio?: number | null;
+  recent_occurrences?: number;  // 最近5日出现次数
   // microcap fields
   total_mv?: number | null;
   circ_mv?: number | null;
@@ -462,7 +463,7 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                                   <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
                                     <thead>
                                       <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                                        {['代码', '名称', '类型', 'RPS', '收盘', 'MA20', 'MA250', '量比'].map((h) => (
+                                        {['代码', '名称', '类型', 'RPS', '收盘', 'MA20', 'MA250', '量比', '5日出现'].map((h) => (
                                           <th key={h} style={{ padding: '5px 10px', textAlign: h === '代码' || h === '名称' || h === '类型' ? 'left' : 'right', color: 'var(--text-muted)', fontWeight: 400 }}>
                                             {h}
                                           </th>
@@ -495,6 +496,16 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                                           <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.ma20 ?? null)}</td>
                                           <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.ma250 ?? null)}</td>
                                           <td style={{ padding: '5px 10px', textAlign: 'right', color: (sig.volume_ratio ?? 0) > 1.5 ? '#27a644' : 'var(--text-secondary)' }}>{fmt(sig.volume_ratio ?? null)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>
+                                            {(sig.recent_occurrences ?? 0) > 0 ? (
+                                              <span style={{
+                                                color: (sig.recent_occurrences ?? 0) >= 3 ? '#d0021b' : (sig.recent_occurrences ?? 0) >= 2 ? '#f5a623' : 'var(--text-secondary)',
+                                                fontWeight: (sig.recent_occurrences ?? 0) >= 2 ? 600 : 400,
+                                              }}>
+                                                {sig.recent_occurrences ?? 0}
+                                              </span>
+                                            ) : '--'}
+                                          </td>
                                         </tr>
                                       ))}
                                     </tbody>

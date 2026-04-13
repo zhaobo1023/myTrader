@@ -93,10 +93,14 @@ def _run_momentum_reversal(run_id: int, env: str) -> dict:
     screener = SignalScreenerBatch()
     result_df = screener.run_screener(output_csv=False)
 
-    # Build signals list
+    # Build signals list and add occurrence count
     signal_cols = ['stock_code', 'stock_name', 'signal_type', 'rps', 'close', 'ma20', 'ma250', 'volume_ratio']
     signals = []
     if result_df is not None and len(result_df) > 0:
+        # Get recent 5-day occurrence counts for all signal stocks
+        stock_codes = result_df['stock_code'].unique().tolist()
+        occurrence_counts = _get_recent_occurrence_counts(stock_codes, days=5, env=env)
+
         available_cols = [c for c in signal_cols if c in result_df.columns]
         for _, row in result_df[available_cols].iterrows():
             record = {}
@@ -106,6 +110,11 @@ def _run_momentum_reversal(run_id: int, env: str) -> dict:
                     record[col] = _safe_float(val)
                 else:
                     record[col] = '' if (val is None or (isinstance(val, float) and __import__('math').isnan(val))) else str(val)
+
+            # Add occurrence count
+            stock_code = record.get('stock_code', '')
+            record['recent_occurrences'] = occurrence_counts.get(stock_code, 0)
+
             signals.append(record)
 
     signals_json = json.dumps(signals, ensure_ascii=False)
@@ -148,6 +157,39 @@ def _run_momentum_reversal(run_id: int, env: str) -> dict:
         'momentum_count': momentum_count,
         'reversal_count': reversal_count,
     }
+
+
+def _get_recent_occurrence_counts(stock_codes: list, days: int = 5, env: str = 'online') -> dict:
+    """
+    统计每只股票在最近N日的出现次数
+
+    Args:
+        stock_codes: 股票代码列表
+        days: 统计最近几天
+        env: 数据库环境
+
+    Returns:
+        dict {stock_code: count}
+    """
+    if not stock_codes:
+        return {}
+
+    placeholders = ','.join(['%s'] * len(stock_codes))
+    sql = f"""
+        SELECT stock_code, COUNT(*) as count
+        FROM trade_preset_strategy_run
+        WHERE strategy_key = 'momentum_reversal'
+          AND status = 'done'
+          AND run_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+          AND stock_code IN ({placeholders})
+        GROUP BY stock_code
+    """
+    try:
+        rows = execute_query(sql, (days,) + tuple(stock_codes), env=env)
+        return {row['stock_code']: row['count'] for row in rows}
+    except Exception as e:
+        logger.warning(f'[CELERY] Failed to get occurrence counts: {e}')
+        return {}
 
 
 def _run_microcap_pure_mv(run_id: int, env: str) -> dict:
