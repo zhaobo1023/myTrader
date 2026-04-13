@@ -254,6 +254,12 @@ class AnnualReportExtractor:
                 cashflow["source"] = "annual_report"
             cashflow = {k: v for k, v in cashflow.items() if v is not None}
 
+            # base_template.run() merges cashflow fields into income_detail.
+            # Remove cashflow-specific keys before upserting to financial_income_detail.
+            _CASHFLOW_KEYS = {"operating_cashflow", "investing_cashflow",
+                               "financing_cashflow", "net_cashflow"}
+            income = {k: v for k, v in income.items() if k not in _CASHFLOW_KEYS}
+
             # Merge LLM key_metrics into income_detail (same table)
             if "financial_income_detail" in km_by_table:
                 km_income = km_by_table.pop("financial_income_detail")

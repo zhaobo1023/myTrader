@@ -153,7 +153,20 @@ async def get_technical_analysis(stock_code: str) -> dict:
 
 
 async def get_fundamental_analysis(stock_code: str) -> dict:
-    """Generate fundamental analysis report for a stock."""
+    """Generate fundamental analysis report for a stock.
+
+    [DEPRECATED] This endpoint uses simple rule-based scoring from factor tables.
+    The frontend (FundamentalTab) now uses the FiveStepAnalyzer via
+    POST /api/analysis/comprehensive/generate (report_type=fundamental) for
+    industry-aware LLM-powered analysis. This function is kept for backward
+    compatibility with any external API consumers only.
+    """
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "[DEPRECATED] get_fundamental_analysis called for %s. "
+        "Use FiveStepAnalyzer via /api/analysis/comprehensive/generate instead.",
+        stock_code,
+    )
     code = _normalize_stock_code(stock_code)
 
     valuation = []

@@ -46,11 +46,15 @@ async def technical_analysis(
     return result
 
 
-@router.get('/fundamental', response_model=FundamentalAnalysisResponse)
+@router.get('/fundamental', response_model=FundamentalAnalysisResponse, deprecated=True)
 async def fundamental_analysis(
     code: str = Query(..., description="Stock code"),
 ):
-    """Generate fundamental analysis report for a stock."""
+    """Generate fundamental analysis report for a stock.
+
+    [DEPRECATED] Prefer POST /api/analysis/comprehensive/generate with
+    report_type=fundamental for industry-aware FiveStepAnalyzer analysis.
+    """
     result = await analysis_service.get_fundamental_analysis(code)
     return result
 

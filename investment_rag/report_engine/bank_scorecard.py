@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-银行评分卡 v2.0
+银行评分卡 v2.2
 
 用途：
 1. 对单只银行股进行结构化打分（7大维度，100分制）
 2. 输出文本供 LLM 引用（注入研报上下文）
 3. 输出结构化 dict 供逆向工程使用（拟合 f大 评分权重）
 
-评分维度（v2.1, 基于 f大 17 家银行年报点评逆向工程 + 边际变化维度）：
+评分维度（v2.2, 基于 v2.1 + 14家银行对比偏差修复）：
   D1 资产质量        25%  (NPL2变化趋势权重最高，f大核心)
-  D2 盈利能力        10%  (f大几乎不看利润惊喜，大幅降权)
+  D2 盈利能力        15%  (v2.2: 从10%提升, ROE是核心约束)
   D3 利润质量        15%  (新增拨备比变化趋势, f大 OLS coeff=+0.576)
-  D4 净资产质量      20%  (f大第一驱动力，OCI+净资产增速)
+  D4 净资产质量      20%  (v2.2: OCI改用LLM提取真实值, 非推算)
   D5 资本充足率      10%  (微降)
-  D6 估值安全边际    10%  (PB分位)
-  D7 股息回报        10%  (独立维度，含股息率+分红增长趋势)
+  D6 估值安全边际    15%  (v2.2: +同业PB+股息率vs国债+PBx股息率)
+  D7 股息回报         7.5% (v2.2: 2.5%让给D6综合维度)
 
 逆向工程依据 (OLS R^2=0.794, n=17):
   权益惊喜 coeff=+0.925 > 拨备趋势 +0.576 > 不良率趋势 +0.464
@@ -143,11 +143,11 @@ def _make_default_config() -> ScorecardConfig:
         ],
     )
 
-    # ---------- D2: 盈利能力 (10%, was 20%) ----------
-    # f大的逆向工程显示利润惊喜系数接近0，大幅降权
+    # ---------- D2: 盈利能力 (15%, was 10%) ----------
+    # ROE 对银行是核心约束，4.93% 的 ROE 应显著扣分，提升权重
     d2 = DimConfig(
         name="盈利能力",
-        weight=0.10,
+        weight=0.15,
         subs=[
             SubDimConfig(
                 name="ROE",
@@ -233,12 +233,12 @@ def _make_default_config() -> ScorecardConfig:
         ],
     )
 
-    # ---------- D4: 净资产质量 (20%, was 10%) ----------
-    # f大第一驱动力（OLS coeff=+0.925），从10%翻倍到20%
-    # 新增"净资产增速"子维度：f大核心看权益是否达到预期
+    # ---------- D4: 净资产质量 (17.5%, was 20%) ----------
+    # f大第一驱动力（OLS coeff=+0.925），v2.2 微调给 D2/D6 让出权重
+    # v2.2: OCI 改用 LLM 提取真实值，不再用推算
     d4 = DimConfig(
         name="净资产质量",
-        weight=0.20,
+        weight=0.175,
         subs=[
             SubDimConfig(
                 name="OCI差值（占期初净资产%）",
@@ -300,14 +300,15 @@ def _make_default_config() -> ScorecardConfig:
         ],
     )
 
-    # ---------- D6: 估值安全边际 (10%) ----------
+    # ---------- D6: 估值安全边际 (15%, was 10%) ----------
+    # 从 D2 借 2.5%, D7 借 2.5%; 增加4个子维度覆盖 PB/同业/股息率/综合
     d6 = DimConfig(
         name="估值安全边际",
-        weight=0.10,
+        weight=0.15,
         subs=[
             SubDimConfig(
                 name="PB历史分位数",
-                weight=1.0,
+                weight=0.30,
                 extract_key="pb_percentile",   # 历史百分位，越低越便宜
                 threshold=ThresholdScore(brackets=[
                     (None, 20,   5),
@@ -317,14 +318,51 @@ def _make_default_config() -> ScorecardConfig:
                     (80,   None, 1),
                 ], missing_score=3.0),
             ),
+            SubDimConfig(
+                name="同业PB相对位置",
+                weight=0.30,
+                extract_key="peer_pb_rank_pct",  # 在同业中的百分位排名，越低越便宜
+                threshold=ThresholdScore(brackets=[
+                    (None, 20,   5),   # PB在同业最低20%
+                    (20,   40,   4),
+                    (40,   60,   3),
+                    (60,   80,   2),
+                    (80,   None, 1),  # PB在同业最高20%，最贵
+                ], missing_score=3.0),
+            ),
+            SubDimConfig(
+                name="股息率vs国债",
+                weight=0.20,
+                extract_key="div_vs_bond_spread",  # 股息率 - 10年国债收益率 (ppt)
+                threshold=ThresholdScore(brackets=[
+                    (2.0,  None, 5),   # 股息率远超国债
+                    (1.0,  2.0,  4),
+                    (0,    1.0,  3),   # 持平
+                    (-1.0, 0,    2),   # 低于国债
+                    (None, -1.0, 1),
+                ], missing_score=3.0),
+            ),
+            SubDimConfig(
+                name="PBx股息率综合",
+                weight=0.20,
+                extract_key="pb_times_div_yield",  # PB * 股息率，越高越好（f大核心指标）
+                threshold=ThresholdScore(brackets=[
+                    (4.0,  None, 5),   # 极高安全边际
+                    (3.0,  4.0,  4),
+                    (2.0,  3.0,  3),
+                    (1.0,  2.0,  2),
+                    (None, 1.0,  1),   # 安全边际低
+                ], missing_score=3.0),
+            ),
         ],
     )
 
-    # ---------- D7: 股息回报 (10%, 新增独立维度) ----------
+    # ---------- D7: 股息回报 (7.5%, was 10%) ----------
     # f大分红趋势 OLS coeff=+0.436，独立成维度
+    # 2.5% 权重让给 D6 估值综合维度（股息率已纳入 D6）
     d7 = DimConfig(
         name="股息回报",
-        weight=0.10,
+        weight=0.075,
         subs=[
             SubDimConfig(
                 name="股息率（%）",
@@ -447,6 +485,74 @@ class ScorecardResult:
             },
             "raw_data": self.raw_data,
         }
+
+
+def _fetch_dividend_yield_for_valuation(code: str, db_env: str) -> Optional[float]:
+    """
+    独立的股息率查询函数，供 _fetch_valuation_data 调用。
+    复用 _fetch_dividend_data 的逻辑但只返回股息率数值。
+    """
+    from investment_rag.report_engine.data_tools import _execute_query, _safe_float
+    if _execute_query is None:
+        return None
+
+    div_sql = """
+        SELECT ex_date, cash_div
+        FROM financial_dividend
+        WHERE stock_code = %s AND cash_div > 0
+        ORDER BY ex_date DESC
+        LIMIT 10
+    """
+    price_sql = """
+        SELECT close_price
+        FROM trade_stock_daily
+        WHERE SUBSTRING_INDEX(stock_code, '.', 1) = %s
+        ORDER BY trade_date DESC
+        LIMIT 1
+    """
+    try:
+        div_rows = _execute_query(div_sql, params=(code,), env=db_env) or []
+        price_rows = _execute_query(price_sql, params=(code,), env=db_env) or []
+    except Exception:
+        return None
+
+    if not div_rows or not price_rows:
+        return None
+
+    from collections import defaultdict
+    fy_div = defaultdict(float)
+    for row in div_rows:
+        ex_date = row.get('ex_date')
+        cash = _safe_float(row.get('cash_div'))
+        if not ex_date or not cash:
+            continue
+        if hasattr(ex_date, 'year'):
+            ex_year, ex_month = ex_date.year, ex_date.month
+        else:
+            ex_str = str(ex_date)
+            ex_year, ex_month = int(ex_str[:4]), int(ex_str[5:7])
+        fy = ex_year - 1 if ex_month <= 7 else ex_year
+        fy_div[fy] += cash / 10.0
+
+    sorted_fys = sorted(fy_div.keys(), reverse=True)
+    if not sorted_fys:
+        return None
+
+    use_idx = 0
+    if len(sorted_fys) >= 2:
+        latest_div = fy_div[sorted_fys[0]]
+        second_div = fy_div[sorted_fys[1]]
+        if second_div > 0 and latest_div < second_div * 0.75:
+            use_idx = 1
+
+    if use_idx >= len(sorted_fys):
+        return None
+
+    latest_annual_div = fy_div[sorted_fys[use_idx]]
+    price = _safe_float(price_rows[0].get('close_price'))
+    if price and price > 0:
+        return latest_annual_div / price * 100
+    return None
 
 
 class BankScoreCard:
@@ -929,15 +1035,18 @@ class BankScoreCard:
                 result["prov_release_contrib_pct"] = 0.0
 
         # --- 诊断2: OCI差值占比 ---
-        # 推算净资产 = 上期净资产 + 本期利润 * (1 - 分红率) - 分红
-        # OCI差值 = 实际净资产 - 推算净资产（正=OCI增厚净资产）
-        # 简化：OCI差值 = 实际权益变动 - 净利润留存
-        if all(v is not None for v in [curr_equity, prev_equity, curr_np, prev_equity]):
+        # 优先使用 LLM 从年报提取的真实 OCI（financial_income_detail.other_comprehensive_income）
+        # 如果没有真实 OCI，才使用推算方式（权益变动 - 利润留存）
+        real_oci = self._fetch_real_oci(code)
+        if real_oci is not None and prev_equity is not None and prev_equity > 0:
+            # 真实 OCI / 期初净资产 * 100
+            result["oci_gap_pct"] = real_oci / prev_equity * 100
+        elif all(v is not None for v in [curr_equity, prev_equity, curr_np, prev_equity]):
+            # 回退到推算方式
             equity_change = curr_equity - prev_equity
-            # 估算分红率（默认30%）
             payout_ratio = 0.30
             retained = curr_np * (1 - payout_ratio)
-            oci_gap = equity_change - retained  # 正=OCI正贡献
+            oci_gap = equity_change - retained
             if prev_equity > 0:
                 result["oci_gap_pct"] = oci_gap / prev_equity * 100
 
@@ -956,14 +1065,48 @@ class BankScoreCard:
 
         return result
 
+    def _fetch_real_oci(self, code: str) -> Optional[float]:
+        """
+        从 financial_income_detail 获取 LLM 提取的真实其他综合收益 (OCI)。
+
+        Returns OCI 金额（亿元），如果数据不存在则返回 None。
+        """
+        from investment_rag.report_engine.data_tools import _execute_query, _safe_float
+        if _execute_query is None:
+            return None
+
+        sql = """
+            SELECT report_date, other_comprehensive_income
+            FROM financial_income_detail
+            WHERE stock_code = %s
+            ORDER BY report_date DESC
+            LIMIT 2
+        """
+        try:
+            rows = _execute_query(sql, params=(code,), env=self._db_env) or []
+        except Exception:
+            return None
+
+        if not rows:
+            return None
+
+        oci = _safe_float(rows[0].get('other_comprehensive_income'))
+        if oci is None and len(rows) >= 2:
+            oci = _safe_float(rows[1].get('other_comprehensive_income'))
+        return oci
+
     def _fetch_valuation_data(self, code: str) -> Dict:
-        """直接查 trade_stock_daily_basic 计算 PB 5年历史分位数。"""
+        """查 PB 5年历史分位数 + 同业 PB 对比 + 股息率综合安全边际。"""
         from investment_rag.report_engine.data_tools import _execute_query, _safe_float
         if _execute_query is None:
             return {}
 
+        result = {}
+
         from datetime import date, timedelta
         start_date = (date.today() - timedelta(days=5 * 365)).isoformat()
+
+        # --- 1. PB 历史分位数 ---
         sql = """
             SELECT pb
             FROM trade_stock_daily_basic
@@ -987,7 +1130,43 @@ class BankScoreCard:
 
         current_pb = pb_values[-1]
         pct = sum(1 for v in pb_values if v < current_pb) / len(pb_values) * 100
-        return {"pb_percentile": round(pct, 1)}
+        result["pb_percentile"] = round(pct, 1)
+
+        # --- 2. 同业 PB 相对位置 ---
+        # 查询主要银行的最新 PB（与评分卡覆盖的银行一致）
+        peer_codes = [
+            '000001', '002839', '600000', '600015', '600016', '600036',
+            '601077', '601166', '601288', '601328', '601398', '601658',
+            '601818', '601928', '601939', '601998', '601838',
+        ]
+        peer_pb_sql = """
+            SELECT SUBSTRING_INDEX(stock_code, '.', 1) AS code, pb
+            FROM trade_stock_daily_basic
+            WHERE SUBSTRING_INDEX(stock_code, '.', 1) IN %s
+              AND trade_date = (SELECT MAX(trade_date) FROM trade_stock_daily_basic)
+              AND pb > 0
+        """
+        try:
+            peer_rows = _execute_query(peer_pb_sql, params=(tuple(peer_codes),), env=self._db_env) or []
+            if peer_rows:
+                all_pb = [_safe_float(r.get('pb')) for r in peer_rows]
+                all_pb = [v for v in all_pb if v is not None and v > 0]
+                if len(all_pb) >= 5 and current_pb > 0:
+                    rank = sum(1 for v in all_pb if v < current_pb)
+                    result["peer_pb_rank_pct"] = round(rank / len(all_pb) * 100, 1)
+        except Exception:
+            pass
+
+        # --- 3. 股息率 vs 国债收益率 ---
+        # 10 年国债收益率近似 1.7% (2026年初水平)
+        treasury_yield = 1.7
+        div_yield = _fetch_dividend_yield_for_valuation(code, self._db_env)
+        if div_yield is not None:
+            result["div_vs_bond_spread"] = round(div_yield - treasury_yield, 2)
+            # --- 4. PB x 股息率综合 ---
+            result["pb_times_div_yield"] = round(current_pb * div_yield, 2)
+
+        return result
 
     def _fetch_dividend_data(self, code: str) -> Dict:
         """

@@ -72,7 +72,7 @@ app = FastAPI(
 # ============================================================
 # CORS - 限制允许的来源以防止 CSRF 攻击
 # ============================================================
-allow_origins = ['http://localhost:3000', 'http://127.0.0.1:3000']
+allow_origins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://123.56.3.1']
 if settings.api_debug:
     # 开发模式允许本地开发服务器
     allow_origins.extend(['http://localhost:3001', 'http://127.0.0.1:3001'])
