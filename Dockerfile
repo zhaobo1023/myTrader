@@ -13,7 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Python dependencies to a temporary location
 # Use production dependencies (smaller than full requirements.txt)
 COPY requirements-prod.txt requirements.txt
-RUN pip install --no-cache-dir --user -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir --user -r requirements.txt
 
 # Final stage - smaller runtime image
 FROM python:3.11-slim
