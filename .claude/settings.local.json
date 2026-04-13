@@ -120,7 +120,9 @@
       "Bash(curl -s 'http://123.56.3.1/api/theme-pool/themes')",
       "Bash(curl -v 'http://123.56.3.1/api/theme-pool/themes')",
       "Bash(curl:*)",
-      "Bash(alembic current:*)"
+      "Bash(alembic current:*)",
+      "Bash(ssh -o StrictHostKeyChecking=no root@123.56.3.1 \"pwd && ls -la\")",
+      "Bash(ssh:*)"
     ],
     "deny": [],
     "ask": []

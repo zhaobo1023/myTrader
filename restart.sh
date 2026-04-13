@@ -35,7 +35,7 @@ docker run -d   --name mytrader-api   --network app_mytrader-network   -p 127.0.
 # 首次运行时安装依赖 (后续会使用缓存)
 echo "   检查/安装 Python 依赖..."
 sleep 3
-docker exec mytrader-api pip install yfinance -i https://mirrors.aliyun.com/pypi/simple/ --user -q 2>/dev/null || true
+docker exec mytrader-api pip install pyarrow yfinance -i https://mirrors.aliyun.com/pypi/simple/ --user -q 2>/dev/null || true
 success "API 容器已启动"
 
 # 启动 Web
