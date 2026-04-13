@@ -98,7 +98,12 @@ class OnePagerDataCollector:
         """
         # Normalize code: some tables use bare code, some use .SH/.SZ
         bare = stock_code.split(".")[0] if "." in stock_code else stock_code
-        full = stock_code
+
+        # Auto-detect suffix for tables that need .SH/.SZ
+        if "." not in stock_code:
+            full = self._resolve_full_code(bare)
+        else:
+            full = stock_code
 
         result: Dict[str, str] = {}
 
@@ -108,7 +113,7 @@ class OnePagerDataCollector:
         result["valuation_snapshot"] = self._collect_valuation(bare, full)
         result["price_technical"] = self._collect_technical(full)
         result["dividend_analysis"] = self._collect_dividend(bare, full)
-        result["cashflow_analysis"] = self._collect_cashflow(bare)
+        result["cashflow_analysis"] = self._collect_cashflow(bare, full)
         result["income_detail"] = self._collect_income_detail(bare)
         result["rps_momentum"] = self._collect_rps(full)
         result["quality_factors"] = self._collect_quality(full)
@@ -117,6 +122,18 @@ class OnePagerDataCollector:
         result["valuation_verdict"] = self._compute_valuation_verdict(bare, full)
 
         return result
+
+    def _resolve_full_code(self, bare: str) -> str:
+        """Try to find the full code (.SH/.SZ) from trade_stock_daily."""
+        row = self._q(
+            "SELECT stock_code FROM trade_stock_daily "
+            "WHERE stock_code LIKE %s ORDER BY trade_date DESC LIMIT 1",
+            (bare + ".%",),
+        )
+        if row:
+            return row[0]["stock_code"]
+        # Fallback: guess based on code range
+        return bare + (".SH" if bare.startswith("6") else ".SZ")
 
     # ==============================================================
     # 1. Company Profile
@@ -311,7 +328,7 @@ class OnePagerDataCollector:
         lines.append(f"**数据日期**: {v['trade_date']}")
         if close_price:
             lines.append(f"**最新收盘价**: {close_price:.2f}元")
-        lines.append(f"**总市值**: {mv / 10000:.2f}亿元" if mv else "**总市值**: (缺失)")
+        lines.append(f"**总市值**: {mv:.2f}亿元" if mv else "**总市值**: (缺失)")
         lines.append("")
         lines.append("| 指标 | 当前值 | 历史分位 | 历史最低 | 历史最高 |")
         lines.append("|------|-------|---------|---------|---------|")
@@ -327,7 +344,7 @@ class OnePagerDataCollector:
             f"\n**分位数据区间**: {dr.get('mn', '?')} 至 {dr.get('mx', '?')}，共{dr.get('cnt', '?')}个交易日"
         )
 
-        # Pre-computed verdict
+        # Pre-computed verdict (PE percentile only meaningful for non-cyclical non-financial)
         if pe_pct is not None:
             if pe_pct >= 90:
                 verdict = f"PE处于历史{pe_pct:.0f}%分位，属于极度偏高区间"
@@ -337,7 +354,21 @@ class OnePagerDataCollector:
                 verdict = f"PE处于历史{pe_pct:.0f}%分位，属于合理区间"
             else:
                 verdict = f"PE处于历史{pe_pct:.0f}%分位，属于偏低区间"
+            # Add caveat for financial/cyclical stocks where PE is misleading
+            if pe and pe < 0:
+                verdict += "（PE为负，分位参考价值有限，建议结合PB判断）"
             lines.append(f"\n**估值分位判断**: {verdict}")
+
+        if pb_pct is not None:
+            if pb_pct >= 90:
+                pb_verdict = f"PB处于历史{pb_pct:.0f}%分位，偏高"
+            elif pb_pct >= 70:
+                pb_verdict = f"PB处于历史{pb_pct:.0f}%分位，中等偏高"
+            elif pb_pct >= 30:
+                pb_verdict = f"PB处于历史{pb_pct:.0f}%分位，中等"
+            else:
+                pb_verdict = f"PB处于历史{pb_pct:.0f}%分位，偏低"
+            lines.append(f"**PB分位判断**: {pb_verdict}")
 
         return "\n".join(lines)
 
@@ -542,26 +573,42 @@ class OnePagerDataCollector:
     # 7. Cash Flow
     # ==============================================================
 
-    def _collect_cashflow(self, bare: str) -> str:
+    def _collect_cashflow(self, bare: str, full: str) -> str:
         rows = self._q(
             "SELECT report_date, operating_cashflow, investing_cashflow, "
             "financing_cashflow, net_cashflow FROM financial_cashflow "
             "WHERE stock_code=%s ORDER BY report_date DESC LIMIT 4",
             (bare,),
         )
-        if not rows:
-            return "[无现金流量表数据 - 该维度分析时请注明数据缺失]"
+        if rows:
+            lines = ["### 现金流量表\n"]
+            lines.append("| 报告期 | 经营现金流(亿) | 投资现金流(亿) | 筹资现金流(亿) | 净现金流(亿) |")
+            lines.append("|--------|-------------|-------------|-------------|------------|")
+            for r in rows:
+                lines.append(
+                    f"| {r['report_date']} | {_yuan(r['operating_cashflow'])} | "
+                    f"{_yuan(r['investing_cashflow'])} | {_yuan(r['financing_cashflow'])} | "
+                    f"{_yuan(r['net_cashflow'])} |"
+                )
+            return "\n".join(lines)
 
-        lines = ["### 现金流量表\n"]
-        lines.append("| 报告期 | 经营现金流(亿) | 投资现金流(亿) | 筹资现金流(亿) | 净现金流(亿) |")
-        lines.append("|--------|-------------|-------------|-------------|------------|")
-        for r in rows:
-            lines.append(
-                f"| {r['report_date']} | {_yuan(r['operating_cashflow'])} | "
-                f"{_yuan(r['investing_cashflow'])} | {_yuan(r['financing_cashflow'])} | "
-                f"{_yuan(r['net_cashflow'])} |"
-            )
-        return "\n".join(lines)
+        # Fallback: use quality_factor cash_flow_ratio
+        qf_rows = self._q(
+            "SELECT calc_date, cash_flow_ratio FROM trade_stock_quality_factor "
+            "WHERE stock_code=%s ORDER BY calc_date DESC LIMIT 1",
+            (full,),
+        )
+        if qf_rows:
+            qf = qf_rows[0]
+            cf_ratio = qf.get("cash_flow_ratio")
+            lines = ["### 现金流指标（补充）\n"]
+            lines.append(f"**数据日期**: {qf['calc_date']}")
+            lines.append(f"**现金流比率(经营现金流/净利)**: {cf_ratio:.2f}" if cf_ratio is not None else "**现金流比率**: (缺失)")
+            lines.append("")
+            lines.append("[注] 现金流量表分项数据暂缺，仅提供现金流比率指标")
+            return "\n".join(lines)
+
+        return "[无现金流量表数据 - 该维度分析时请注明数据缺失]"
 
     # ==============================================================
     # 8. Income Detail
@@ -729,9 +776,11 @@ class OnePagerDataCollector:
         # Net profit CAGR
         np_new = _sf(newest["net_profit"])
         np_old = _sf(oldest["net_profit"])
-        if np_new and np_old and np_old > 0 and n_years > 0:
+        if np_new and np_old and np_new > 0 and np_old > 0 and n_years > 0:
             cagr_np = ((np_new / np_old) ** (1 / n_years) - 1) * 100
             lines.append(f"**净利CAGR({oldest['report_date']}~{newest['report_date']})**: {cagr_np:.1f}%")
+        elif np_new is not None and np_old is not None and (np_new <= 0 or np_old <= 0):
+            lines.append(f"**净利CAGR({oldest['report_date']}~{newest['report_date']})**: (亏损期，CAGR无意义)")
 
         # ROE trend
         roe_list = [(str(r["report_date"]), _sf(r["roe"])) for r in rows if _sf(r["roe"]) is not None]
@@ -764,10 +813,15 @@ class OnePagerDataCollector:
             rev_growth = ((rev_new / rev_old) - 1) * 100 if rev_new and rev_old and rev_old > 0 else None
             np_growth = ((np_new / np_old) - 1) * 100 if np_new and np_old and np_old > 0 else None
             if rev_growth is not None and np_growth is not None:
-                if np_growth > rev_growth + 10:
-                    lines.append("\n**增长质量**: 利润增速显著快于营收，可能存在降本增效或一次性收益")
-                elif rev_growth > np_growth + 10:
-                    lines.append("\n**增长质量**: 营收增速显著快于利润，可能存在增收不增利")
+                if rev_growth > 0 and np_growth > 0:
+                    if np_growth > rev_growth + 10:
+                        lines.append("\n**增长质量**: 利润增速显著快于营收，可能存在降本增效或一次性收益")
+                    elif rev_growth > np_growth + 10:
+                        lines.append("\n**增长质量**: 营收增速显著快于利润，可能存在增收不增利")
+                elif rev_growth > 0 and np_growth <= 0:
+                    lines.append("\n**增长质量**: 营收正增长但利润下滑，增收不增利")
+                elif rev_growth <= 0 and np_growth <= 0:
+                    lines.append("\n**增长质量**: 营收与利润均下滑，关注下行周期拐点")
 
         return "\n".join(lines)
 
@@ -884,7 +938,7 @@ class OnePagerDataCollector:
                     lines.append("  -> PB相对ROE显著偏低")
 
         if mv:
-            lines.append(f"\n**总市值**: {mv / 10000:.1f}亿元")
+            lines.append(f"\n**总市值**: {mv:.1f}亿元")
 
         return "\n".join(lines)
 

@@ -85,7 +85,13 @@ def fetch_income(stock_code: str, stock_name: str) -> List[dict]:
                 continue
 
             revenue_raw = safe_float(row.get("OPERATE_INCOME"))
+            operate_cost_raw = safe_float(row.get("OPERATE_COST"))
             net_profit_raw = safe_float(row.get("PARENT_NETPROFIT"))
+
+            # Compute gross margin: (revenue - cost) / revenue * 100
+            gross_margin = None
+            if revenue_raw and operate_cost_raw and revenue_raw > 0:
+                gross_margin = round((revenue_raw - operate_cost_raw) / revenue_raw * 100, 2)
 
             records.append({
                 "stock_code": stock_code,
@@ -97,7 +103,7 @@ def fetch_income(stock_code: str, stock_name: str) -> List[dict]:
                 "net_profit_yoy": safe_float(row.get("PARENT_NETPROFIT_YOY")),
                 "eps": safe_float(row.get("BASIC_EPS")),
                 "roe": None,
-                "gross_margin": None,
+                "gross_margin": gross_margin,
             })
     except Exception as e:
         logger.error(f"[{stock_code}] income fetch failed: {e}")
