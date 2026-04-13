@@ -42,6 +42,9 @@ class DoctorTaoDataFetcher:
         if self.use_cache:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # Test parquet support on initialization
+        self._parquet_engine = self._get_parquet_engine()
+
     def fetch_all_stocks(self) -> List[str]:
         """
         拉取全A股代码列表（从 trade_stock_daily 表获取有数据的股票）
@@ -56,8 +59,9 @@ class DoctorTaoDataFetcher:
             cache_time = datetime.fromtimestamp(cache_file.stat().st_mtime)
             # 缓存有效期：1天
             if datetime.now() - cache_time < timedelta(days=1):
-                df = pd.read_parquet(cache_file)
-                return df['stock_code'].tolist()
+                df = self._safe_read_parquet(cache_file)
+                if df is not None:
+                    return df['stock_code'].tolist()
 
         # 从数据库查询
         sql = """
@@ -71,7 +75,7 @@ class DoctorTaoDataFetcher:
 
         # 保存到缓存
         if self.use_cache:
-            pd.DataFrame({'stock_code': stock_list}).to_parquet(cache_file, index=False)
+            self._safe_write_parquet(pd.DataFrame({'stock_code': stock_list}), cache_file)
 
         print(f"fetch_all_stocks: 获取到 {len(stock_list)} 只股票")
         return stock_list
@@ -104,15 +108,16 @@ class DoctorTaoDataFetcher:
             cache_time = datetime.fromtimestamp(cache_file.stat().st_mtime)
             # 缓存有效期：到当天 18:00 之前有效（数据通常在 18:00 更新）
             if cache_time.date() == datetime.now().date() and datetime.now().hour < 18:
-                df = pd.read_parquet(cache_file)
-                # 检查缓存数据是否覆盖请求的日期范围
-                if len(df) > 0:
-                    cache_min_date = df['trade_date'].min()
-                    cache_max_date = df['trade_date'].max()
-                    # 只有当缓存完全覆盖请求范围时才使用缓存
-                    if pd.to_datetime(start_date) >= cache_min_date:
-                        df = df[(df['trade_date'] >= start_date) & (df['trade_date'] <= end_date)]
-                        return df
+                df = self._safe_read_parquet(cache_file)
+                if df is not None:
+                    # 检查缓存数据是否覆盖请求的日期范围
+                    if len(df) > 0:
+                        cache_min_date = df['trade_date'].min()
+                        cache_max_date = df['trade_date'].max()
+                        # 只有当缓存完全覆盖请求范围时才使用缓存
+                        if pd.to_datetime(start_date) >= cache_min_date:
+                            df = df[(df['trade_date'] >= start_date) & (df['trade_date'] <= end_date)]
+                            return df
 
         # 从数据库查询
         sql = """
@@ -141,7 +146,7 @@ class DoctorTaoDataFetcher:
 
         # 保存到缓存
         if self.use_cache and len(df) > 0:
-            df.to_parquet(cache_file, index=False)
+            self._safe_write_parquet(df, cache_file)
 
         return df
 
@@ -226,9 +231,10 @@ class DoctorTaoDataFetcher:
         if self.use_cache and cache_file.exists():
             cache_time = datetime.fromtimestamp(cache_file.stat().st_mtime)
             if datetime.now() - cache_time < timedelta(days=1):
-                df = pd.read_parquet(cache_file)
-                print(f"fetch_filter_table: 从缓存加载 {len(df)} 只股票")
-                return df
+                df = self._safe_read_parquet(cache_file)
+                if df is not None:
+                    print(f"fetch_filter_table: 从缓存加载 {len(df)} 只股票")
+                    return df
 
         print("fetch_filter_table: 正在构建基本面过滤表...")
 
@@ -294,10 +300,56 @@ class DoctorTaoDataFetcher:
 
         # 保存到缓存
         if self.use_cache:
-            df.to_parquet(cache_file, index=False)
+            self._safe_write_parquet(df, cache_file)
 
         print(f"fetch_filter_table: 完成，共 {len(df)} 只股票")
         return df
+
+    def _get_parquet_engine(self) -> Optional[str]:
+        """
+        检测可用的 parquet 引擎。
+
+        Returns:
+            'pyarrow' 或 None（如果不可用则禁用缓存）
+        """
+        try:
+            import pyarrow
+            import io
+            df = pd.DataFrame({'a': [1, 2], 'b': [3, 4]})
+            buf = io.BytesIO()
+            df.to_parquet(buf, engine='pyarrow')
+            buf.seek(0)
+            pd.read_parquet(buf, engine='pyarrow')
+            return 'pyarrow'
+        except Exception as e:
+            print(f"[WARNING] Parquet engine unavailable: {e}")
+            print("[WARNING] Cache disabled for DoctorTaoDataFetcher")
+            self.use_cache = False
+            return None
+
+
+    def _safe_read_parquet(self, cache_file: Path) -> Optional[pd.DataFrame]:
+        """安全地读取 parquet 文件，处理可能的错误。"""
+        if not self._parquet_engine:
+            return None
+        try:
+            return pd.read_parquet(cache_file, engine=self._parquet_engine)
+        except Exception as e:
+            print(f"[WARNING] Failed to read cache {cache_file}: {e}")
+            return None
+
+
+    def _safe_write_parquet(self, df: pd.DataFrame, cache_file: Path) -> bool:
+        """安全地写入 parquet 文件。"""
+        if not self._parquet_engine:
+            return False
+        try:
+            df.to_parquet(cache_file, index=False, engine=self._parquet_engine)
+            return True
+        except Exception as e:
+            print(f"[WARNING] Failed to write cache {cache_file}: {e}")
+            return False
+
 
     def clear_cache(self):
         """清空缓存"""

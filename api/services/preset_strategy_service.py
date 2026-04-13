@@ -301,6 +301,16 @@ def _run_momentum_reversal(run_id: int) -> None:
     screener = SignalScreener()
     result_df = screener.run_screener(output_csv=False)
 
+    # Get actual trade date from results and update run_date
+    actual_trade_date = None
+    if result_df is not None and len(result_df) > 0 and 'trade_date' in result_df.columns:
+        actual_trade_date = str(result_df['trade_date'].iloc[0])
+        execute_update(
+            "UPDATE trade_preset_strategy_run SET run_date = %s WHERE id = %s",
+            (actual_trade_date, run_id),
+        )
+        logger.info('[PRESET] momentum_reversal run %d: updated run_date to %s (trade date)', run_id, actual_trade_date)
+
     # Build signals list
     signal_cols = ['stock_code', 'stock_name', 'signal_type', 'rps', 'close', 'ma20', 'ma250', 'volume_ratio']
     signals = []
@@ -370,6 +380,13 @@ def _run_microcap_pure_mv(run_id: int) -> None:
     if not date_rows or not date_rows[0].get('latest_date'):
         raise ValueError('No trade date found in trade_stock_daily_basic')
     trade_date = str(date_rows[0]['latest_date'])
+
+    # Update run_date to use actual trade date instead of trigger date
+    execute_update(
+        "UPDATE trade_preset_strategy_run SET run_date = %s WHERE id = %s",
+        (trade_date, run_id),
+    )
+    logger.info('[PRESET] microcap_pure_mv run %d: updated run_date to %s (trade date)', run_id, trade_date)
 
     # Get microcap universe: bottom 20% by market cap, financial risk filters
     from strategist.microcap.universe import get_daily_universe

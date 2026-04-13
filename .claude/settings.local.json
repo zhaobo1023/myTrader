@@ -122,7 +122,9 @@
       "Bash(curl:*)",
       "Bash(alembic current:*)",
       "Bash(ssh -o StrictHostKeyChecking=no root@123.56.3.1 \"pwd && ls -la\")",
-      "Bash(ssh:*)"
+      "Bash(ssh:*)",
+      "Bash(docker build:*)",
+      "Bash(docker stop:*)"
     ],
     "deny": [],
     "ask": []
