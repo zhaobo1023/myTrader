@@ -49,12 +49,27 @@ def _clean_number(s: str) -> Optional[float]:
 
 
 def _unit_multiplier(unit_hint: str) -> float:
-    """Return multiplier to convert to yi (亿)."""
-    if "百万" in unit_hint or "million" in unit_hint.lower():
-        return 0.01   # 百万元 -> 亿元
-    if "千" in unit_hint:
-        return 0.00001  # 千元 -> 亿元
-    # 亿元 or unspecified (already in yi) -> 1
+    """Return multiplier to convert to yi (亿).
+
+    Recognized unit strings (case-insensitive):
+      亿元 / 亿       -> 1.0
+      百万元 / million -> 0.01   (1百万 = 0.01亿)
+      千元 / 千        -> 1e-5   (1千 = 0.00001亿)
+      万元 / 万        -> 1e-4   (1万 = 0.0001亿)
+      元               -> 1e-8   (1元 = 0.00000001亿)
+    """
+    hint = unit_hint.strip()
+    if "亿" in hint:
+        return 1.0
+    if "百万" in hint or "million" in hint.lower():
+        return 0.01
+    if "千" in hint:
+        return 1e-5   # 千元 -> 亿元
+    if "万" in hint:
+        return 1e-4   # 万元 -> 亿元
+    if "元" in hint:
+        return 1e-8   # 纯元 -> 亿元
+    # unspecified: assume already in 亿
     return 1.0
 
 

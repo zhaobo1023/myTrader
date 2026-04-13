@@ -86,11 +86,46 @@
 
 ---
 
+---
+
+## v1.3 银行专项数据层接入 (2026-04-13)
+
+### 背景
+以华夏银行（600015）为基准，与五步法综合研报交叉验证后发现：一页纸数据层完全缺少银行核心指标
+（NPL/拨备/资本充足率/NIM/逾期明细/公允价值变动），LLM 被迫用通用质量因子（流动比率/负债率）
+分析银行，导致判断失准（如将银行正常高负债率报为风险）。
+
+### 修复内容
+
+| # | 改动 | 文件 |
+|---|------|------|
+| 1 | 新增 `_collect_bank_indicators()` 方法，查询三张表：`financial_balance`（NPL/拨备/CAR/NIM）、`bank_overdue_detail`（NPL率2/逾期明细，Flitter方法）、`financial_income_detail`（公允价值变动/信用减值/非息收入） | `one_pager_data.py` |
+| 2 | `collect()` 方法中检测行业含"银行"时自动加入 `bank_indicators` 数据块，非银行股该块为空字符串 | `one_pager_data.py` |
+| 3 | Part1/Part2 prompt 新增 `{bank_indicators_block}` 占位符，有数据时渲染为 [D14] 数据块，无数据时自动消失 | `prompts.py` |
+| 4 | `_render_prompt()` 组装 `bank_indicators_block` 字符串传入 kwargs | `one_pager.py` |
+
+### 新增数据内容（华夏银行验证结果）
+
+- **financial_balance**：4期 NPL率/拨备覆盖率/拨备比/NIM/CET1/CAR，含拨备比趋势和监管合规判断
+- **bank_overdue_detail**：逾期90d+/重组贷款/NPL率2，含 NPL 交叉验证结论（OK/WARN 标记）
+- **financial_income_detail**：公允价值变动/信用减值/非息收入，含重大一次性损益自动预警
+- 2025年末华夏银行：公允价值变动 -35.35亿（同比摆动 -114.47亿），一次性损益预警自动触发
+
+### 验证结果（600015 华夏银行）
+
+| 数据块 | 修复前 | 修复后 |
+|--------|--------|--------|
+| 银行专项数据 | 全部缺失，LLM 用流动比率/负债率分析 | NPL率2/拨备比/NIM/公允价值变动完整呈现 |
+| NPL交叉验证 | 无 | NPL率2(1.541%) <= 官方NPL率(1.550%)，[OK] 不良认定严格 |
+| 公允价值变动预警 | 无 | -35.35亿，同比摆动-114.47亿，预警自动触发 |
+| 技术面数据 | 完整（`_collect_technical` 直接查 DB） | 完整（无变化） |
+
+---
+
 ## 待解决问题
 
 ### 数据层
 - [ ] `financial_cashflow` 表仅有 2 只银行数据（华夏/宁波），需要批量提取
-- [ ] `financial_income_detail` 表同样只有 2 只银行，需要扩展
 - [ ] `dv_ttm`（股息率）在 `trade_stock_daily_basic` 中大量为 NULL
 - [ ] 银行没有 OPERATE_COST，毛利率概念不适用（正确保持 NULL，但 LLM 可能不知道）
 

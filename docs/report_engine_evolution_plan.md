@@ -375,6 +375,7 @@ def get_bank_cross_section(self) -> str:
 | 3.3 债券三分法识别 | [ ] 延期 | 需年报附注解析，暂未实现 |
 | 3.4 银行横截面对标表 | [x] 完成 | Fallback 实现，包含典型估值范围对标 |
 | 3.5 Flitter prompt 精炼 | [x] 完成 | Step2/Step3 已注入一致预期和对标框架 |
+| 3.6 五步法技术面空白 bugfix | [x] 完成 | `data_tools.get_tech_analysis()` 传 bare code 时 DataFetcher 返回空；修复：在传给 DataFetcher 前自动查 trade_stock_daily 补全 .SH/.SZ 后缀 |
 
 ### Phase 4：其他行业
 

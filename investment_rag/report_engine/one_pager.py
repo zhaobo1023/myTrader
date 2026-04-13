@@ -171,6 +171,13 @@ class OnePagerAnalyzer:
             "price_technical": data_blocks.get("price_technical", "[无技术面数据]"),
             "valuation_verdict": data_blocks.get("valuation_verdict", "[无估值判断数据]"),
             "cashflow_analysis": data_blocks.get("cashflow_analysis", "[无现金流数据]"),
+            # 银行专项数据：有数据时加标题，无数据时传空字符串（prompt 中占位符直接消失）
+            "bank_indicators_block": (
+                "**[D14] 银行专项指标（NPL/拨备/CAR/NIM/逾期明细/利润明细，预计算）**：\n"
+                + data_blocks["bank_indicators"]
+                if data_blocks.get("bank_indicators")
+                else ""
+            ),
         }
 
         if step_config.needs_part1:

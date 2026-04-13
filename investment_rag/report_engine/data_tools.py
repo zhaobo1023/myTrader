@@ -401,9 +401,27 @@ class ReportDataTools:
         if DataFetcher is None:
             return "[Technical] DataFetcher not available (strategist.tech_scan not installed)"
 
+        # DataFetcher queries trade_stock_daily which requires .SH/.SZ suffix.
+        # If caller passes bare code (e.g. "600015"), auto-resolve the full code first.
+        full_code = stock_code
+        if "." not in stock_code and _execute_query is not None:
+            try:
+                rows = _execute_query(
+                    "SELECT stock_code FROM trade_stock_daily "
+                    "WHERE stock_code LIKE %s ORDER BY trade_date DESC LIMIT 1",
+                    (stock_code + ".%",),
+                    env=self._db_env,
+                )
+                if rows:
+                    full_code = rows[0]["stock_code"]
+                else:
+                    full_code = stock_code + (".SH" if stock_code.startswith("6") else ".SZ")
+            except Exception:
+                full_code = stock_code + (".SH" if stock_code.startswith("6") else ".SZ")
+
         fetcher = DataFetcher(env=self._db_env)
         try:
-            df = fetcher.fetch_daily_data([stock_code], lookback_days=lookback_days)
+            df = fetcher.fetch_daily_data([full_code], lookback_days=lookback_days)
         except Exception as e:
             logger.warning("[ReportDataTools] DataFetcher failed for %s: %s", stock_code, e)
             return f"[Technical] {stock_code} data fetch failed: {e}"

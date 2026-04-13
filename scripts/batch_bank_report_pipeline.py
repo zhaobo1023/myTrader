@@ -58,7 +58,7 @@ BANK_LIST = [
     ("601963", "重庆银行"),
 ]
 
-PDF_ROOT = Path("/Users/zhaobo/Documents/PDF资料/投资研究/公司研究/annual_reports")
+PDF_ROOT = Path("/Users/zhaobo/Documents/PDF/投资研究/公司研究/annual_reports")
 OUTPUT_DIR = Path(ROOT) / "output" / "bank_reports_2025"
 
 # ============================================================

@@ -121,6 +121,12 @@ class OnePagerDataCollector:
         result["roe_decomposition"] = self._compute_roe_trend(bare)
         result["valuation_verdict"] = self._compute_valuation_verdict(bare, full)
 
+        # 银行专项数据：当 company_profile 中行业含"银行"时自动加入
+        if "银行" in result["company_profile"]:
+            result["bank_indicators"] = self._collect_bank_indicators(bare)
+        else:
+            result["bank_indicators"] = ""
+
         return result
 
     def _resolve_full_code(self, bare: str) -> str:
@@ -976,3 +982,156 @@ class OnePagerDataCollector:
             return 100.0
         rs = avg_gain / avg_loss
         return 100 - 100 / (1 + rs)
+
+    # ==============================================================
+    # 14. Bank Industry Specific Data (conditional)
+    # ==============================================================
+
+    def _collect_bank_indicators(self, bare: str) -> str:
+        """
+        银行专项数据：NPL/拨备/资本充足率 + 逾期贷款明细（Flitter方法）+ 利润明细。
+        数据来源：financial_balance + bank_overdue_detail + financial_income_detail。
+        仅当行业分类含"银行"时由 collect() 调用。
+        """
+        lines = ["### 银行专项指标（预计算）\n"]
+        lines.append(
+            "注意：以下所有数字均来自数据库，分析时只能引用此处出现的数字。\n"
+            "高负债率（资产负债率>90%）是银行正常经营特征，不代表风险，请勿引用通用负债率阈值。\n"
+        )
+
+        # -- 1. financial_balance: NPL/拨备/CAR/NIM --
+        std_rows = self._q(
+            "SELECT report_date, npl_ratio, provision_coverage, provision_ratio, "
+            "cap_adequacy_ratio, tier1_ratio, nim "
+            "FROM financial_balance WHERE stock_code=%s "
+            "ORDER BY report_date DESC LIMIT 4",
+            (bare,),
+        )
+        if std_rows:
+            lines.append("**资产质量与经营指标（来自 financial_balance）**")
+            lines.append("| 报告期 | 官方NPL率(%) | 拨备覆盖率(%) | 拨备比(%) | NIM(%) | CET1(%) | CAR(%) |")
+            lines.append("|--------|------------|------------|---------|--------|--------|--------|")
+            for r in std_rows:
+                npl = _num(_sf(r.get("npl_ratio")), 3) + "%" if r.get("npl_ratio") else "(缺失)"
+                prov = _num(_sf(r.get("provision_coverage")), 2) + "%" if r.get("provision_coverage") else "(缺失)"
+                pr = _num(_sf(r.get("provision_ratio")), 3) + "%" if r.get("provision_ratio") else "(缺失)"
+                nim = _num(_sf(r.get("nim")), 2) + "%" if r.get("nim") else "(缺失)"
+                t1 = _num(_sf(r.get("tier1_ratio")), 2) + "%" if r.get("tier1_ratio") else "(缺失)"
+                car = _num(_sf(r.get("cap_adequacy_ratio")), 2) + "%" if r.get("cap_adequacy_ratio") else "(缺失)"
+                lines.append(f"| {r['report_date']} | {npl} | {prov} | {pr} | {nim} | {t1} | {car} |")
+
+            # 拨备覆盖率趋势与监管合规判断
+            if len(std_rows) >= 2:
+                latest_pr = _sf(std_rows[0].get("provision_ratio"))
+                prev_pr = _sf(std_rows[1].get("provision_ratio"))
+                if latest_pr is not None and prev_pr is not None:
+                    pr_diff = latest_pr - prev_pr
+                    lines.append(
+                        f"\n**拨备比趋势**: {std_rows[1]['report_date']} {prev_pr:.3f}% -> "
+                        f"{std_rows[0]['report_date']} {latest_pr:.3f}%，"
+                        f"{'下降' if pr_diff < 0 else '上升'} {abs(pr_diff):.3f}ppt"
+                    )
+
+                latest_prov = _sf(std_rows[0].get("provision_coverage"))
+                prev_prov = _sf(std_rows[1].get("provision_coverage"))
+                if latest_prov is not None and prev_prov is not None:
+                    diff = latest_prov - prev_prov
+                    lines.append(
+                        f"**拨备覆盖率趋势**: {prev_prov:.2f}% -> {latest_prov:.2f}%，"
+                        f"{'下降' if diff < 0 else '上升'} {abs(diff):.2f}ppt"
+                    )
+                    lines.append(
+                        "[监管背景] 2018年银保监会已将拨备覆盖率监管下限由150%调整为动态区间120%-150%。"
+                        "不良认定严格（NPL率2<=官方NPL率）的银行适用下限120%-130%，分析合规性须先判断适用档位。"
+                    )
+                    if latest_prov < 120:
+                        lines.append(f"[RED] 拨备覆盖率{latest_prov:.2f}%低于120%最低档，存在监管违规风险")
+                    elif latest_prov < 150:
+                        lines.append(f"[INFO] 拨备覆盖率{latest_prov:.2f}%处于130%-150%区间，需结合NPL交叉验证判断合规性")
+                    else:
+                        lines.append(f"[OK] 拨备覆盖率{latest_prov:.2f}%高于150%，无合规压力")
+        else:
+            lines.append("[financial_balance] 无数据（需运行 financial_fetcher）")
+
+        # -- 2. bank_overdue_detail: 逾期贷款明细 / NPL率2 (Flitter) --
+        ov_rows = self._q(
+            "SELECT report_date, total_loans, overdue_90_plus, restructured, "
+            "official_npl_ratio, npl_ratio2, overdue90_npl_coverage "
+            "FROM bank_overdue_detail WHERE stock_code=%s "
+            "ORDER BY report_date DESC LIMIT 4",
+            (bare,),
+        )
+        if ov_rows:
+            lines.append("\n**逾期贷款明细与NPL率2（Flitter方法，来自 bank_overdue_detail）**")
+            lines.append("| 报告期 | 总贷款(亿) | 逾期90d+(亿) | 重组贷款(亿) | 官方NPL率(%) | NPL率2(%) | 逾期/不良覆盖率(%) |")
+            lines.append("|--------|----------|------------|------------|------------|---------|-----------------|")
+            for r in ov_rows:
+                tl = _num(_sf(r.get("total_loans")), 2) if r.get("total_loans") else "(缺失)"
+                ov90 = _num(_sf(r.get("overdue_90_plus")), 2) if r.get("overdue_90_plus") else "(缺失)"
+                rs = _num(_sf(r.get("restructured")), 2) if r.get("restructured") else "(缺失)"
+                npl_off = _num(_sf(r.get("official_npl_ratio")), 3) + "%" if r.get("official_npl_ratio") else "(缺失)"
+                npl2 = _num(_sf(r.get("npl_ratio2")), 3) + "%" if r.get("npl_ratio2") else "(缺失)"
+                cov = _num(_sf(r.get("overdue90_npl_coverage")), 2) + "%" if r.get("overdue90_npl_coverage") else "(缺失)"
+                lines.append(f"| {r['report_date']} | {tl} | {ov90} | {rs} | {npl_off} | {npl2} | {cov} |")
+
+            lines.append("注: NPL率2 = (逾期90d+ + 重组贷款) / 总贷款，比官方NPL率更难粉饰")
+
+            # NPL vs NPL2 交叉验证
+            if ov_rows and std_rows:
+                latest_npl2 = _sf(ov_rows[0].get("npl_ratio2"))
+                latest_npl_off = _sf(std_rows[0].get("npl_ratio"))
+                if latest_npl2 is not None and latest_npl_off is not None:
+                    diff = latest_npl2 - latest_npl_off
+                    if diff <= 0:
+                        lines.append(
+                            f"\n**[NPL交叉验证] [OK]** NPL率2({latest_npl2:.3f}%) <= 官方NPL率({latest_npl_off:.3f}%)，"
+                            f"差值{diff:+.3f}ppt，不良认定严格，无隐藏不良，适用120%-130%最低拨备下限。"
+                        )
+                    elif diff < 0.3:
+                        lines.append(
+                            f"\n**[NPL交叉验证] [OK]** NPL率2({latest_npl2:.3f}%)略高于官方NPL率({latest_npl_off:.3f}%)，"
+                            f"差值{diff:+.3f}ppt(<0.3ppt)，属正常区间，无重大隐藏不良。"
+                        )
+                    else:
+                        lines.append(
+                            f"\n**[NPL交叉验证] [WARN]** NPL率2({latest_npl2:.3f}%)显著高于官方NPL率({latest_npl_off:.3f}%)，"
+                            f"差值{diff:+.3f}ppt(>0.3ppt)，存在潜在隐藏不良敞口。"
+                        )
+        else:
+            lines.append("\n[bank_overdue_detail] 无数据（需运行年报提取）")
+
+        # -- 3. financial_income_detail: 公允价值变动 / 信用减值 --
+        id_rows = self._q(
+            "SELECT report_date, fair_value_change, credit_impairment, "
+            "investment_income, fee_commission_net, non_interest_income_total "
+            "FROM financial_income_detail WHERE stock_code=%s "
+            "ORDER BY report_date DESC LIMIT 4",
+            (bare,),
+        )
+        if id_rows:
+            lines.append("\n**利润表明细 - 非息收入与关键损益（来自 financial_income_detail）**")
+            lines.append("| 报告期 | 公允价值变动(亿) | 信用减值(亿) | 投资收益(亿) | 手续费净收入(亿) | 非息收入合计(亿) |")
+            lines.append("|--------|---------------|-----------|-----------|--------------|--------------|")
+            for r in id_rows:
+                fv = _num(_sf(r.get("fair_value_change")), 2) if r.get("fair_value_change") is not None else "(缺失)"
+                ci = _num(_sf(r.get("credit_impairment")), 2) if r.get("credit_impairment") is not None else "(缺失)"
+                inv = _num(_sf(r.get("investment_income")), 2) if r.get("investment_income") is not None else "(缺失)"
+                fee = _num(_sf(r.get("fee_commission_net")), 2) if r.get("fee_commission_net") is not None else "(缺失)"
+                nii = _num(_sf(r.get("non_interest_income_total")), 2) if r.get("non_interest_income_total") is not None else "(缺失)"
+                lines.append(f"| {r['report_date']} | {fv} | {ci} | {inv} | {fee} | {nii} |")
+
+            # 公允价值变动波动预警
+            if len(id_rows) >= 2:
+                fv_new = _sf(id_rows[0].get("fair_value_change"))
+                fv_old = _sf(id_rows[1].get("fair_value_change"))
+                if fv_new is not None and fv_old is not None:
+                    swing = fv_new - fv_old
+                    if abs(swing) > 10:
+                        lines.append(
+                            f"\n**[公允价值变动警示]** 同比摆动{swing:+.2f}亿，"
+                            f"属重大非经常性项目（通常来自债券/国债持仓浮盈浮亏），分析盈利时须单独剥离。"
+                        )
+        else:
+            lines.append("\n[financial_income_detail] 无数据（需运行年报提取）")
+
+        return "\n".join(lines)

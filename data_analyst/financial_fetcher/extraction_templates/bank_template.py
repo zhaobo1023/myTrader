@@ -112,29 +112,43 @@ class BankTemplate(BaseTemplate):
         result = {}
 
         # Strategy 1: prose descriptions with 亿元 values (primary - most reliable)
-        # "经营活动产生的现金净流入XX亿元" / "投资活动产生的现金净流出XX亿元"
+        # Variants:
+        #   "经营活动产生的现金净流入XX亿元"
+        #   "经营活动产生的现金流量净额为XX亿元，上年度为净流出..."
+        #   "经营活动产生的现金净额XX亿元"
         prose_patterns = {
-            "operating_cashflow": r"经营活动产生的现金净流[入出]\s*([\d.]+)\s*亿",
-            "investing_cashflow": r"投资活动产生的现金净流[入出]\s*([\d.]+)\s*亿",
-            "financing_cashflow": r"筹资活动产生的现金净流[入出]\s*([\d.]+)\s*亿",
+            "operating_cashflow": (
+                r"经营活动产生的现金(?:净流[入出]|流量净额[^，。\d]*?(?:净流入)?)[^\d（(（]*([（(（]?[\d.]+[）)）]?)\s*亿",
+                r"经营活动产生的现金(?:净(流入|流出)|流量净额)",
+            ),
+            "investing_cashflow": (
+                r"投资活动产生的现金(?:净流[入出]|流量净额[^，。\d]*?(?:净流入)?)[^\d（(（]*([（(（]?[\d.]+[）)）]?)\s*亿",
+                r"投资活动产生的现金(?:净(流入|流出)|流量净额)",
+            ),
+            "financing_cashflow": (
+                r"筹资活动产生的现金(?:净流[入出]|流量净额[^，。\d]*?(?:净流入)?)[^\d（(（]*([（(（]?[\d.]+[）)）]?)\s*亿",
+                r"筹资活动产生的现金(?:净(流入|流出)|流量净额)",
+            ),
         }
-        sign_pat = {
-            "operating_cashflow": r"经营活动产生的现金净(流入|流出)",
-            "investing_cashflow": r"投资活动产生的现金净(流入|流出)",
-            "financing_cashflow": r"筹资活动产生的现金净(流入|流出)",
-        }
-        for schema_col, pat in prose_patterns.items():
-            val = self.extract_inline_number(self.text, pat)
-            if val is not None:
-                sm = re.search(sign_pat[schema_col], self.text)
-                if sm and sm.group(1) == "流出":
+        for schema_col, (pat, sign_pat) in prose_patterns.items():
+            m_val = re.search(pat, self.text)
+            if m_val:
+                raw = m_val.group(1).replace("（", "").replace("）", "").replace("(", "").replace(")", "")
+                try:
+                    val = float(raw.replace(",", ""))
+                except ValueError:
+                    continue
+                # Determine sign: look for 流出/净流出 in the matched context
+                ctx = m_val.group(0)
+                if "流出" in ctx and "净流入" not in ctx:
                     val = -val
                 result[schema_col] = val
 
-        # Strategy 2: table row pattern (百万元) for operating cashflow fallback
-        # Pattern: 经营活动产生的现金流量净额|69,063|...
+        # Strategy 2: table row pattern for operating cashflow fallback.
+        # Detect actual unit from nearby "单位：XXX" declaration; default 百万元.
         if "operating_cashflow" not in result:
-            unit_hint = "百万元"
+            m_unit = re.search(r"单位[：:]\s*([^\n）)（]+)", self.text)
+            unit_hint = m_unit.group(1).strip() if m_unit else "百万元"
             mult = _unit_multiplier(unit_hint)
             val = self.extract_inline_number(
                 self.text,
@@ -308,6 +322,11 @@ class BankTemplate(BaseTemplate):
           | 正常贷款 | 2,525,239 | ... |
           ...
         We want: col1 = 2025年末 余额 (index 1)
+
+        Auto-detects unit from table magnitude when no explicit 单位 declaration:
+          - values >= 1e7 → assume 元 (mult = 1e-8)
+          - values >= 1e4 → assume 千元 (mult = 1e-5), rare
+          - otherwise     → use caller-supplied mult (default 百万元 = 0.01)
         """
         result = {}
         lines = [l.strip() for l in section.split("\n") if l.strip()]
@@ -335,6 +354,21 @@ class BankTemplate(BaseTemplate):
                 continue
             data_lines.append(cells)
 
+        # Auto-detect unit from first numeric value in the table.
+        # If the raw number is >= 1e7, the table is denominated in 元.
+        # If >= 500 (百万元 would give value in range 500-50000 for a ~10亿 bank), keep mult.
+        effective_mult = mult
+        for cells in data_lines:
+            if len(cells) > 1:
+                v = _clean_number(cells[1])
+                if v is not None and abs(v) > 0:
+                    if abs(v) >= 1e7:
+                        effective_mult = 1e-8   # 元 -> 亿
+                    elif abs(v) >= 1e4 and mult == 0.01:
+                        # Likely 千元 when default百万元 doesn't fit
+                        effective_mult = 1e-5
+                    break
+
         field_map = {
             "逾期1": "overdue_1_90",
             "逾期91": "overdue_91_360",
@@ -356,9 +390,7 @@ class BankTemplate(BaseTemplate):
                 continue
             for cn_key, schema_col in field_map.items():
                 if cn_key in item:
-                    # "合计" matches total_loans; but "逾期贷款" row also exists
-                    # skip if schema_col already set from inline (inline is more reliable)
-                    result[schema_col] = val * mult
+                    result[schema_col] = val * effective_mult
                     break
 
         return result
