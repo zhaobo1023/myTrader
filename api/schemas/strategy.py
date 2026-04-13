@@ -96,5 +96,6 @@ class PresetRunDetail(PresetRunSummary):
 
 class PresetStrategyCard(BaseModel):
     meta: PresetStrategyMeta
-    today_run: Optional[PresetRunSummary]
+    latest_trade_date: Optional[str]
+    latest_run: Optional[PresetRunSummary]
     recent_runs: List[PresetRunSummary]

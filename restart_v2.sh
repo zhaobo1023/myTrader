@@ -88,7 +88,7 @@ docker run -d \
   --name mytrader-web \
   --network app_mytrader-network \
   -p 127.0.0.1:3000:3000 \
-  -e NEXT_PUBLIC_API_BASE_URL=http://123.56.3.1 \
+  -e NEXT_PUBLIC_API_BASE_URL=http://123.56.3.1:8000 \
   --restart unless-stopped \
   mytrader-web:latest
 

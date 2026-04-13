@@ -2,14 +2,26 @@
 """
 Celery application configuration
 """
+import os
 from celery import Celery
 
 from api.config import settings
 
+# Clear Celery environment variables to avoid password authentication issues
+# Celery prioritizes env vars over constructor parameters
+if 'CELERY_BROKER_URL' in os.environ:
+    del os.environ['CELERY_BROKER_URL']
+if 'CELERY_RESULT_BACKEND' in os.environ:
+    del os.environ['CELERY_RESULT_BACKEND']
+
+# Build Redis URLs directly from settings (without password)
+broker_url = f'redis://{settings.redis_host}:{settings.redis_port}/1'
+backend_url = f'redis://{settings.redis_host}:{settings.redis_port}/2'
+
 celery_app = Celery(
     'mytrader',
-    broker=settings.celery_broker_url,
-    backend=settings.celery_result_backend,
+    broker=broker_url,
+    backend=backend_url,
 )
 
 celery_app.conf.update(
@@ -30,13 +42,86 @@ celery_app.autodiscover_tasks(['api.tasks'])
 from celery.schedules import crontab
 
 celery_app.conf.beat_schedule = {
+    # ============================================================
+    # 每日收盘后任务 (交易日 15:00-16:00 收盘)
+    # ============================================================
+
+    # 16:30 - 监控自选股
     'daily-watchlist-scan': {
         'task': 'watchlist_scan.scan_all_users',
         'schedule': crontab(hour=16, minute=30, day_of_week='1-5'),
     },
+
+    # 17:30 - 宏观数据拉取
+    'daily-macro-fetch': {
+        'task': 'scheduler.adapters.run_macro_fetch',
+        'schedule': crontab(hour=17, minute=30, day_of_week='1-5'),
+    },
+
+    # 18:00 - 等待数据就绪
+    'daily-data-gate': {
+        'task': 'scheduler.adapters.run_data_gate',
+        'schedule': crontab(hour=18, minute=0, day_of_week='1-5'),
+    },
+
+    # 18:30 - 因子计算
+    'daily-factor-calc': {
+        'task': 'scheduler.adapters.run_factor_calculation',
+        'schedule': crontab(hour=18, minute=30, day_of_week='1-5'),
+    },
+
+    # 19:00 - 技术指标 & RPS
+    'daily-indicator-calc': {
+        'task': 'scheduler.adapters.run_indicator_calculation',
+        'schedule': crontab(hour=19, minute=0, day_of_week='1-5'),
+    },
+
+    # 19:30 - 预设策略执行 (动量反转 + 微盘股)
+    'daily-preset-strategies': {
+        'task': 'run_preset_strategies_daily',
+        'schedule': crontab(hour=19, minute=30, day_of_week='1-5'),
+    },
+
+    # 20:00 - 主题池评分
+    'daily-theme-pool-score': {
+        'task': 'scheduler.adapters.run_theme_pool_score',
+        'schedule': crontab(hour=20, minute=0, day_of_week='1-5'),
+    },
+
+    # ============================================================
+    # 舆情监控任务 (每小时)
+    # ============================================================
+    'hourly-fear-index-fetch': {
+        'task': 'fetch_fear_index',
+        'schedule': crontab(minute=0),  # Every hour
+    },
+
+    # ============================================================
+    # 凌晨维护任务
+    # ============================================================
+
+    # 00:05 - 订阅过期检查
     'daily-expire-subscriptions': {
         'task': 'expire_subscriptions',
         'schedule': crontab(hour=0, minute=5),
+    },
+
+    # 01:00 - 数据完整性检查
+    'daily-data-integrity-check': {
+        'task': 'scheduler.adapters.run_data_integrity_check',
+        'schedule': crontab(hour=1, minute=0, day_of_week='1-5'),
+    },
+
+    # 02:00 - 技术面持仓扫描
+    'daily-tech-scan': {
+        'task': 'scheduler.adapters.run_tech_scan',
+        'schedule': crontab(hour=2, minute=0, day_of_week='1-5'),
+    },
+
+    # 03:00 - 行业ETF对数乖离率
+    'daily-log-bias': {
+        'task': 'scheduler.adapters.run_log_bias_strategy',
+        'schedule': crontab(hour=3, minute=0, day_of_week='1-5'),
     },
 }
 celery_app.conf.timezone = 'Asia/Shanghai'

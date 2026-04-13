@@ -124,7 +124,10 @@
       "Bash(ssh -o StrictHostKeyChecking=no root@123.56.3.1 \"pwd && ls -la\")",
       "Bash(ssh:*)",
       "Bash(docker build:*)",
-      "Bash(docker stop:*)"
+      "Bash(docker stop:*)",
+      "Bash(mv /tmp/preset_strategy_new.py /root/app/api/services/preset_strategy_service.py)",
+      "Bash(dmesg)",
+      "Bash(docker top:*)"
     ],
     "deny": [],
     "ask": []

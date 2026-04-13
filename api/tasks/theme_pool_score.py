@@ -514,16 +514,17 @@ def _calc_returns(stock_code: str, entry_price: float, entry_date, score_date: d
         if not latest_close:
             return {}
 
-        # Simple return from entry
+        # Calculate return from entry_price to price at different windows
+        # return_5d = (price 5 days ago - entry_price) / entry_price * 100
         for window, key in [(5, 'return_5d'), (10, 'return_10d'), (20, 'return_20d'), (60, 'return_60d')]:
             if len(rows) >= window:
                 past_close = _to_float(rows[min(window - 1, len(rows) - 1)].get('close_price'))
                 if past_close and past_close > 0:
-                    result[key] = round((latest_close - entry_price) / entry_price * 100, 2)
+                    result[key] = round((past_close - entry_price) / entry_price * 100, 2)
                 else:
                     result[key] = None
             else:
-                # Not enough history, use entry price based return
+                # Not enough history, use latest close
                 result[key] = round((latest_close - entry_price) / entry_price * 100, 2)
 
     except Exception as e:

@@ -11,6 +11,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import JSONResponse
 
+from config.db import execute_query
 from api.schemas.sentiment import (
     FearIndexResponse,
     FearIndexHistoryResponse,
@@ -40,23 +41,41 @@ router = APIRouter(prefix="/api/sentiment", tags=["sentiment"])
 
 @router.get("/fear-index", response_model=FearIndexResponse)
 async def get_fear_index():
-    """获取当前恐慌指数"""
+    """获取当前恐慌指数（从数据库缓存）"""
     try:
-        service = FearIndexService()
-        result = service.get_fear_index()
-        
-        return FearIndexResponse(
-            vix=result.vix,
-            ovx=result.ovx,
-            gvz=result.gvz,
-            us10y=result.us10y,
-            fear_greed_score=result.fear_greed_score,
-            market_regime=result.market_regime,
-            vix_level=result.vix_level,
-            us10y_strategy=result.us10y_strategy,
-            risk_alert=result.risk_alert,
-            timestamp=result.timestamp,
+        storage = SentimentStorage()
+        # 获取最新一条记录
+        data = execute_query(
+            """SELECT * FROM trade_fear_index
+               ORDER BY trade_date DESC
+               LIMIT 1""",
+            env='online',
         )
+
+        if not data:
+            # 如果数据库无数据，触发一次即时抓取
+            from api.tasks.fear_index import fetch_fear_index
+            fetch_fear_index.apply_async()
+            raise HTTPException(
+                status_code=404,
+                detail='暂无恐慌指数数据，后台正在抓取中，请稍后再试'
+            )
+
+        row = data[0]
+        return FearIndexResponse(
+            vix=float(row['vix']) if row['vix'] is not None else 0.0,
+            ovx=float(row['ovx']) if row['ovx'] is not None else 0.0,
+            gvz=float(row['gvz']) if row['gvz'] is not None else 0.0,
+            us10y=float(row['us10y']) if row['us10y'] is not None else 0.0,
+            fear_greed_score=int(row['fear_greed_score']) if row['fear_greed_score'] is not None else 50,
+            market_regime=row['market_regime'] or 'neutral',
+            vix_level=row['vix_level'] or '',
+            us10y_strategy=row['us10y_strategy'] or '',
+            risk_alert=row.get('risk_alert'),
+            timestamp=row.get('updated_at') or row.get('created_at'),
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get fear index: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -228,33 +247,49 @@ async def get_polymarket(
 async def get_overview():
     """获取舆情监控概览"""
     try:
-        # 获取恐慌指数
-        fear_service = FearIndexService()
-        fear_result = fear_service.get_fear_index()
-        
+        # 获取恐慌指数（从数据库缓存）
+        fear_data = execute_query(
+            """SELECT * FROM trade_fear_index
+               ORDER BY trade_date DESC
+               LIMIT 1""",
+            env='online',
+        )
+
+        if fear_data:
+            row = fear_data[0]
+            fear_index = FearIndexResponse(
+                vix=float(row['vix']) if row['vix'] is not None else 0.0,
+                ovx=float(row['ovx']) if row['ovx'] is not None else 0.0,
+                gvz=float(row['gvz']) if row['gvz'] is not None else 0.0,
+                us10y=float(row['us10y']) if row['us10y'] is not None else 0.0,
+                fear_greed_score=int(row['fear_greed_score']) if row['fear_greed_score'] is not None else 50,
+                market_regime=row['market_regime'] or 'neutral',
+                vix_level=row['vix_level'] or '',
+                us10y_strategy=row['us10y_strategy'] or '',
+                risk_alert=row.get('risk_alert'),
+                timestamp=row.get('updated_at') or row.get('created_at'),
+            )
+        else:
+            # 如果数据库无数据，返回默认值
+            fear_index = FearIndexResponse(
+                vix=0.0, ovx=0.0, gvz=0.0, us10y=0.0,
+                fear_greed_score=50, market_regime='neutral',
+                vix_level='', us10y_strategy='', risk_alert=None,
+                timestamp=datetime.now(),
+            )
+
         # 获取事件统计
         storage = SentimentStorage()
         all_events = storage.get_recent_events(days=3)
-        
+
         bullish_count = sum(1 for e in all_events if e['event_type'] == 'bullish')
         bearish_count = sum(1 for e in all_events if e['event_type'] == 'bearish')
-        
+
         # 获取聪明钱信号数量（这里简化处理，实际应该从数据库查询）
         smart_money_count = 0
-        
+
         return OverviewResponse(
-            fear_index=FearIndexResponse(
-                vix=fear_result.vix,
-                ovx=fear_result.ovx,
-                gvz=fear_result.gvz,
-                us10y=fear_result.us10y,
-                fear_greed_score=fear_result.fear_greed_score,
-                market_regime=fear_result.market_regime,
-                vix_level=fear_result.vix_level,
-                us10y_strategy=fear_result.us10y_strategy,
-                risk_alert=fear_result.risk_alert,
-                timestamp=fear_result.timestamp,
-            ),
+            fear_index=fear_index,
             event_count=len(all_events),
             bullish_count=bullish_count,
             bearish_count=bearish_count,

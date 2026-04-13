@@ -127,13 +127,22 @@ def get_run_status() -> Optional[dict]:
 
 
 def trigger_run() -> dict:
-    """Trigger today's log bias daily calculation."""
+    """Trigger log bias daily calculation for the latest trade date."""
     _ensure_run_table()
-    today = date.today().isoformat()
+
+    # Get the latest trade date from database
+    trade_date_rows = execute_query(
+        "SELECT MAX(trade_date) AS max_date FROM trade_stock_daily WHERE stock_code LIKE '%%.SZ' OR stock_code LIKE '%%.SH'",
+        env='online',
+    )
+    if not trade_date_rows or not trade_date_rows[0]['max_date']:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail='无法获取最新交易日数据')
+    trade_date = str(trade_date_rows[0]['max_date'])
 
     rows = execute_query(
         "SELECT id, status, triggered_at FROM trade_log_bias_run WHERE run_date = %s ORDER BY id DESC LIMIT 1",
-        (today,),
+        (trade_date,),
         env='online',
     )
     if rows:
@@ -141,7 +150,7 @@ def trigger_run() -> dict:
         status = row['status']
         if status == 'done':
             from fastapi import HTTPException
-            raise HTTPException(status_code=409, detail='今日已完成，不可重复触发')
+            raise HTTPException(status_code=409, detail=f'交易日 {trade_date} 已完成，不可重复触发')
         if status in ('pending', 'running'):
             triggered_at = row['triggered_at']
             if isinstance(triggered_at, str):
@@ -149,7 +158,7 @@ def trigger_run() -> dict:
             elapsed = (datetime.now() - triggered_at.replace(tzinfo=None)).total_seconds() / 3600
             if elapsed < LOG_BIAS_TIMEOUT_HOURS:
                 from fastapi import HTTPException
-                raise HTTPException(status_code=409, detail='今日任务正在执行中')
+                raise HTTPException(status_code=409, detail=f'交易日 {trade_date} 任务正在执行中')
             execute_update(
                 "UPDATE trade_log_bias_run SET status='failed', error_msg='execution timeout' WHERE id = %s",
                 (row['id'],),
@@ -157,24 +166,24 @@ def trigger_run() -> dict:
             )
         execute_update(
             "DELETE FROM trade_log_bias_run WHERE run_date = %s",
-            (today,),
+            (trade_date,),
             env='online',
         )
 
     execute_update(
         "INSERT INTO trade_log_bias_run (run_date, status, triggered_at) VALUES (%s, 'pending', NOW())",
-        (today,),
+        (trade_date,),
         env='online',
     )
     id_rows = execute_query(
         "SELECT id FROM trade_log_bias_run WHERE run_date = %s ORDER BY id DESC LIMIT 1",
-        (today,),
+        (trade_date,),
         env='online',
     )
     run_id = id_rows[0]['id']
 
-    threading.Thread(target=_run_in_background, args=(run_id, today), daemon=True).start()
-    return {'run_id': run_id, 'status': 'pending', 'run_date': today}
+    threading.Thread(target=_run_in_background, args=(run_id, trade_date), daemon=True).start()
+    return {'run_id': run_id, 'status': 'pending', 'run_date': trade_date}
 
 
 # ---------------------------------------------------------------------------

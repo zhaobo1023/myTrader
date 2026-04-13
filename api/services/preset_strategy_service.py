@@ -3,11 +3,11 @@
 预设策略服务
 
 管理预设策略的触发、执行状态跟踪和结果查询。
+使用 Celery 异步任务队列执行策略。
 """
 import json
 import logging
 import math
-import threading
 from datetime import date, datetime, timezone
 from typing import Dict, List, Optional
 
@@ -79,8 +79,16 @@ def _is_timeout(row: dict) -> bool:
     triggered_at = row.get('triggered_at')
     if not isinstance(triggered_at, datetime):
         return False
-    now = datetime.now()
-    delta = now - triggered_at.replace(tzinfo=None)
+    # Use UTC now for consistent comparison
+    now = datetime.now(timezone.utc)
+    # Remove timezone info from triggered_at if present for comparison
+    if triggered_at.tzinfo:
+        triggered_at_naive = triggered_at.replace(tzinfo=None)
+        now_naive = now.replace(tzinfo=None)
+    else:
+        triggered_at_naive = triggered_at
+        now_naive = now.replace(tzinfo=None)
+    delta = now_naive - triggered_at_naive
     return delta.total_seconds() > STRATEGY_RUN_TIMEOUT_HOURS * 3600
 
 
@@ -91,22 +99,31 @@ def _is_timeout(row: dict) -> bool:
 def list_preset_strategies() -> List[dict]:
     """
     Return all preset strategies, each augmented with:
-      - today_run: today's run summary (or None)
+      - latest_trade_date: latest trade date from database
+      - latest_run: run summary for latest trade date (or None)
       - recent_runs: last 5 run summaries
     """
-    today_str = date.today().isoformat()
+    # Get latest trade date from database
+    trade_date_rows = execute_query(
+        "SELECT MAX(trade_date) AS max_date FROM trade_stock_daily WHERE stock_code LIKE '%%.SZ' OR stock_code LIKE '%%.SH'",
+        env='online',
+    )
+    latest_trade_date = trade_date_rows[0]['max_date'].isoformat() if trade_date_rows and trade_date_rows[0].get('max_date') else None
+
     result = []
     for strategy in PRESET_STRATEGIES:
         key = strategy['key']
         recent_runs = get_strategy_runs(key, limit=5)
-        today_run = None
-        for run in recent_runs:
-            if run['run_date'] == today_str:
-                today_run = run
-                break
+        latest_run = None
+        if latest_trade_date:
+            for run in recent_runs:
+                if run['run_date'] == latest_trade_date:
+                    latest_run = run
+                    break
         result.append({
             'meta': strategy,
-            'today_run': today_run,
+            'latest_trade_date': latest_trade_date,
+            'latest_run': latest_run,
             'recent_runs': recent_runs,
         })
     return result
@@ -148,56 +165,72 @@ def get_run_detail(run_id: int) -> Optional[dict]:
 
 def trigger_strategy_run(strategy_key: str, force: bool = False) -> dict:
     """
-    Trigger a new preset strategy run for today.
+    Trigger a new preset strategy run for the latest trade date.
 
     Rules:
+    - Uses latest trade date from database (not date.today())
     - status pending/running (not timed out) -> 409 already in progress
-    - status done -> 409 already done today (unless force=True)
+    - status done -> 409 already done for this trade date (unless force=True)
     - status running but timed out -> mark failed, allow re-trigger
     - status failed -> allow re-trigger
-    - no record today -> insert new record
+    - no record for trade date -> insert new record
 
     Args:
         strategy_key: Strategy identifier (e.g., 'microcap_pure_mv')
-        force: If True, allow re-running even if already done today
+        force: If True, allow re-running even if already done
     """
     # Validate strategy key
     valid_keys = {s['key'] for s in PRESET_STRATEGIES}
     if strategy_key not in valid_keys:
         raise HTTPException(status_code=404, detail=f'Strategy {strategy_key!r} not found')
 
-    today_str = date.today().isoformat()
+    # Get latest trade date from database
+    trade_date_rows = execute_query(
+        "SELECT MAX(trade_date) AS max_date FROM trade_stock_daily WHERE stock_code LIKE '%%.SZ' OR stock_code LIKE '%%.SH'",
+        env='online',
+    )
+    if not trade_date_rows or not trade_date_rows[0].get('max_date'):
+        raise HTTPException(status_code=500, detail='无法获取最新交易日数据')
+    trade_date_str = str(trade_date_rows[0]['max_date'])
 
     rows = execute_query(
         """
-        SELECT id, status, triggered_at
+        SELECT id, status, triggered_at,
+               TIMESTAMPDIFF(HOUR, triggered_at, NOW()) AS hours_since_trigger
         FROM trade_preset_strategy_run
         WHERE strategy_key = %s AND run_date = %s
         ORDER BY id DESC
         LIMIT 1
         """,
-        (strategy_key, today_str),
+        (strategy_key, trade_date_str),
     )
 
     if rows:
         row = dict(rows[0])
         status = row['status']
+        hours_since = row.get('hours_since_trigger', 0)
 
         if status == 'done':
             if not force:
-                raise HTTPException(status_code=409, detail='今日已完成，不可重复触发')
+                raise HTTPException(
+                    status_code=409,
+                    detail=f'交易日 {trade_date_str} 已完成，不可重复触发'
+                )
             # force=True: delete the completed run and allow re-trigger
             logger.info('[PRESET] Force re-trigger for %s on %s, deleting previous run %s',
-                       strategy_key, today_str, row['id'])
+                       strategy_key, trade_date_str, row['id'])
 
         if status in ('pending', 'running'):
-            if _is_timeout(row):
+            if hours_since > STRATEGY_RUN_TIMEOUT_HOURS:
                 execute_update(
                     "UPDATE trade_preset_strategy_run SET status = 'failed', error_msg = 'execution timeout' WHERE id = %s",
                     (row['id'],),
                 )
             else:
-                raise HTTPException(status_code=409, detail='今日任务已在执行中')
+                raise HTTPException(
+                    status_code=409,
+                    detail=f'交易日 {trade_date_str} 任务已在执行中'
+                )
 
         # failed (any reason) or timed-out running: delete old record so INSERT succeeds
         execute_update(
@@ -205,7 +238,7 @@ def trigger_strategy_run(strategy_key: str, force: bool = False) -> dict:
             (row['id'],),
         )
 
-    # Insert new pending record
+    # Insert new pending record with actual trade date
     execute_update(
         """
         INSERT INTO trade_preset_strategy_run
@@ -214,7 +247,7 @@ def trigger_strategy_run(strategy_key: str, force: bool = False) -> dict:
              market_status, market_message)
         VALUES (%s, %s, 'pending', NOW(), 0, 0, 0, '', '')
         """,
-        (strategy_key, today_str),
+        (strategy_key, trade_date_str),
     )
 
     # Fetch the new run_id
@@ -224,244 +257,16 @@ def trigger_strategy_run(strategy_key: str, force: bool = False) -> dict:
         WHERE strategy_key = %s AND run_date = %s
         ORDER BY id DESC LIMIT 1
         """,
-        (strategy_key, today_str),
+        (strategy_key, trade_date_str),
     )
     run_id = id_rows[0]['id'] if id_rows else None
 
-    # Launch background thread
-    thread = threading.Thread(
-        target=_execute_in_background,
-        args=(run_id, strategy_key),
-        daemon=True,
-    )
-    thread.start()
+    # Submit to Celery task queue
+    from api.tasks.preset_strategies import run_preset_strategy
+    task = run_preset_strategy.apply_async(args=[run_id, strategy_key, 'online'])
+    logger.info('[PRESET] Submitted Celery task: run_id=%d task_id=%s strategy=%s trade_date=%s',
+                run_id, task.id, strategy_key, trade_date_str)
 
-    return {'run_id': run_id, 'status': 'pending'}
+    return {'run_id': run_id, 'status': 'pending', 'task_id': task.id, 'run_date': trade_date_str}
 
 
-# ---------------------------------------------------------------------------
-# Background execution
-# ---------------------------------------------------------------------------
-
-def _execute_in_background(run_id: int, strategy_key: str) -> None:
-    """Run the selected strategy in a background thread and persist results."""
-    logger.info('[PRESET] Starting background run %s for strategy %s', run_id, strategy_key)
-
-    # Mark as running
-    execute_update(
-        "UPDATE trade_preset_strategy_run SET status = 'running' WHERE id = %s",
-        (run_id,),
-    )
-
-    try:
-        if strategy_key == 'momentum_reversal':
-            _run_momentum_reversal(run_id)
-        elif strategy_key == 'microcap_pure_mv':
-            _run_microcap_pure_mv(run_id)
-        else:
-            raise ValueError(f'Unknown strategy key: {strategy_key}')
-    except Exception as exc:
-        error_msg = str(exc)[:500]
-        logger.error('[PRESET] Run %s failed: %s', run_id, error_msg)
-        try:
-            execute_update(
-                """
-                UPDATE trade_preset_strategy_run
-                SET status = 'failed', error_msg = %s, finished_at = NOW()
-                WHERE id = %s
-                """,
-                (error_msg, run_id),
-            )
-        except Exception as update_exc:
-            logger.error('[PRESET] Failed to update error status for run %s: %s', run_id, update_exc)
-
-
-def _safe_float(v) -> Optional[float]:
-    """Convert value to float, returning None for NaN/Inf."""
-    try:
-        f = float(v)
-        if math.isnan(f) or math.isinf(f):
-            return None
-        return f
-    except (TypeError, ValueError):
-        return None
-
-
-def _run_momentum_reversal(run_id: int) -> None:
-    """Execute momentum reversal screener and persist results."""
-    import os
-    import sys
-
-    ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    if ROOT not in sys.path:
-        sys.path.insert(0, ROOT)
-
-    from strategist.doctor_tao.signal_screener import SignalScreener
-
-    screener = SignalScreener()
-    result_df = screener.run_screener(output_csv=False)
-
-    # Get actual trade date from results and update run_date
-    actual_trade_date = None
-    if result_df is not None and len(result_df) > 0 and 'trade_date' in result_df.columns:
-        actual_trade_date = str(result_df['trade_date'].iloc[0])
-        execute_update(
-            "UPDATE trade_preset_strategy_run SET run_date = %s WHERE id = %s",
-            (actual_trade_date, run_id),
-        )
-        logger.info('[PRESET] momentum_reversal run %d: updated run_date to %s (trade date)', run_id, actual_trade_date)
-
-    # Build signals list
-    signal_cols = ['stock_code', 'stock_name', 'signal_type', 'rps', 'close', 'ma20', 'ma250', 'volume_ratio']
-    signals = []
-    if result_df is not None and len(result_df) > 0:
-        available_cols = [c for c in signal_cols if c in result_df.columns]
-        for _, row in result_df[available_cols].iterrows():
-            record = {}
-            for col in available_cols:
-                val = row[col]
-                if col in ('rps', 'close', 'ma20', 'ma250', 'volume_ratio'):
-                    record[col] = _safe_float(val)
-                else:
-                    record[col] = '' if (val is None or (isinstance(val, float) and math.isnan(val))) else str(val)
-            signals.append(record)
-
-    signals_json = json.dumps(signals, ensure_ascii=False)
-
-    # Compute counts
-    signal_count = len(signals)
-    momentum_count = sum(1 for s in signals if s.get('signal_type') == 'momentum')
-    reversal_count = sum(1 for s in signals if s.get('signal_type') == 'reversal')
-
-    # Market status from first signal row (all rows carry same market info)
-    market_status = ''
-    market_message = ''
-    if result_df is not None and len(result_df) > 0:
-        if 'market_status' in result_df.columns:
-            market_status = str(result_df['market_status'].iloc[0] or '')
-        if 'market_message' in result_df.columns:
-            market_message = str(result_df['market_message'].iloc[0] or '')[:200]
-
-    execute_update(
-        """
-        UPDATE trade_preset_strategy_run
-        SET status = 'done',
-            signal_count = %s,
-            momentum_count = %s,
-            reversal_count = %s,
-            market_status = %s,
-            market_message = %s,
-            signals_json = %s,
-            finished_at = NOW()
-        WHERE id = %s
-        """,
-        (signal_count, momentum_count, reversal_count,
-         market_status, market_message, signals_json, run_id),
-    )
-    logger.info('[PRESET] Run %s completed: %s signals', run_id, signal_count)
-
-
-def _run_microcap_pure_mv(run_id: int) -> None:
-    """Select today's microcap candidate stocks (pure_mv factor with financial filters)."""
-    import os
-    import sys
-
-    ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    if ROOT not in sys.path:
-        sys.path.insert(0, ROOT)
-
-    from config.db import execute_query as db_query
-
-    # Get latest trade date
-    date_rows = db_query(
-        "SELECT MAX(trade_date) AS latest_date FROM trade_stock_daily_basic",
-        (),
-    )
-    if not date_rows or not date_rows[0].get('latest_date'):
-        raise ValueError('No trade date found in trade_stock_daily_basic')
-    trade_date = str(date_rows[0]['latest_date'])
-
-    # Update run_date to use actual trade date instead of trigger date
-    execute_update(
-        "UPDATE trade_preset_strategy_run SET run_date = %s WHERE id = %s",
-        (trade_date, run_id),
-    )
-    logger.info('[PRESET] microcap_pure_mv run %d: updated run_date to %s (trade date)', run_id, trade_date)
-
-    # Get microcap universe: bottom 20% by market cap, financial risk filters
-    from strategist.microcap.universe import get_daily_universe
-    universe = get_daily_universe(
-        trade_date=trade_date,
-        percentile=0.20,
-        exclude_st=True,
-        require_positive_pe=False,  # pure_mv doesn't require positive PE
-        min_avg_turnover=5_000_000.0,
-        exclude_risk=True,
-        max_debt_ratio=0.70,
-        require_positive_profit=True,
-        require_positive_cashflow=True,
-    )
-
-    if not universe:
-        logger.warning('[PRESET] microcap_pure_mv: empty universe for %s', trade_date)
-        execute_update(
-            """
-            UPDATE trade_preset_strategy_run
-            SET status = 'done', signal_count = 0, momentum_count = 0, reversal_count = 0,
-                market_status = '', market_message = %s, signals_json = '[]', finished_at = NOW()
-            WHERE id = %s
-            """,
-            (f'no universe data for {trade_date}', run_id),
-        )
-        return
-
-    # Fetch market cap and stock name for universe stocks, sort by total_mv ASC, take top 15
-    top_n = 15
-    placeholders = ','.join(['%s'] * len(universe))
-    rows = db_query(
-        f"""
-        SELECT b.stock_code, b.total_mv, b.circ_mv, b.pe_ttm, b.pb,
-               s.stock_name
-        FROM trade_stock_daily_basic b
-        LEFT JOIN trade_stock_basic s
-            ON b.stock_code COLLATE utf8mb4_unicode_ci = s.stock_code COLLATE utf8mb4_unicode_ci
-        WHERE b.trade_date = %s
-          AND b.stock_code IN ({placeholders})
-        ORDER BY b.total_mv ASC
-        LIMIT %s
-        """,
-        [trade_date] + list(universe) + [top_n],
-    )
-
-    signals = []
-    for row in (rows or []):
-        signals.append({
-            'stock_code': str(row['stock_code']),
-            'stock_name': str(row.get('stock_name') or ''),
-            'signal_type': 'microcap',
-            'total_mv': _safe_float(row.get('total_mv')),   # 万元
-            'circ_mv': _safe_float(row.get('circ_mv')),
-            'pe_ttm': _safe_float(row.get('pe_ttm')),
-            'pb': _safe_float(row.get('pb')),
-        })
-
-    signals_json = json.dumps(signals, ensure_ascii=False)
-    signal_count = len(signals)
-
-    execute_update(
-        """
-        UPDATE trade_preset_strategy_run
-        SET status = 'done',
-            signal_count = %s,
-            momentum_count = 0,
-            reversal_count = 0,
-            market_status = '',
-            market_message = %s,
-            signals_json = %s,
-            finished_at = NOW()
-        WHERE id = %s
-        """,
-        (signal_count, f'trade_date={trade_date}', signals_json, run_id),
-    )
-    logger.info('[PRESET] microcap_pure_mv run %s completed: %s candidates for %s',
-                run_id, signal_count, trade_date)

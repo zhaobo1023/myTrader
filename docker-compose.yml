@@ -78,8 +78,14 @@ services:
   # ============================================================
   celery-worker:
     build: .
-    command: celery -A api.tasks.celery_app worker -l info -c 4 -Q default
+    command: celery -A api.tasks.celery_app worker -l info -c 1 -Q celery,default
     env_file: .env
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
     environment:
       - REDIS_HOST=host.docker.internal
       - REDIS_PASSWORD=${REDIS_PASSWORD}

@@ -14,6 +14,10 @@ import MiniSparkline from '@/components/market/MiniSparkline';
 // Helpers
 // ---------------------------------------------------------------------------
 
+// A股颜色习惯：红涨绿跌
+const COLOR_UP = '#ef4444';      // 红色 - 上涨/盈利
+const COLOR_DOWN = '#16a34a';    // 绿色 - 下跌/亏损
+
 function pct(v: number | null | undefined): string {
   if (v == null) return '-';
   return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
@@ -26,7 +30,7 @@ function score(v: number | null | undefined): string {
 
 function returnColor(v: number | null | undefined): string {
   if (v == null) return 'var(--text-muted)';
-  return v >= 0 ? '#16a34a' : '#ef4444';
+  return v >= 0 ? COLOR_UP : COLOR_DOWN;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -265,7 +269,7 @@ function PriceSparkline({ prices, entryPrice }: {
 
   const lastClose = prices[prices.length - 1].close;
   const isUp = entryPrice ? lastClose >= entryPrice : lastClose >= prices[0].close;
-  const color = isUp ? '#16a34a' : '#ef4444';
+  const color = isUp ? COLOR_UP : COLOR_DOWN;
 
   return <MiniSparkline data={prices} valueKey="close" width={80} height={28} color={color} />;
 }
@@ -278,7 +282,7 @@ function ExpandedChart({ stock }: {
   stock: { stock_code: string; stock_name: string; entry_price: number | null; entry_date: string; prices: { date: string; open: number; high: number; low: number; close: number; volume: number }[] };
 }) {
   if (!stock.prices || stock.prices.length < 2) {
-    return <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: '12px' }}>No price data</div>;
+    return <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: '12px' }}>暂无价格数据</div>;
   }
 
   const prices = stock.prices;
@@ -306,7 +310,7 @@ function ExpandedChart({ stock }: {
   const candleW = Math.max(1, chartW / prices.length * 0.6);
   const lastClose = closes[closes.length - 1];
   const isUp = stock.entry_price ? lastClose >= stock.entry_price : lastClose >= closes[0];
-  const lineColor = isUp ? '#16a34a' : '#ef4444';
+  const lineColor = isUp ? COLOR_UP : COLOR_DOWN;
 
   return (
     <div style={{ padding: '12px 16px' }}>
@@ -316,7 +320,7 @@ function ExpandedChart({ stock }: {
         </span>
         <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
           {prices[0].date} ~ {prices[prices.length - 1].date}
-          {stock.entry_price && <span style={{ marginLeft: '8px' }}>Entry: {stock.entry_price.toFixed(2)}</span>}
+          {stock.entry_price && <span style={{ marginLeft: '8px' }}>入场价: {stock.entry_price.toFixed(2)}</span>}
         </span>
       </div>
       <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: 'block' }}>
@@ -342,12 +346,13 @@ function ExpandedChart({ stock }: {
           const bodyTop = toY(Math.max(p.open, p.close));
           const bodyBot = toY(Math.min(p.open, p.close));
           const bodyH = Math.max(1, bodyBot - bodyTop);
+          const candleColor = isGreen ? COLOR_UP : COLOR_DOWN;  // A股习惯：红涨绿跌
           return (
             <g key={i}>
               {/* Wick */}
-              <line x1={x} y1={toY(p.high)} x2={x} y2={toY(p.low)} stroke={isGreen ? '#16a34a' : '#ef4444'} strokeWidth="1" />
+              <line x1={x} y1={toY(p.high)} x2={x} y2={toY(p.low)} stroke={candleColor} strokeWidth="1" />
               {/* Body */}
-              <rect x={x - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={isGreen ? '#16a34a' : '#ef4444'} rx="0.5" />
+              <rect x={x - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={candleColor} rx="0.5" />
             </g>
           );
         })}
@@ -358,7 +363,7 @@ function ExpandedChart({ stock }: {
         />
       </svg>
       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-        Return: <span style={{ color: stock.entry_price ? (lastClose >= stock.entry_price ? '#16a34a' : '#ef4444') : 'var(--text-muted)' }}>
+        收益: <span style={{ color: stock.entry_price ? (lastClose >= stock.entry_price ? COLOR_UP : COLOR_DOWN) : 'var(--text-muted)' }}>
           {stock.entry_price ? `${((lastClose - stock.entry_price) / stock.entry_price * 100).toFixed(1)}%` : '-'}
         </span>
       </div>
@@ -408,7 +413,7 @@ function ComparisonChart({ stocks }: {
   return (
     <div style={{ padding: '12px 16px' }}>
       <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
-        Normalized Comparison (base=100)
+        标准化对比（基准=100）
       </div>
       <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: 'block' }}>
         {/* 100 baseline */}
@@ -441,7 +446,7 @@ function ComparisonChart({ stocks }: {
           return (
             <span key={s.code} style={{ fontSize: '11px', color: colors[i % colors.length], display: 'flex', alignItems: 'center', gap: '4px' }}>
               <span style={{ width: '10px', height: '2px', background: colors[i % colors.length], display: 'inline-block' }} />
-              {s.code} {s.name} <span style={{ color: isUp ? '#16a34a' : '#ef4444' }}>({last.toFixed(1)})</span>
+              {s.code} {s.name} <span style={{ color: isUp ? COLOR_UP : COLOR_DOWN }}>({last.toFixed(1)})</span>
             </span>
           );
         })}
@@ -495,7 +500,7 @@ export default function ThemeDetailPage() {
   const { data: priceData } = useQuery({
     queryKey: ['theme-price-history', themeId],
     queryFn: () => themePoolApi.getPriceHistory(themeId, 60).then((r) => r.data),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 60 * 1000,  // 1 minute instead of 5 minutes
   });
   const priceMap = useMemo(() => {
     const m = new Map<string, PriceStock>();
@@ -547,6 +552,7 @@ export default function ThemeDetailPage() {
 
   function refetchStocks() {
     queryClient.invalidateQueries({ queryKey: ['theme-stocks', themeId] });
+    queryClient.invalidateQueries({ queryKey: ['theme-price-history', themeId] });
   }
 
   const nextStatus = theme?.status === 'draft' ? 'active' : theme?.status === 'active' ? 'archived' : 'active';
@@ -744,10 +750,10 @@ export default function ThemeDetailPage() {
                     {/* Reason */}
                     <td
                       style={{ padding: '8px 6px', color: 'var(--text-secondary)', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
-                      title={s.reason || 'Click to edit'}
+                      title={s.reason || '点击编辑'}
                       onClick={(e) => { e.stopPropagation(); setEditReason({ id: s.id, reason: s.reason || '' }); }}
                     >
-                      {s.reason || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>add</span>}
+                      {s.reason || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>添加理由</span>}
                     </td>
                     {/* RPS */}
                     <td style={{ padding: '8px 6px', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
@@ -777,7 +783,7 @@ export default function ThemeDetailPage() {
                     <td
                       style={{ padding: '8px 6px', cursor: 'pointer' }}
                       onClick={(e) => { e.stopPropagation(); setExpandedStock(expandedStock === s.id ? null : s.id); }}
-                      title="Click to expand"
+                      title="点击展开"
                     >
                       <PriceSparkline prices={priceMap.get(s.stock_code)?.prices || []} entryPrice={priceMap.get(s.stock_code)?.entry_price || null} />
                     </td>
@@ -856,8 +862,8 @@ export default function ThemeDetailPage() {
             }}
             onClick={() => setShowComparison(!showComparison)}
           >
-            <span>Relative Performance Comparison</span>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{showComparison ? 'Collapse' : 'Expand'}</span>
+            <span>相对表现对比</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{showComparison ? '收起' : '展开'}</span>
           </div>
           {showComparison && <ComparisonChart stocks={priceData.stocks} />}
         </div>
@@ -922,13 +928,13 @@ export default function ThemeDetailPage() {
             width: '400px', maxWidth: '90vw',
           }} onClick={(e) => e.stopPropagation()}>
             <h4 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
-              Edit Reason
+              编辑推荐理由
             </h4>
             <textarea
               value={editReason.reason}
               onChange={(e) => setEditReason({ ...editReason, reason: e.target.value })}
               rows={3}
-              placeholder="Recommendation reason..."
+              placeholder="推荐理由..."
               style={{
                 width: '100%', padding: '8px 10px', borderRadius: '6px', fontSize: '12px',
                 border: '1px solid var(--border-subtle)', background: 'var(--bg-canvas)',
@@ -944,7 +950,7 @@ export default function ThemeDetailPage() {
                   color: 'var(--text-secondary)', cursor: 'pointer',
                 }}
               >
-                Cancel
+                取消
               </button>
               <button
                 onClick={() => reasonMut.mutate({ id: editReason.id, reason: editReason.reason })}
@@ -953,7 +959,7 @@ export default function ThemeDetailPage() {
                   border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer',
                 }}
               >
-                Save
+                保存
               </button>
             </div>
           </div>
