@@ -1,0 +1,13 @@
+# 08_theme_pool.yaml - Theme pool daily scoring
+
+tasks:
+  - id: theme_pool_score
+    name: "Theme pool daily scoring"
+    module: scheduler.adapters
+    func: run_theme_pool_score
+    tags: [theme_pool, daily]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+    params:
+      env: "online"

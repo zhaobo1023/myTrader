@@ -7,7 +7,7 @@ import AppShell from '@/components/layout/AppShell';
 // Types
 // ---------------------------------------------------------------------------
 
-type StockTab = 'comprehensive' | 'technical' | 'fundamental' | 'news';
+type StockTab = 'one-pager' | 'comprehensive' | 'technical' | 'fundamental' | 'news';
 
 interface StockOption {
   stock_code: string;
@@ -33,6 +33,7 @@ interface StockCard {
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
 
 const TAB_CONFIG: { key: StockTab; label: string }[] = [
+  { key: 'one-pager',     label: '一页纸研究' },
   { key: 'comprehensive', label: '综合分析' },
   { key: 'technical',     label: '技术面分析' },
   { key: 'fundamental',   label: '基本面分析' },
@@ -89,6 +90,59 @@ async function mdToHtml(md: string): Promise<string> {
   const { marked } = await import('marked');
   marked.setOptions({ breaks: true });
   return await marked(md);
+}
+
+// ---------------------------------------------------------------------------
+// One-pager types & helpers
+// ---------------------------------------------------------------------------
+
+interface RagReport {
+  id: number;
+  stock_code: string;
+  stock_name: string;
+  report_type: string;
+  report_date: string;
+  content: string;
+  created_at: string;
+}
+
+interface OnePagerHistory {
+  id: number;
+  stock_code: string;
+  stock_name: string;
+  report_type: string;
+  report_date: string;
+  created_at: string;
+}
+
+interface SseStep {
+  step: string;
+  name: string;
+  content?: string;
+  done: boolean;
+}
+
+function renderMarkdown(md: string): string {
+  return md
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .split('\n\n')
+    .map((block) => {
+      const trimmed = block.trim();
+      if (!trimmed) return '';
+      if (trimmed.startsWith('### ')) return `<h3 style="font-size:14px;font-weight:600;margin:16px 0 6px;color:var(--text-primary)">${trimmed.slice(4)}</h3>`;
+      if (trimmed.startsWith('## '))  return `<h2 style="font-size:16px;font-weight:650;margin:20px 0 8px;color:var(--text-primary)">${trimmed.slice(3)}</h2>`;
+      if (trimmed.startsWith('# '))   return `<h1 style="font-size:18px;font-weight:700;margin:24px 0 10px;color:var(--text-primary)">${trimmed.slice(2)}</h1>`;
+      if (trimmed === '---') return '<hr style="border:none;border-top:1px solid var(--border-subtle);margin:16px 0"/>';
+      const inlined = trimmed.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+        const items = inlined.split('\n').map(l => l.replace(/^[-*] /, '')).map(l => `<li>${l}</li>`).join('');
+        return `<ul style="margin:4px 0 8px 20px;padding:0;color:var(--text-secondary);font-size:13px;line-height:1.7">${items}</ul>`;
+      }
+      return `<p style="margin:0 0 8px;color:var(--text-secondary);font-size:13px;line-height:1.7">${inlined}</p>`;
+    })
+    .join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -856,6 +910,199 @@ function NewsTab({ stock }: { stock: StockOption }) {
 }
 
 // ---------------------------------------------------------------------------
+// One-pager tab
+// ---------------------------------------------------------------------------
+
+function OnePagerTab({ stock }: { stock: StockOption }) {
+  const [cachedReport, setCachedReport] = useState<RagReport | null>(null);
+  const [checkDone, setCheckDone] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const [steps, setSteps] = useState<SseStep[]>([]);
+  const [finalContent, setFinalContent] = useState<string>('');
+  const [error, setError] = useState<string>('');
+  const [history, setHistory] = useState<OnePagerHistory[]>([]);
+  const [viewingHistoryId, setViewingHistoryId] = useState<number | null>(null);
+  const [historyContent, setHistoryContent] = useState<string>('');
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  useEffect(() => {
+    setCachedReport(null); setCheckDone(false); setSteps([]);
+    setFinalContent(''); setError(''); setStreaming(false);
+    setHistory([]); setViewingHistoryId(null); setHistoryContent('');
+
+    Promise.all([
+      fetch(`${API_BASE}/api/analysis/one-pager/today?code=${stock.stock_code}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.exists && d.report) {
+            setCachedReport(d.report);
+            setFinalContent(d.report.content || '');
+          }
+        })
+        .catch(() => {}),
+      fetch(`${API_BASE}/api/analysis/one-pager/history?code=${stock.stock_code}&limit=10`)
+        .then((r) => r.json())
+        .then((d) => setHistory(d || []))
+        .catch(() => {}),
+    ]).finally(() => setCheckDone(true));
+  }, [stock.stock_code]);
+
+  function loadHistoryReport(id: number) {
+    setViewingHistoryId(id); setLoadingHistory(true);
+    fetch(`${API_BASE}/api/analysis/rag-report/${id}`)
+      .then((r) => r.json())
+      .then((d) => { setHistoryContent(d?.content || ''); setLoadingHistory(false); })
+      .catch(() => { setLoadingHistory(false); setHistoryContent('[加载失败]'); });
+  }
+
+  function startGenerate() {
+    setError(''); setSteps([]); setFinalContent(''); setStreaming(true);
+    setViewingHistoryId(null); setHistoryContent('');
+
+    fetch(`${API_BASE}/api/analysis/one-pager/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stock_code: stock.stock_code, stock_name: stock.stock_name }),
+    }).then(async (res) => {
+      if (!res.ok || !res.body) { setError('请求失败'); setStreaming(false); return; }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const msg = JSON.parse(line.slice(6));
+            if (msg.type === 'cached') {
+              setCachedReport(msg.report); setFinalContent(msg.report?.content || ''); setStreaming(false);
+            } else if (msg.type === 'plan') {
+              setSteps((msg.sections as string[]).map((name: string, i: number) => ({ step: `part${i + 1}`, name, done: false })));
+            } else if (msg.type === 'step_start') {
+              setSteps((prev) => prev.map((s) => s.name === msg.name ? { ...s, done: false } : s));
+            } else if (msg.type === 'step_done') {
+              setSteps((prev) => prev.map((s) => s.name === msg.name ? { ...s, content: msg.content, done: true } : s));
+            } else if (msg.type === 'done') {
+              setFinalContent(msg.content || ''); setStreaming(false);
+              fetch(`${API_BASE}/api/analysis/one-pager/history?code=${stock.stock_code}&limit=10`)
+                .then((r) => r.json()).then((d) => setHistory(d || [])).catch(() => {});
+            } else if (msg.type === 'error') {
+              setError(msg.message || '生成失败'); setStreaming(false);
+            }
+          } catch { /* skip */ }
+        }
+      }
+      setStreaming(false);
+    }).catch((e) => { setError(String(e)); setStreaming(false); });
+  }
+
+  if (!checkDone) {
+    return <div style={{ padding: '40px 0', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>检查缓存...</div>;
+  }
+
+  const displayContent = viewingHistoryId ? historyContent : finalContent;
+  const isMarkdown = !viewingHistoryId || !displayContent.startsWith('<');
+
+  return (
+    <div style={{ marginTop: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+          {cachedReport ? `今日报告已生成` : '今日尚未生成一页纸研究'}
+        </div>
+        {!streaming && (
+          <button onClick={startGenerate} style={{
+            padding: '5px 14px', fontSize: '12px', fontWeight: 510,
+            background: 'var(--accent)', color: '#fff',
+            border: 'none', borderRadius: '6px', cursor: 'pointer',
+          }}>
+            {cachedReport ? '重新生成' : '生成一页纸研究'}
+          </button>
+        )}
+        {streaming && (
+          <span style={{ fontSize: '12px', color: 'var(--accent)', animation: 'pulse 1.5s infinite' }}>生成中...</span>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ padding: '8px 12px', background: 'rgba(229,83,75,0.08)', border: '1px solid rgba(229,83,75,0.25)', borderRadius: '6px', fontSize: '12px', color: '#e5534b', marginBottom: '12px' }}>
+          {error}
+        </div>
+      )}
+
+      {streaming && steps.length > 0 && (
+        <div style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {steps.map((s) => (
+            <div key={s.name} style={{
+              display: 'flex', alignItems: 'center', gap: '8px',
+              padding: '7px 12px', borderRadius: '6px',
+              background: s.done ? 'rgba(39,166,68,0.06)' : 'var(--bg-card)',
+              border: `1px solid ${s.done ? 'rgba(39,166,68,0.2)' : 'var(--border-subtle)'}`,
+              fontSize: '12px',
+            }}>
+              <span style={{ color: s.done ? '#27a644' : 'var(--text-muted)', fontSize: '13px' }}>{s.done ? '[OK]' : '[ ]'}</span>
+              <span style={{ color: s.done ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: s.done ? 510 : 400 }}>{s.name}</span>
+              {s.done && s.content && (
+                <span style={{ color: 'var(--text-muted)', fontSize: '11px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {s.content.slice(0, 80)}...
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {history.length > 0 && !streaming && (
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 510, marginBottom: '8px' }}>历史报告</div>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {history.map((h) => (
+              <button key={h.id}
+                onClick={() => {
+                  if (viewingHistoryId === h.id) { setViewingHistoryId(null); setHistoryContent(''); }
+                  else if (cachedReport && h.id === cachedReport.id) { setViewingHistoryId(null); setHistoryContent(''); }
+                  else { loadHistoryReport(h.id); }
+                }}
+                style={{
+                  padding: '4px 10px', fontSize: '11px', borderRadius: '4px',
+                  border: `1px solid ${viewingHistoryId === h.id ? 'var(--accent)' : 'var(--border-subtle)'}`,
+                  background: viewingHistoryId === h.id ? 'rgba(59,130,246,0.1)' : 'var(--bg-card)',
+                  color: viewingHistoryId === h.id ? 'var(--accent)' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                }}
+              >
+                {h.report_date}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {loadingHistory && (
+        <div style={{ padding: '20px 0', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>加载历史报告...</div>
+      )}
+
+      {displayContent && !streaming && !loadingHistory && (
+        <div style={{
+          padding: '20px 24px', background: 'var(--bg-card)',
+          border: '1px solid var(--border-subtle)', borderRadius: '8px',
+          lineHeight: '1.7', maxHeight: '70vh', overflowY: 'auto',
+        }} dangerouslySetInnerHTML={{ __html: isMarkdown ? renderMarkdown(displayContent) : displayContent }} />
+      )}
+
+      {!displayContent && !streaming && !error && !loadingHistory && (
+        <div style={{ padding: '40px 0', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>
+          点击"生成一页纸研究"开始深度分析
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Stock detail view (after selecting a stock)
 // ---------------------------------------------------------------------------
 
@@ -916,6 +1163,7 @@ function StockDetail({
 
       {/* Tab content */}
       <div key={stock.stock_code}>
+        {activeTab === 'one-pager'     && <OnePagerTab      stock={stock} />}
         {activeTab === 'comprehensive' && <ComprehensiveTab stock={stock} />}
         {activeTab === 'technical'     && <TechnicalTab     stock={stock} />}
         {activeTab === 'fundamental'   && <FundamentalTab   stock={stock} />}
@@ -931,11 +1179,11 @@ function StockDetail({
 
 export default function StockPage() {
   const [selectedStock, setSelectedStock] = useState<StockOption | null>(null);
-  const [activeTab, setActiveTab] = useState<StockTab>('comprehensive');
+  const [activeTab, setActiveTab] = useState<StockTab>('one-pager');
 
   const handleSelect = useCallback((s: StockOption) => {
     setSelectedStock(s);
-    setActiveTab('comprehensive');
+    setActiveTab('one-pager');
   }, []);
 
   const handleBack = useCallback(() => {

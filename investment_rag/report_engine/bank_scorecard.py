@@ -7,11 +7,11 @@
 2. 输出文本供 LLM 引用（注入研报上下文）
 3. 输出结构化 dict 供逆向工程使用（拟合 f大 评分权重）
 
-评分维度（v2.0, 基于 f大 17 家银行年报点评逆向工程）：
-  D1 资产质量        25%  (NPL2权重上调，f大核心指标)
+评分维度（v2.1, 基于 f大 17 家银行年报点评逆向工程 + 边际变化维度）：
+  D1 资产质量        25%  (NPL2变化趋势权重最高，f大核心)
   D2 盈利能力        10%  (f大几乎不看利润惊喜，大幅降权)
-  D3 利润质量        15%  (保持)
-  D4 净资产质量      20%  (f大第一驱动力，从10%翻倍)
+  D3 利润质量        15%  (新增拨备比变化趋势, f大 OLS coeff=+0.576)
+  D4 净资产质量      20%  (f大第一驱动力，OCI+净资产增速)
   D5 资本充足率      10%  (微降)
   D6 估值安全边际    10%  (PB分位)
   D7 股息回报        10%  (独立维度，含股息率+分红增长趋势)
@@ -85,15 +85,15 @@ def _make_default_config() -> ScorecardConfig:
     v2.0 配置（基于 f大 17家银行年报点评逆向工程）。
     """
 
-    # ---------- D1: 资产质量 (25%, was 30%) ----------
-    # f大最看重 NPL2（真实不良率），其次拨备，官方NPL权重降低
+    # ---------- D1: 资产质量 (25%) ----------
+    # f大核心看 NPL2 变化趋势（边际改善/恶化）+ 绝对水平
     d1 = DimConfig(
         name="资产质量",
         weight=0.25,
         subs=[
             SubDimConfig(
                 name="NPL率",
-                weight=0.25,        # was 0.40, 降权：官方NPL可调节
+                weight=0.15,        # 降权：官方NPL可调节，f大几乎不看
                 extract_key="npl_ratio",
                 threshold=ThresholdScore(brackets=[
                     (None, 0.8,  5),
@@ -105,7 +105,7 @@ def _make_default_config() -> ScorecardConfig:
             ),
             SubDimConfig(
                 name="拨备覆盖率",
-                weight=0.35,
+                weight=0.20,
                 extract_key="provision_coverage",
                 threshold=ThresholdScore(brackets=[
                     (None, 0,    1),   # 负值异常
@@ -117,8 +117,8 @@ def _make_default_config() -> ScorecardConfig:
                 ], missing_score=2.0),
             ),
             SubDimConfig(
-                name="NPL率2可信度（NPL2-官方差值）",
-                weight=0.40,        # was 0.25, 加权：f大核心指标
+                name="NPL2-官方差值",
+                weight=0.25,        # NPL2绝对水平可信度
                 extract_key="npl2_gap",   # npl_ratio2 - official_npl_ratio，负=更严格
                 threshold=ThresholdScore(brackets=[
                     (None, 0.0,  5),   # NPL2 <= 官方，认定严格
@@ -126,6 +126,18 @@ def _make_default_config() -> ScorecardConfig:
                     (0.3,  0.5,  3),
                     (0.5,  1.0,  2),
                     (1.0,  None, 1),
+                ]),
+            ),
+            SubDimConfig(
+                name="NPL2变化趋势(ppt)",
+                weight=0.40,        # 新增：f大核心--不良率2是在改善还是恶化
+                extract_key="npl2_trend_ppt",   # 正=恶化，负=改善
+                threshold=ThresholdScore(brackets=[
+                    (None, -0.10, 5),   # 大幅改善
+                    (-0.10, -0.02, 4),  # 改善
+                    (-0.02,  0.02, 3),  # 持平
+                    (0.02,   0.08, 2),  # 恶化
+                    (0.08,   None, 1),  # 大幅恶化
                 ]),
             ),
         ],
@@ -176,14 +188,15 @@ def _make_default_config() -> ScorecardConfig:
         ],
     )
 
-    # ---------- D3: 利润质量 ----------
+    # ---------- D3: 利润质量 (15%) ----------
+    # f大 拨备趋势 OLS coeff=+0.576，加入拨备比变化趋势
     d3 = DimConfig(
         name="利润质量",
         weight=0.15,
         subs=[
             SubDimConfig(
                 name="拨备释放贡献比",
-                weight=0.50,
+                weight=0.30,
                 extract_key="prov_release_contrib_pct",  # 拨备贡献/利润增量（%）
                 threshold=ThresholdScore(brackets=[
                     (None, 10,   5),
@@ -194,9 +207,21 @@ def _make_default_config() -> ScorecardConfig:
                 ], missing_score=3.0),
             ),
             SubDimConfig(
-                name="剪刀差（归母-营业利润增速差）",
-                weight=0.50,
-                extract_key="scissors_gap_ppt",   # 归母yoy - 营业利润yoy（ppt），越大越差
+                name="拨备比变化趋势(ppt)",
+                weight=0.40,        # 新增：f大核心--拨备比是在增厚还是消耗
+                extract_key="prov_ratio_trend_ppt",  # 正=拨备增厚(好)，负=消耗(差)
+                threshold=ThresholdScore(brackets=[
+                    (0.10,  None, 5),   # 拨备大幅增厚
+                    (0.02,  0.10, 4),   # 略增厚
+                    (-0.05, 0.02, 3),   # 持平
+                    (-0.15, -0.05, 2),  # 消耗
+                    (None,  -0.15, 1),  # 大幅消耗
+                ], missing_score=3.0),
+            ),
+            SubDimConfig(
+                name="剪刀差（归母-营收增速差）",
+                weight=0.30,
+                extract_key="scissors_gap_ppt",   # 归母yoy - 营收yoy（ppt），越大越差
                 threshold=ThresholdScore(brackets=[
                     (None, 2,    5),
                     (2,    5,    4),
@@ -729,8 +754,8 @@ class BankScoreCard:
         if _execute_query is None:
             return {}
         sql = """
-            SELECT report_date, npl_ratio, provision_coverage, tier1_ratio,
-                   nim, total_equity
+            SELECT report_date, npl_ratio, provision_coverage, provision_ratio,
+                   tier1_ratio, nim, total_equity
             FROM financial_balance
             WHERE stock_code = %s
             ORDER BY report_date DESC
@@ -748,12 +773,18 @@ class BankScoreCard:
             "tier1_ratio": _safe_float(r.get('tier1_ratio')),
             "nim": _safe_float(r.get('nim')),
         }
-        # 计算净资产增速（D4新增子维度）
-        equity_cur = _safe_float(r.get('total_equity'))
         if len(annual) >= 2:
+            # 计算净资产增速（D4子维度）
+            equity_cur = _safe_float(r.get('total_equity'))
             equity_prev = _safe_float(annual[1].get('total_equity'))
             if equity_cur and equity_prev and equity_prev > 0:
                 result["equity_growth_pct"] = (equity_cur - equity_prev) / equity_prev * 100
+
+            # 计算拨备比变化趋势（D3新增子维度）
+            prov_cur = _safe_float(r.get('provision_ratio'))
+            prov_prev = _safe_float(annual[1].get('provision_ratio'))
+            if prov_cur is not None and prov_prev is not None:
+                result["prov_ratio_trend_ppt"] = prov_cur - prov_prev  # 正=增厚, 负=消耗
         return result
 
     def _fetch_income_data(self, code: str) -> Dict:
@@ -761,20 +792,30 @@ class BankScoreCard:
         if _execute_query is None:
             return {}
         sql = """
-            SELECT report_date, net_profit_yoy
+            SELECT report_date, net_profit_yoy, roe, net_profit
             FROM financial_income
             WHERE stock_code = %s
             ORDER BY report_date DESC
-            LIMIT 4
+            LIMIT 8
         """
         rows = _execute_query(sql, params=(code,), env=self._db_env) or []
         annual = [r for r in rows if str(r.get('report_date', '')).endswith('12-31')]
         if not annual:
             return {}
         r = annual[0]
-        return {
+        result = {
             "net_profit_yoy": _safe_float(r.get('net_profit_yoy')),
+            "roe": _safe_float(r.get('roe')),
         }
+        # 保存当期/上期净利润供后续诊断计算使用
+        curr_np = _safe_float(r.get('net_profit'))
+        if curr_np is not None:
+            result["_curr_net_profit"] = curr_np
+        if len(annual) >= 2:
+            prev_np = _safe_float(annual[1].get('net_profit'))
+            if prev_np is not None:
+                result["_prev_net_profit"] = prev_np
+        return result
 
     def _fetch_overdue_data(self, code: str) -> Dict:
         from investment_rag.report_engine.data_tools import _execute_query, _safe_float
@@ -793,64 +834,160 @@ class BankScoreCard:
         r = rows[0]
         npl2 = _safe_float(r.get('npl_ratio2'))
         official = _safe_float(r.get('official_npl_ratio'))
-        gap = None
+
+        result = {}
+        # NPL2 - 官方 NPL 差值（负=认定更严格）
         if npl2 is not None and official is not None:
-            gap = npl2 - official   # 负=NPL2更低=认定更严格
-        return {"npl2_gap": gap}
+            result["npl2_gap"] = npl2 - official
+
+        # NPL2 变化趋势（正=恶化，负=改善）
+        if len(rows) >= 2 and npl2 is not None:
+            prev_npl2 = _safe_float(rows[1].get('npl_ratio2'))
+            if prev_npl2 is not None:
+                result["npl2_trend_ppt"] = npl2 - prev_npl2
+
+        return result
 
     def _fetch_diagnostic_signals(self, code: str) -> Dict:
         """
-        从 get_bank_diagnostic() 文本中解析关键数值。
-        这是一个轻量级解析器，提取诊断1/2/3/4的核心数值。
+        直接从 DB 计算4个诊断信号，不再依赖 get_bank_diagnostic() 文本解析。
+
+        诊断1: 拨备释放贡献比 = 拨备比变动释放的利润 / 利润增量
+        诊断2: OCI差值占比 = (实际净资产增量 - 利润留存推算值) / 期初净资产
+        诊断3: 剪刀差 = 归母净利增速 - 营收增速 (ppt)
+        诊断4: 资本压力 = 贷款增速 - ROE*(1-分红率) (ppt)
         """
-        try:
-            diag_text = self._tools.get_bank_diagnostic(code)
-        except Exception:
+        from investment_rag.report_engine.data_tools import _execute_query, _safe_float
+        if _execute_query is None:
             return {}
 
         result = {}
 
-        # 解析拨备释放贡献比（诊断1）：找"利润增量(X亿)中拨备贡献：Y%"
-        import re
-        m = re.search(r'利润增量.*?拨备贡献[：:]([+-]?\d+\.?\d*)%', diag_text)
-        if m:
-            result["prov_release_contrib_pct"] = float(m.group(1))
+        # --- 获取 balance 数据（当期+上期年报）---
+        bal_sql = """
+            SELECT report_date, provision_ratio, loan_total, total_equity
+            FROM financial_balance
+            WHERE stock_code = %s
+            ORDER BY report_date DESC
+            LIMIT 8
+        """
+        bal_rows = _execute_query(bal_sql, params=(code,), env=self._db_env) or []
+        annual_bal = [r for r in bal_rows if str(r.get('report_date', '')).endswith('12-31')]
+        if len(annual_bal) < 2:
+            return result
 
-        # 解析OCI差值占比（诊断2）：找"OCI差值：X亿 (Y%"
-        m = re.search(r'OCI差值[：:][+-]?\d+\.?\d*亿\s*\(([+-]?\d+\.?\d*)%', diag_text)
-        if m:
-            result["oci_gap_pct"] = float(m.group(1))
+        curr_bal = annual_bal[0]
+        prev_bal = annual_bal[1]
 
-        # 解析剪刀差（诊断3）：找"剪刀差（归母 - 营业利润）：X ppt"
-        m = re.search(r'剪刀差[（(]归母\s*-\s*营业利润[）)][：:]\s*([+-]?\d+\.?\d*)ppt', diag_text)
-        if m:
-            result["scissors_gap_ppt"] = float(m.group(1))
+        curr_prov_ratio = _safe_float(curr_bal.get('provision_ratio'))
+        prev_prov_ratio = _safe_float(prev_bal.get('provision_ratio'))
+        curr_loan = _safe_float(curr_bal.get('loan_total'))
+        prev_loan = _safe_float(prev_bal.get('loan_total'))
+        curr_equity = _safe_float(curr_bal.get('total_equity'))
+        prev_equity = _safe_float(prev_bal.get('total_equity'))
 
-        # 解析资本压力（诊断4）：找"资本压力（贷款增速 - 内生补充）：X ppt"
-        m = re.search(r'资本压力[（(]贷款增速\s*-\s*内生补充[）)][：:]\s*([+-]?\d+\.?\d*)ppt', diag_text)
-        if m:
-            result["cap_pressure_ppt"] = float(m.group(1))
+        # --- 获取 income 数据（当期+上期年报）---
+        inc_sql = """
+            SELECT report_date, revenue, net_profit, net_profit_yoy, roe
+            FROM financial_income
+            WHERE stock_code = %s
+            ORDER BY report_date DESC
+            LIMIT 8
+        """
+        inc_rows = _execute_query(inc_sql, params=(code,), env=self._db_env) or []
+        annual_inc = [r for r in inc_rows if str(r.get('report_date', '')).endswith('12-31')]
+
+        curr_np = None
+        prev_np = None
+        curr_rev = None
+        prev_rev = None
+        curr_roe = None
+        curr_np_yoy = None
+        if len(annual_inc) >= 1:
+            curr_np = _safe_float(annual_inc[0].get('net_profit'))
+            curr_rev = _safe_float(annual_inc[0].get('revenue'))
+            curr_roe = _safe_float(annual_inc[0].get('roe'))
+            curr_np_yoy = _safe_float(annual_inc[0].get('net_profit_yoy'))
+        if len(annual_inc) >= 2:
+            prev_np = _safe_float(annual_inc[1].get('net_profit'))
+            prev_rev = _safe_float(annual_inc[1].get('revenue'))
+
+        # --- 诊断1: 拨备释放贡献比 ---
+        # 拨备比下降 = 释放利润（正数表示利润被拨备释放贡献）
+        # 当利润几乎不变时，用拨备释放金额占当期利润的比例替代
+        if all(v is not None for v in [curr_prov_ratio, prev_prov_ratio, curr_loan, curr_np, prev_np]):
+            prov_change = curr_prov_ratio - prev_prov_ratio  # 负 = 拨备下降 = 释放利润
+            prov_release = -prov_change / 100.0 * curr_loan * 0.75  # 乘0.75扣税
+            profit_increment = curr_np - prev_np
+            if abs(profit_increment) > curr_np * 0.03:
+                # 利润变动足够大，用增量贡献比
+                result["prov_release_contrib_pct"] = prov_release / abs(profit_increment) * 100
+            elif curr_np > 0:
+                # 利润几乎不变，用拨备释放占当期利润的比例
+                result["prov_release_contrib_pct"] = abs(prov_release) / curr_np * 100
+            else:
+                result["prov_release_contrib_pct"] = 0.0
+
+        # --- 诊断2: OCI差值占比 ---
+        # 推算净资产 = 上期净资产 + 本期利润 * (1 - 分红率) - 分红
+        # OCI差值 = 实际净资产 - 推算净资产（正=OCI增厚净资产）
+        # 简化：OCI差值 = 实际权益变动 - 净利润留存
+        if all(v is not None for v in [curr_equity, prev_equity, curr_np, prev_equity]):
+            equity_change = curr_equity - prev_equity
+            # 估算分红率（默认30%）
+            payout_ratio = 0.30
+            retained = curr_np * (1 - payout_ratio)
+            oci_gap = equity_change - retained  # 正=OCI正贡献
+            if prev_equity > 0:
+                result["oci_gap_pct"] = oci_gap / prev_equity * 100
+
+        # --- 诊断3: 剪刀差 ---
+        # 归母净利增速 - 营收增速，正数越大=靠拨备/OCI/非经常性贡献
+        if all(v is not None for v in [curr_rev, prev_rev, curr_np_yoy]) and prev_rev and prev_rev > 0:
+            rev_yoy = (curr_rev - prev_rev) / prev_rev * 100
+            result["scissors_gap_ppt"] = curr_np_yoy - rev_yoy
+
+        # --- 诊断4: 资本压力 ---
+        # 贷款增速 - 内生资本补充率（ROE * (1-分红率)）
+        if all(v is not None for v in [curr_loan, prev_loan, curr_roe]) and prev_loan and prev_loan > 0:
+            loan_growth = (curr_loan - prev_loan) / prev_loan * 100
+            internal_cap = curr_roe * 0.70  # 假设30%分红率
+            result["cap_pressure_ppt"] = loan_growth - internal_cap
 
         return result
 
     def _fetch_valuation_data(self, code: str) -> Dict:
-        """从 get_valuation_snapshot() 文本中解析 PB 分位数。"""
+        """直接查 trade_stock_daily_basic 计算 PB 5年历史分位数。"""
+        from investment_rag.report_engine.data_tools import _execute_query, _safe_float
+        if _execute_query is None:
+            return {}
+
+        from datetime import date, timedelta
+        start_date = (date.today() - timedelta(days=5 * 365)).isoformat()
+        sql = """
+            SELECT pb
+            FROM trade_stock_daily_basic
+            WHERE SUBSTRING_INDEX(stock_code, '.', 1) = %s
+              AND trade_date >= %s
+              AND pb > 0
+            ORDER BY trade_date ASC
+        """
         try:
-            val_text = self._tools.get_valuation_snapshot(code)
+            rows = _execute_query(sql, params=(code, start_date), env=self._db_env) or []
         except Exception:
             return {}
 
-        import re
-        # 找"历史分位数：X%" 或 "X%分位"
-        m = re.search(r'(?:历史分位数?|分位)[：:]\s*(\d+\.?\d*)%', val_text)
-        if m:
-            return {"pb_percentile": float(m.group(1))}
+        if len(rows) < 20:
+            return {}
 
-        m = re.search(r'(\d+\.?\d*)%\s*分位', val_text)
-        if m:
-            return {"pb_percentile": float(m.group(1))}
+        pb_values = [_safe_float(r.get('pb')) for r in rows]
+        pb_values = [v for v in pb_values if v is not None and v > 0]
+        if not pb_values:
+            return {}
 
-        return {}
+        current_pb = pb_values[-1]
+        pct = sum(1 for v in pb_values if v < current_pb) / len(pb_values) * 100
+        return {"pb_percentile": round(pct, 1)}
 
     def _fetch_dividend_data(self, code: str) -> Dict:
         """
@@ -858,6 +995,9 @@ class BankScoreCard:
 
         股息率 = 最近年度合计每股分红 / 最新收盘价
         分红增长 = (今年合计分红 - 去年合计分红) / 去年合计分红 * 100
+
+        注意：financial_dividend.cash_div 单位是每10股派现金额，需除以10得到每股分红。
+        trade_stock_daily.stock_code 格式为 '600015.SH'，需要拼接后缀。
         """
         from investment_rag.report_engine.data_tools import _execute_query, _safe_float
         if _execute_query is None:
@@ -867,17 +1007,18 @@ class BankScoreCard:
 
         # 取最近几次分红记录（按 ex_date 降序）
         div_sql = """
-            SELECT ex_date, cash_div, report_date
+            SELECT ex_date, cash_div
             FROM financial_dividend
             WHERE stock_code = %s AND cash_div > 0
             ORDER BY ex_date DESC
             LIMIT 10
         """
-        # 取最新收盘价
+        # 取最新收盘价（stock_code 带 .SH/.SZ 后缀）
+        # 用 SUBSTRING_INDEX 匹配纯数字部分
         price_sql = """
             SELECT close_price
             FROM trade_stock_daily
-            WHERE stock_code = %s
+            WHERE SUBSTRING_INDEX(stock_code, '.', 1) = %s
             ORDER BY trade_date DESC
             LIMIT 1
         """
@@ -890,31 +1031,53 @@ class BankScoreCard:
         if not div_rows:
             return {}
 
-        # 按年度汇总分红（一年可能多次分红：中期+年末）
+        # 按 fiscal year 归属分红（而非按 ex_date 日历年）
+        # 规则：ex_date 在1-7月 -> 归属上一年 FY；8-12月 -> 归属当年 FY
+        # cash_div 是每10股金额，转换为每股
         from collections import defaultdict
-        yearly_div = defaultdict(float)
+        fy_div = defaultdict(float)
         for row in div_rows:
-            ex_date = str(row.get('ex_date', ''))
+            ex_date = row.get('ex_date')
             cash = _safe_float(row.get('cash_div'))
-            if ex_date and cash:
-                year = ex_date[:4]
-                yearly_div[year] += cash
+            if not ex_date or not cash:
+                continue
+            if hasattr(ex_date, 'year'):
+                ex_year, ex_month = ex_date.year, ex_date.month
+            else:
+                ex_str = str(ex_date)
+                ex_year, ex_month = int(ex_str[:4]), int(ex_str[5:7])
+            # 1-7月的除权日对应上一个 fiscal year 的分红
+            fy = ex_year - 1 if ex_month <= 7 else ex_year
+            fy_div[fy] += cash / 10.0  # 每10股 -> 每股
 
-        sorted_years = sorted(yearly_div.keys(), reverse=True)
-        if not sorted_years:
+        sorted_fys = sorted(fy_div.keys(), reverse=True)
+        if not sorted_fys:
             return {}
 
-        latest_annual_div = yearly_div[sorted_years[0]]
+        # 判断最新 FY 是否完整：银行通常一年分两次红（中期+年末）
+        # 如果最新 FY 的每股分红远低于次新 FY（不足75%），视为不完整（只有中期分红），跳过
+        use_idx = 0
+        if len(sorted_fys) >= 2:
+            latest_div = fy_div[sorted_fys[0]]
+            second_div = fy_div[sorted_fys[1]]
+            if second_div > 0 and latest_div < second_div * 0.75:
+                use_idx = 1  # 最新 FY 不完整，用次新
 
-        # 股息率 = 最近年度分红 / 最新股价
+        if use_idx >= len(sorted_fys):
+            return {}
+
+        latest_annual_div = fy_div[sorted_fys[use_idx]]
+
+        # 股息率 = 最近完整 FY 每股分红 / 最新股价
         if price_rows:
             price = _safe_float(price_rows[0].get('close_price'))
             if price and price > 0:
                 result["dividend_yield_pct"] = latest_annual_div / price * 100
 
-        # 分红增长趋势
-        if len(sorted_years) >= 2:
-            prev_div = yearly_div[sorted_years[1]]
+        # 分红增长趋势（比较最近两个完整 FY）
+        next_idx = use_idx + 1
+        if next_idx < len(sorted_fys):
+            prev_div = fy_div[sorted_fys[next_idx]]
             if prev_div > 0:
                 result["div_growth_pct"] = (latest_annual_div - prev_div) / prev_div * 100
 

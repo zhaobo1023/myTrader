@@ -147,10 +147,15 @@ class AnnualReportExtractor:
         md_content: Optional[str] = None,
         industry: str = "bank",
         save: bool = True,
+        extract_key_metrics: bool = True,
     ) -> Dict:
         """
         Extract from md content and optionally save to DB.
         Provide either md_path or md_content.
+
+        Args:
+            extract_key_metrics: If True, run LLM-based key metrics extraction
+                                 using industry-specific config.
         """
         if md_content is None and md_path:
             md_content = Path(md_path).read_text(encoding="utf-8")
@@ -159,6 +164,17 @@ class AnnualReportExtractor:
 
         template = self._get_template(industry, md_content)
         result = template.run(stock_code, stock_name, report_date)
+
+        # Step: LLM-driven key metrics extraction (industry-configurable)
+        if extract_key_metrics:
+            try:
+                key_metrics = self._extract_key_metrics(
+                    md_content, stock_code, stock_name, report_date, industry
+                )
+                result["key_metrics"] = key_metrics
+            except Exception as e:
+                logger.error("[Extractor] Key metrics extraction failed: %s", e)
+                result["key_metrics"] = {}
 
         if save:
             self._save_results(result, industry)
@@ -193,6 +209,22 @@ class AnnualReportExtractor:
     # Internal
     # ----------------------------------------------------------
 
+    def _extract_key_metrics(
+        self,
+        md_content: str,
+        stock_code: str,
+        stock_name: str,
+        report_date: str,
+        industry: str,
+    ) -> Dict:
+        """Run LLM-based key metrics extraction for the given industry."""
+        from data_analyst.financial_fetcher.extraction_templates.key_metrics_extractor import (
+            KeyMetricsExtractor,
+        )
+
+        extractor = KeyMetricsExtractor(industry=industry)
+        return extractor.extract(md_content, stock_code, stock_name, report_date)
+
     def _get_template(self, industry: str, md_content: str):
         if industry == "bank":
             from data_analyst.financial_fetcher.extraction_templates.bank_template import BankTemplate
@@ -203,6 +235,15 @@ class AnnualReportExtractor:
 
     def _save_results(self, result: Dict, industry: str):
         """Write extracted data to appropriate tables."""
+        # Collect key_metrics data grouped by table (from LLM extraction step)
+        key_metrics = result.get("key_metrics", {})
+        km_by_table = {}
+        for table_name, table_data in key_metrics.items():
+            if table_name.startswith("_"):  # skip _raw
+                continue
+            if isinstance(table_data, dict):
+                km_by_table[table_name] = table_data
+
         if industry == "bank":
             income = result.get("income_detail", {})
             overdue = result.get("overdue_detail", {})
@@ -213,11 +254,28 @@ class AnnualReportExtractor:
                 cashflow["source"] = "annual_report"
             cashflow = {k: v for k, v in cashflow.items() if v is not None}
 
+            # Merge LLM key_metrics into income_detail (same table)
+            if "financial_income_detail" in km_by_table:
+                km_income = km_by_table.pop("financial_income_detail")
+                # LLM values fill gaps; template values take priority
+                for k, v in km_income.items():
+                    if k not in ("stock_code", "stock_name", "report_date", "source"):
+                        if k not in income or income.get(k) is None:
+                            income[k] = v
+
             if any(k not in ("stock_code", "stock_name", "report_date") for k in income):
                 income["source"] = "annual_report"
                 self._storage.upsert("financial_income_detail", [income])
                 logger.info("[Extractor] Saved income_detail for %s %s",
                             income.get("stock_code"), income.get("report_date"))
+
+            # Merge LLM key_metrics into overdue_detail if applicable
+            if "bank_overdue_detail" in km_by_table:
+                km_overdue = km_by_table.pop("bank_overdue_detail")
+                for k, v in km_overdue.items():
+                    if k not in ("stock_code", "stock_name", "report_date", "source"):
+                        if k not in overdue or overdue.get(k) is None:
+                            overdue[k] = v
 
             if any(k not in ("stock_code", "stock_name", "report_date") for k in overdue):
                 overdue["source"] = "annual_report"
@@ -230,10 +288,36 @@ class AnnualReportExtractor:
                 self._storage.upsert("financial_cashflow", [cashflow])
                 logger.info("[Extractor] Saved financial_cashflow for %s %s",
                             cashflow.get("stock_code"), cashflow.get("report_date"))
+
+            # Save any remaining key_metrics tables (not yet handled above)
+            for table_name, table_data in km_by_table.items():
+                if any(v is not None for k, v in table_data.items()
+                       if k not in ("stock_code", "stock_name", "report_date", "source")):
+                    self._storage.upsert(table_name, [table_data])
+                    logger.info("[Extractor] Saved key_metrics to %s for %s %s",
+                                table_name,
+                                table_data.get("stock_code"),
+                                table_data.get("report_date"))
         else:
-            # general template: result is flat dict
-            result["source"] = "annual_report"
-            self._storage.upsert("financial_income_detail", [result])
+            # general template: result is flat dict (excluding nested dicts)
+            flat = {k: v for k, v in result.items()
+                    if not isinstance(v, dict) and k != "key_metrics"}
+            # Merge key_metrics for non-bank industries
+            if "financial_income_detail" in km_by_table:
+                km_data = km_by_table.pop("financial_income_detail")
+                for k, v in km_data.items():
+                    if k not in ("stock_code", "stock_name", "report_date", "source"):
+                        if k not in flat or flat.get(k) is None:
+                            flat[k] = v
+            flat["source"] = "annual_report"
+            self._storage.upsert("financial_income_detail", [flat])
+
+            # Other tables from key_metrics
+            for table_name, table_data in km_by_table.items():
+                if any(v is not None for k, v in table_data.items()
+                       if k not in ("stock_code", "stock_name", "report_date", "source")):
+                    self._storage.upsert(table_name, [table_data])
+                    logger.info("[Extractor] Saved key_metrics to %s", table_name)
 
     @staticmethod
     def _parse_frontmatter(md_content: str) -> Optional[Dict]:

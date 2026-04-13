@@ -30,6 +30,11 @@ class ComprehensiveReportRequest(BaseModel):
     report_type: str = 'comprehensive'
 
 
+class OnePagerRequest(BaseModel):
+    stock_code: str
+    stock_name: str = ''
+
+
 @router.get('/technical', response_model=TechnicalAnalysisResponse)
 async def technical_analysis(
     code: str = Query(..., description="Stock code"),
@@ -212,6 +217,15 @@ async def get_rag_report_html(report_id: int):
     return HTMLResponse(content=content)
 
 
+@router.get('/rag-report/{report_id}')
+async def get_rag_report(report_id: int):
+    """Return raw report content as JSON (for Markdown reports like one-pager)."""
+    content = rag_report_service.get_report_content(report_id)
+    if content is None:
+        raise HTTPException(status_code=404, detail=f'Report {report_id} not found')
+    return {'id': report_id, 'content': content}
+
+
 # ---------------------------------------------------------------------------
 # Comprehensive report (five-step RAG) endpoints
 # ---------------------------------------------------------------------------
@@ -343,6 +357,165 @@ async def generate_comprehensive(body: ComprehensiveReportRequest):
             report_id = 0
 
         yield f"data: {json.dumps({'type': 'done', 'report_id': report_id, 'content': final_report}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# One-pager report endpoints
+# ---------------------------------------------------------------------------
+
+@router.get('/one-pager/today')
+async def get_today_one_pager(
+    code: str = Query(..., description='Stock code'),
+):
+    """Return today cached one-pager report, or null if not generated."""
+    report = rag_report_service.get_today_report(code, 'one_pager')
+    if report is None:
+        return {'exists': False, 'report': None}
+    return {'exists': True, 'report': report}
+
+
+@router.get('/one-pager/history')
+async def list_one_pager_history(
+    code: str = Query(..., description='Stock code'),
+    limit: int = Query(10, ge=1, le=50, description='Max results'),
+):
+    """Return historical one-pager reports for a stock."""
+    sql = """
+        SELECT id, stock_code, stock_name, report_type, report_date, created_at
+        FROM trade_rag_report
+        WHERE stock_code = %s AND report_type = 'one_pager'
+        ORDER BY report_date DESC, created_at DESC
+        LIMIT %s
+    """
+    from config.db import execute_query
+    rows = list(execute_query(sql, (code, limit)))
+    return [
+        {
+            'id': r['id'],
+            'stock_code': r['stock_code'],
+            'stock_name': r['stock_name'],
+            'report_type': r['report_type'],
+            'report_date': str(r['report_date']),
+            'created_at': str(r['created_at']),
+        }
+        for r in rows
+    ]
+
+
+@router.post('/one-pager/generate')
+async def generate_one_pager(body: OnePagerRequest):
+    """
+    SSE streaming endpoint to generate one-pager deep research report.
+    Streams step-by-step progress (part1: A-E, part2: F-I); saves to DB on completion.
+
+    SSE event types:
+      {type: "cached",     report: {...}}
+      {type: "plan",       sections: [...]}
+      {type: "step_start", step: "part1", name: "..."}
+      {type: "step_done",  step: "part1", name: "...", content: "..."}
+      {type: "done",       report_id: int, content: "..."}
+      {type: "error",      message: "..."}
+    """
+    stock_code = body.stock_code
+    stock_name = body.stock_name or stock_code
+
+    async def event_generator():
+        # Check cache
+        cached = rag_report_service.get_today_report(stock_code, 'one_pager')
+        if cached:
+            yield f"data: {json.dumps({'type': 'cached', 'report': cached}, ensure_ascii=False)}\n\n"
+            return
+
+        try:
+            from investment_rag.report_engine.one_pager import OnePagerAnalyzer
+        except ImportError as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Module unavailable: {exc}'})}\n\n"
+            return
+
+        sections = ['数据采集', '上半页 (A-E)', '下半页 (F-I)']
+        yield f"data: {json.dumps({'type': 'plan', 'sections': sections}, ensure_ascii=False)}\n\n"
+
+        try:
+            analyzer = OnePagerAnalyzer(db_env='online')
+
+            # Data collection step
+            yield f"data: {json.dumps({'type': 'step_start', 'step': 'data', 'name': '数据采集'}, ensure_ascii=False)}\n\n"
+            data_blocks = analyzer._data_collector.collect(stock_code, stock_name)
+            rag_context = analyzer._fetch_rag_context(stock_code, stock_name, 'reports')
+            data_blocks['rag_context'] = rag_context
+            yield f"data: {json.dumps({'type': 'step_done', 'step': 'data', 'name': '数据采集', 'content': '已采集13个数据块'}, ensure_ascii=False)}\n\n"
+
+            # LLM generation steps
+            from investment_rag.report_engine.prompts import ONE_PAGER_STEPS, ONE_PAGER_SYSTEM_PROMPT
+            from datetime import date as _date
+
+            today = _date.today()
+            system_prompt = ONE_PAGER_SYSTEM_PROMPT.format(today=today.isoformat())
+            results = {}
+
+            for step_config in ONE_PAGER_STEPS:
+                sid = step_config.step_id
+                sname = step_config.name
+
+                yield f"data: {json.dumps({'type': 'step_start', 'step': sid, 'name': sname}, ensure_ascii=False)}\n\n"
+
+                prompt = analyzer._build_prompt(
+                    step_config=step_config,
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    data_blocks=data_blocks,
+                    part1_result=results.get('part1', ''),
+                )
+
+                try:
+                    content = analyzer._llm.generate(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        temperature=0.4,
+                        max_tokens=3000,
+                    )
+                except Exception as e:
+                    content = f"[{sname}] LLM 调用失败: {e}"
+
+                results[sid] = content
+                yield f"data: {json.dumps({'type': 'step_done', 'step': sid, 'name': sname, 'content': content}, ensure_ascii=False)}\n\n"
+
+            # Assemble
+            price_str = analyzer._extract_price(data_blocks.get('valuation_snapshot', ''))
+            header = (
+                f"# {stock_name} | 一页纸深度研究\n\n"
+                f"**市场**：A股  **股票代码**：{stock_code}  "
+                f"**分析日期**：{today.isoformat()}  **价格**：{price_str}（最新收盘）"
+            )
+            final_report = header + "\n\n" + results.get('part1', '') + "\n\n---\n\n" + results.get('part2', '')
+
+            # Save to DB
+            try:
+                report_id = rag_report_service.save_report(
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    report_type='one_pager',
+                    content=final_report,
+                )
+            except Exception as exc:
+                logger.error('[one-pager] save_report error: %s', exc)
+                report_id = 0
+
+            yield f"data: {json.dumps({'type': 'done', 'report_id': report_id, 'content': final_report}, ensure_ascii=False)}\n\n"
+
+        except Exception as exc:
+            logger.error('[one-pager] generation error: %s', exc, exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(
         event_generator(),

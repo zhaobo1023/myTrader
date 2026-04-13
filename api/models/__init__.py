@@ -11,6 +11,10 @@ from api.models.backtest_job import BacktestJob, JobStatus
 from api.models.watchlist import UserWatchlist
 from api.models.scan_result import UserScanResult
 from api.models.notification_config import UserNotificationConfig
+from api.models.theme_pool import (
+    ThemePool, ThemePoolStock, ThemePoolScore, ThemePoolVote,
+    ThemeStatus, HumanStatus,
+)
 
 __all__ = [
     'User', 'UserTier', 'UserRole',
@@ -22,4 +26,6 @@ __all__ = [
     'UserWatchlist',
     'UserScanResult',
     'UserNotificationConfig',
+    'ThemePool', 'ThemePoolStock', 'ThemePoolScore', 'ThemePoolVote',
+    'ThemeStatus', 'HumanStatus',
 ]

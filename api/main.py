@@ -26,6 +26,7 @@ from api.routers.market_overview import router as market_overview_router
 from api.routers.sentiment import router as sentiment_router
 from api.routers.sw_rotation import router as sw_rotation_router
 from api.routers.portfolio_mgmt import router as portfolio_mgmt_router
+from api.routers.theme_pool import router as theme_pool_router
 
 logger = logging.getLogger('myTrader.api')
 
@@ -126,6 +127,7 @@ app.include_router(market_overview_router)
 app.include_router(sentiment_router)
 app.include_router(sw_rotation_router)
 app.include_router(portfolio_mgmt_router)
+app.include_router(theme_pool_router)
 
 
 @app.get('/')

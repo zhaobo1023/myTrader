@@ -1,0 +1,158 @@
+# ============================================================
+# 行业关键指标提取配置
+# ============================================================
+# 每个行业定义需要从年报中提取的关键指标
+# LLM 按此配置从年报文本中定位并提取数值
+#
+# 字段说明:
+#   name:        指标中文名 (用于 LLM prompt)
+#   key:         存储到数据库的字段名
+#   unit:        单位 (yi=亿元, pct=百分比, ratio=比率)
+#   table:       写入的目标表
+#   description: 指标含义说明 (帮助 LLM 精准定位)
+#   aliases:     年报中可能出现的别名列表
+#   required:    是否必须提取到 (true=提取不到会告警)
+# ============================================================
+
+bank:
+  label: "银行业"
+  metrics:
+    # --- OCI 相关 (当前数据缺失的核心指标) ---
+    - name: "其他综合收益"
+      key: "other_comprehensive_income"
+      unit: "yi"
+      table: "financial_income_detail"
+      description: "利润表下方，其他综合收益的税后净额，反映FVOCI债券浮盈浮亏"
+      aliases: ["其他综合收益的税后净额", "其他综合收益净额"]
+      required: true
+
+    - name: "综合收益总额"
+      key: "total_comprehensive_income"
+      unit: "yi"
+      table: "financial_income_detail"
+      description: "净利润 + 其他综合收益 = 综合收益总额"
+      aliases: ["归属于母公司股东的综合收益总额", "综合收益总额"]
+      required: false
+
+    # --- 永续债/优先股 (f大净资产扣除项) ---
+    - name: "其他权益工具余额"
+      key: "other_equity_instruments"
+      unit: "yi"
+      table: "financial_income_detail"
+      description: "资产负债表中其他权益工具项目，包含永续债和优先股的账面余额"
+      aliases: ["其他权益工具", "永续债", "永续资本补充债券"]
+      required: true
+
+    - name: "其他权益工具应付利息"
+      key: "other_equity_interest_payable"
+      unit: "yi"
+      table: "financial_income_detail"
+      description: "永续债和优先股应付未付的利息，需从净资产中扣除"
+      aliases: ["永续债应计利息", "其他权益工具持有者应付利息"]
+      required: false
+
+    # --- 拨备相关 ---
+    - name: "贷款减值准备余额"
+      key: "loan_provision_balance"
+      unit: "yi"
+      table: "financial_income_detail"
+      description: "贷款损失准备/贷款减值准备的期末余额，用于计算拨备覆盖率和拨贷比"
+      aliases: ["贷款损失准备", "贷款减值准备", "发放贷款和垫款减值准备"]
+      required: true
+
+    # --- 利息收入结构 ---
+    - name: "净利息收入"
+      key: "net_interest_income"
+      unit: "yi"
+      table: "financial_income_detail"
+      description: "利息收入减利息支出的净额"
+      aliases: ["利息净收入"]
+      required: false
+
+    - name: "信用减值损失"
+      key: "credit_impairment"
+      unit: "yi"
+      table: "financial_income_detail"
+      description: "信用减值损失计提金额，反映当期资产质量压力"
+      aliases: ["信用减值损失", "资产减值损失"]
+      required: false
+
+
+consumer:
+  label: "消费品行业"
+  metrics:
+    - name: "毛利率"
+      key: "gross_margin_pct"
+      unit: "pct"
+      table: "financial_income_detail"
+      description: "主营业务毛利率 = (营业收入-营业成本)/营业收入"
+      aliases: ["综合毛利率", "销售毛利率"]
+      required: true
+
+    - name: "销售费用率"
+      key: "selling_expense_ratio"
+      unit: "pct"
+      table: "financial_income_detail"
+      description: "销售费用占营业收入比例"
+      aliases: ["销售费用占比"]
+      required: false
+
+    - name: "经销商数量"
+      key: "dealer_count"
+      unit: "count"
+      table: "financial_income_detail"
+      description: "期末经销商/代理商数量"
+      aliases: ["经销商", "分销商", "代理商"]
+      required: false
+
+    - name: "存货余额"
+      key: "inventory_balance"
+      unit: "yi"
+      table: "financial_income_detail"
+      description: "期末存货账面余额"
+      aliases: ["存货", "库存商品"]
+      required: false
+
+    - name: "合同负债"
+      key: "contract_liabilities"
+      unit: "yi"
+      table: "financial_income_detail"
+      description: "合同负债/预收款项余额，反映渠道预收货款（需求前瞻指标）"
+      aliases: ["预收款项", "预收账款"]
+      required: false
+
+
+manufacturing:
+  label: "制造业"
+  metrics:
+    - name: "研发费用"
+      key: "rd_expense"
+      unit: "yi"
+      table: "financial_income_detail"
+      description: "研发费用总额"
+      aliases: ["研究开发费用", "研发投入"]
+      required: false
+
+    - name: "研发费用率"
+      key: "rd_expense_ratio"
+      unit: "pct"
+      table: "financial_income_detail"
+      description: "研发费用占营业收入比例"
+      aliases: ["研发投入占比"]
+      required: false
+
+    - name: "产能利用率"
+      key: "capacity_utilization"
+      unit: "pct"
+      table: "financial_income_detail"
+      description: "主要产品产能利用率"
+      aliases: ["产能利用率", "设备利用率"]
+      required: false
+
+    - name: "在建工程"
+      key: "construction_in_progress"
+      unit: "yi"
+      table: "financial_income_detail"
+      description: "在建工程期末余额，反映未来产能扩张"
+      aliases: ["在建工程"]
+      required: false

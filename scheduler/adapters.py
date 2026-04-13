@@ -269,3 +269,17 @@ def run_sentiment_polymarket(dry_run: bool = False, env: str = "online",
         if not ok:
             raise RuntimeError("save_polymarket_snapshot returned False")
     logger.info("[OK] run_sentiment_polymarket done (env=%s)", env)
+
+
+# ---------------------------------------------------------------------------
+# Theme Pool scoring adapter
+# ---------------------------------------------------------------------------
+
+def run_theme_pool_score(dry_run: bool = False, env: str = "online"):
+    """Daily scoring for all stocks in active theme pools."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_theme_pool_score: would score all active theme pool stocks (env=%s)", env)
+        return
+
+    from api.tasks.theme_pool_score import run_theme_pool_score as _score
+    _score(dry_run=False, env=env)
