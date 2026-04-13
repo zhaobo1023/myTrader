@@ -195,6 +195,61 @@ Markdown (.md)  ---- 统一中间格式，一式两用
 
 ---
 
+### Phase 4.5：批量提取 Bug 修复 + 16 家银行数据入库 (2026-04-13)
+
+**目标**：以 f大年报点评数据为基准，排查并修复年报批量提取中的单位混淆和数据异常问题，完成 16 家银行 2025 年报全量入库。
+
+**发现的问题（对照 f大基准数据逐行核查）**：
+
+| 银行 | 字段 | f大基准 | 提取前 | 根因 |
+|------|------|---------|--------|------|
+| 重庆银行 | operating_cashflow | 494.36 亿 | 494355 亿 | cashflow 文字描述用"净额"而非"净流入/出"，Strategy 1 未匹配，回退 Strategy 2；Strategy 2 读到文档开头"单位：万元"声明，而现金流表实际是千元，差了 10 倍 |
+| 张家港行 | overdue_total | ~15.15 亿 | 15147773 亿 | 逾期贷款表无单位声明，默认百万元（mult=0.01），实际是元（数值 ~26亿元）；`_unit_multiplier` 不识别纯"元"单位，fallback 返回 1.0 |
+| 张家港行 | operating_cashflow | ~-32.4 亿 | -29165537 亿 | Strategy 2 写死 `unit_hint="百万元"`，未检测实际单位；原文是元，表格数字 `3,240,353,790`×0.01 = 32403537 |
+| financial_income_detail | 全量 | -- | 全部失败 | `other_equity_instruments` 等 3 列未在 DB 建列，upsert 报 `Unknown column` |
+
+**修复内容**：
+
+| # | 文件 | 修复 |
+|---|------|------|
+| 1 | `base_template.py` | `_unit_multiplier()` 新增"亿"(1.0)、"万元"(1e-4)、纯"元"(1e-8) 分支，并保证"亿"优先于"万" |
+| 2 | `bank_template.py` | Strategy 1 prose 正则扩展：增加"净额"变体，覆盖"经营活动产生的现金流量净额为XXX亿元"写法 |
+| 3 | `bank_template.py` | Strategy 2 动态单位：从文档全文 `re.search(r"单位[：:]")` 检测实际单位，不再写死"百万元" |
+| 4 | `bank_template.py` | `_parse_overdue_table_raw()` 新增量级自动探测：第一个数据单元格 >= 1e7 时判断为"元"单位 (mult=1e-8)，兜底 Strategy 2 的单位声明缺失场景 |
+| 5 | `annual_report_extractor.py` | `_save_results()` 在 upsert income_detail 前过滤掉 cashflow 字段（operating/investing/financing/net_cashflow），防止 base_template 合并导致的列名冲突 |
+| 6 | 线上 DB | `ALTER TABLE financial_income_detail` 新增 `other_equity_instruments`、`other_equity_interest_payable`、`loan_provision_balance` 三列 |
+| 7 | `scripts/batch_bank_report_pipeline.py` | 修正 `PDF_ROOT` 路径（`PDF资料` -> `PDF`） |
+
+**批量提取结果（修复后）**：
+
+16 家银行 2025 年报（含华夏 2025 半年报，共 16 文件）全部提取成功，0 失败。
+
+关键数值与 f大基准对照：
+
+| 银行 | 指标 | f大基准 | 提取值 | 状态 |
+|------|------|---------|--------|------|
+| 华夏银行 | 逾期90+ | 281.83 | 281.83 | [OK] |
+| 华夏银行 | 重组贷款 | 113.70 | 113.70 | [OK] |
+| 华夏银行 | 拨备余额 | 571.55 | 571.55 | [OK] |
+| 重庆银行 | operating_cashflow | 494.36 | 494.36 | [OK] |
+| 张家港行 | overdue_total | ~15.15 | 15.15 | [OK] |
+| 中信银行 | 拨备余额 | 1368.56 | 1368.56 | [OK] |
+| 农业银行 | 拨备余额 | 10047.80 | 10047.80 | [OK] |
+| 招商银行 | 拨备余额 | 2672.22 | 2672.22 | [OK] |
+
+**已知残留问题**：
+- 渝农商行 `operating_cashflow = 3.72 亿`（量级正确，已由文字描述"净流入3.72亿元"直接匹配）
+- 张家港行 `overdue_90_plus` 为 NULL（overdue_detail 中按担保方式分类，无90天+维度行）
+- 民生银行 `total_loans = 661.54`（对应 f大"不良 661.54 亿"，实际贷款总额 44306.10 亿，提取器误匹配了不良余额行）
+
+**经验教训**：
+- 各银行年报单位不统一（元/千元/万元/百万元/亿元 混用），不能写死默认值
+- 文档开头的"单位：XXX"声明不一定适用于所有表格，现金流量表可能有自己的单位
+- 量级自动探测（数值 >= 1e7 判断为元）是兜底手段，适用于无单位声明的场景
+- 用专业分析师（f大）的点评文档作为 ground truth 来 debug 效率极高
+
+---
+
 ## 三、核心模块详解
 
 ### 3.1 年报提取器 (`annual_report_extractor.py`)

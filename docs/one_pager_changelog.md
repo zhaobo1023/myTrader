@@ -125,7 +125,7 @@
 ## 待解决问题
 
 ### 数据层
-- [ ] `financial_cashflow` 表仅有 2 只银行数据（华夏/宁波），需要批量提取
+- [x] `financial_cashflow` 表仅有 2 只银行数据 -> 已修复单位混淆 bug，16 家银行 2025 年报全部入库 (2026-04-13)
 - [ ] `dv_ttm`（股息率）在 `trade_stock_daily_basic` 中大量为 NULL
 - [ ] 银行没有 OPERATE_COST，毛利率概念不适用（正确保持 NULL，但 LLM 可能不知道）
 
