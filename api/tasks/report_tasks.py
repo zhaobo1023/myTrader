@@ -84,8 +84,42 @@ def generate_report_task(
 # Internal dispatch helpers
 # ---------------------------------------------------------------------------
 
+def _ensure_financial_data(stock_code: str, stock_name: str) -> None:
+    """Ensure financial_cashflow has recent data for this stock; sync if missing."""
+    try:
+        import os
+        import sys
+        ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        if ROOT not in sys.path:
+            sys.path.insert(0, ROOT)
+
+        from config.db import execute_query
+        bare = stock_code.split('.')[0] if '.' in stock_code else stock_code
+
+        # Check if we have data within last 18 months (covers latest annual report)
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=548)).strftime('%Y-%m-%d')
+        rows = execute_query(
+            "SELECT COUNT(*) AS cnt FROM financial_cashflow WHERE stock_code=%s AND report_date >= %s",
+            (bare, cutoff), env='online',
+        )
+        if rows and rows[0]['cnt'] > 0:
+            return  # already have recent data
+
+        logger.info('[report_tasks] syncing cashflow for %s', bare)
+        from data_analyst.financial_fetcher.fetcher import fetch_cashflow
+        from data_analyst.financial_fetcher.storage import FinancialStorage
+        cashflow_rows = fetch_cashflow(bare, stock_name)
+        if cashflow_rows:
+            FinancialStorage(env='online').upsert('financial_cashflow', cashflow_rows)
+            logger.info('[report_tasks] synced %d cashflow rows for %s', len(cashflow_rows), bare)
+    except Exception as e:
+        logger.warning('[report_tasks] _ensure_financial_data failed for %s: %s', stock_code, e)
+
+
 def _dispatch(report_type: str, stock_code: str, stock_name: str) -> str:
     if report_type == 'one_pager':
+        _ensure_financial_data(stock_code, stock_name)
         return _generate_one_pager(stock_code, stock_name)
     if report_type in ('comprehensive', 'fundamental'):
         return _generate_comprehensive(report_type, stock_code, stock_name)
