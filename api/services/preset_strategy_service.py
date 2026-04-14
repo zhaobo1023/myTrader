@@ -105,7 +105,7 @@ def list_preset_strategies() -> List[dict]:
     """
     # Get latest trade date from database
     trade_date_rows = execute_query(
-        "SELECT MAX(trade_date) AS max_date FROM trade_stock_daily WHERE stock_code LIKE '%%.SZ' OR stock_code LIKE '%%.SH'",
+        "SELECT MAX(trade_date) AS max_date FROM trade_stock_daily",
         env='online',
     )
     latest_trade_date = trade_date_rows[0]['max_date'].isoformat() if trade_date_rows and trade_date_rows[0].get('max_date') else None
@@ -186,7 +186,7 @@ def trigger_strategy_run(strategy_key: str, force: bool = False) -> dict:
 
     # Get latest trade date from database
     trade_date_rows = execute_query(
-        "SELECT MAX(trade_date) AS max_date FROM trade_stock_daily WHERE stock_code LIKE '%%.SZ' OR stock_code LIKE '%%.SH'",
+        "SELECT MAX(trade_date) AS max_date FROM trade_stock_daily",
         env='online',
     )
     if not trade_date_rows or not trade_date_rows[0].get('max_date'):
