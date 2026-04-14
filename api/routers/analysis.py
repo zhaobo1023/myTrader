@@ -588,3 +588,161 @@ async def run_health_check():
     except Exception as exc:
         logger.error('[health-check] run failed: %s', exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Unified async report task endpoints
+# ---------------------------------------------------------------------------
+
+VALID_REPORT_TYPES = frozenset({
+    'one_pager', 'comprehensive', 'fundamental', 'five_section', 'technical_report',
+})
+
+
+class ReportSubmitRequest(BaseModel):
+    stock_code: str
+    stock_name: str = ''
+    report_type: str = 'comprehensive'
+
+
+@router.post('/report/submit')
+async def submit_report(body: ReportSubmitRequest):
+    """
+    Submit a report generation job to Celery.
+
+    report_type: one_pager | comprehensive | fundamental | five_section | technical_report
+
+    Returns immediately with one of:
+      {status: "cached",    report_id, report_type}
+      {status: "pending"|"running", task_id}
+      {status: "submitted", task_id, message}
+    """
+    stock_code = body.stock_code
+    stock_name = body.stock_name or stock_code
+    report_type = body.report_type
+
+    if report_type not in VALID_REPORT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f'Invalid report_type. Valid values: {sorted(VALID_REPORT_TYPES)}',
+        )
+
+    from api.services import report_task_service
+    from api.services import rag_report_service
+
+    # 1. Check today's cache in trade_rag_report
+    cached = rag_report_service.get_today_report(stock_code, report_type)
+    if cached:
+        return {
+            'status': 'cached',
+            'report_id': cached['id'],
+            'report_type': report_type,
+            'stock_code': stock_code,
+        }
+
+    # 2. Check for an in-flight task
+    latest = report_task_service.get_latest_task(stock_code, report_type)
+    if latest and latest['status'] in ('pending', 'running'):
+        return {
+            'status': latest['status'],
+            'task_id': latest['task_id'],
+            'report_type': report_type,
+            'stock_code': stock_code,
+        }
+
+    # 3. Submit new Celery task
+    try:
+        from api.tasks.report_tasks import generate_report_task
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f'Task module unavailable: {exc}')
+
+    import uuid
+    task_id = str(uuid.uuid4())
+
+    generate_report_task.apply_async(
+        args=[task_id, stock_code, stock_name, report_type],
+        task_id=task_id,
+    )
+
+    # 4. Persist task row
+    report_task_service.create_task(
+        task_id=task_id,
+        stock_code=stock_code,
+        stock_name=stock_name,
+        report_type=report_type,
+    )
+
+    logger.info('[report/submit] submitted task_id=%s stock=%s type=%s', task_id, stock_code, report_type)
+    return {
+        'status': 'submitted',
+        'task_id': task_id,
+        'report_type': report_type,
+        'stock_code': stock_code,
+        'message': '报告生成中，请稍后刷新查看',
+    }
+
+
+@router.get('/report/status')
+async def get_report_status(task_id: str = Query(..., description='Celery task UUID')):
+    """
+    Poll the status of a submitted report task.
+
+    Returns task row: {task_id, status, report_id, error_msg, report_type, stock_code}
+    """
+    from api.services import report_task_service
+
+    task = report_task_service.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f'Task {task_id} not found')
+    return task
+
+
+@router.get('/report/latest')
+async def get_latest_report(
+    code: str = Query(..., description='Stock code'),
+    report_type: str = Query('comprehensive', description='Report type'),
+):
+    """
+    Return the latest report info for a stock+type combination.
+
+    Checks trade_rag_report cache first, then trade_report_task.
+    Returns: {cached: bool, report_id?, task_id?, status?, report_type}
+    """
+    if report_type not in VALID_REPORT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f'Invalid report_type. Valid values: {sorted(VALID_REPORT_TYPES)}',
+        )
+
+    from api.services import report_task_service
+    from api.services import rag_report_service
+
+    # 1. Check today's cache
+    cached = rag_report_service.get_today_report(code, report_type)
+    if cached:
+        return {
+            'cached': True,
+            'report_id': cached['id'],
+            'report_type': report_type,
+            'stock_code': code,
+            'report_date': cached['report_date'],
+        }
+
+    # 2. Check latest task
+    latest = report_task_service.get_latest_task(code, report_type)
+    if latest:
+        return {
+            'cached': False,
+            'task_id': latest['task_id'],
+            'status': latest['status'],
+            'report_id': latest.get('report_id'),
+            'report_type': report_type,
+            'stock_code': code,
+        }
+
+    return {
+        'cached': False,
+        'report_type': report_type,
+        'stock_code': code,
+        'status': None,
+    }

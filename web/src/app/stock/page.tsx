@@ -22,8 +22,18 @@ interface StockCard {
   score_label: string;
   max_severity: string;
   summary: string;
-  market_cap: number | null;      // 亿元
+  market_cap: number | null;
   circ_market_cap: number | null;
+}
+
+// Task status from /api/analysis/report/status or /report/latest
+interface ReportTask {
+  task_id?: string;
+  status: 'pending' | 'running' | 'done' | 'failed' | 'cached' | null;
+  report_id?: number | null;
+  report_type?: string;
+  error_msg?: string | null;
+  report_date?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -40,11 +50,22 @@ const TAB_CONFIG: { key: StockTab; label: string }[] = [
   { key: 'news',          label: '个股动态' },
 ];
 
+// Map tab -> report_type used by the unified API
+const TAB_REPORT_TYPE: Record<StockTab, string> = {
+  'one-pager':     'one_pager',
+  'comprehensive': 'five_section',
+  'technical':     'technical_report',
+  'fundamental':   'fundamental',
+  'news':          '',
+};
+
 type MarketFilter = 'all' | 'sh' | 'sz';
 type CapFilter    = 'all' | 'large' | 'mid' | 'small';
 
 const MARKET_LABELS: Record<MarketFilter, string> = { all: '全部', sh: '沪市', sz: '深市' };
-const CAP_LABELS:    Record<CapFilter, string>    = { all: '全部市值', large: '大盘(≥500亿)', mid: '中盘(100-500亿)', small: '小盘(<100亿)' };
+const CAP_LABELS:    Record<CapFilter, string>    = { all: '全部市值', large: '大盘(>=500亿)', mid: '中盘(100-500亿)', small: '小盘(<100亿)' };
+
+const POLL_INTERVAL_MS = 5000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -93,56 +114,557 @@ async function mdToHtml(md: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// One-pager types & helpers
+// Unified report task hook
+// Handles submit -> pending/running poll -> done/failed
 // ---------------------------------------------------------------------------
 
-interface RagReport {
-  id: number;
-  stock_code: string;
-  stock_name: string;
-  report_type: string;
-  report_date: string;
-  content: string;
-  created_at: string;
-}
+function useReportTask(stock: StockOption, reportType: string) {
+  const [task, setTask] = useState<ReportTask>({ status: null });
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-interface OnePagerHistory {
-  id: number;
-  stock_code: string;
-  stock_name: string;
-  report_type: string;
-  report_date: string;
-  created_at: string;
-}
+  const stopPoll = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  };
 
-interface SseStep {
-  step: string;
-  name: string;
-  content?: string;
-  done: boolean;
-}
+  const pollStatus = useCallback(async (taskId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/analysis/report/status?task_id=${taskId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setTask(data);
+      if (data.status === 'done' || data.status === 'failed') stopPoll();
+    } catch { /* ignore */ }
+  }, []);
 
-function renderMarkdown(md: string): string {
-  return md
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .split('\n\n')
-    .map((block) => {
-      const trimmed = block.trim();
-      if (!trimmed) return '';
-      if (trimmed.startsWith('### ')) return `<h3 style="font-size:14px;font-weight:600;margin:16px 0 6px;color:var(--text-primary)">${trimmed.slice(4)}</h3>`;
-      if (trimmed.startsWith('## '))  return `<h2 style="font-size:16px;font-weight:650;margin:20px 0 8px;color:var(--text-primary)">${trimmed.slice(3)}</h2>`;
-      if (trimmed.startsWith('# '))   return `<h1 style="font-size:18px;font-weight:700;margin:24px 0 10px;color:var(--text-primary)">${trimmed.slice(2)}</h1>`;
-      if (trimmed === '---') return '<hr style="border:none;border-top:1px solid var(--border-subtle);margin:16px 0"/>';
-      const inlined = trimmed.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-        const items = inlined.split('\n').map(l => l.replace(/^[-*] /, '')).map(l => `<li>${l}</li>`).join('');
-        return `<ul style="margin:4px 0 8px 20px;padding:0;color:var(--text-secondary);font-size:13px;line-height:1.7">${items}</ul>`;
+  const startPoll = useCallback((taskId: string) => {
+    stopPoll();
+    pollRef.current = setInterval(() => pollStatus(taskId), POLL_INTERVAL_MS);
+  }, [pollStatus]);
+
+  // On mount / stock change: check latest report/task
+  useEffect(() => {
+    if (!reportType) { setLoading(false); return; }
+    stopPoll();
+    setTask({ status: null });
+    setLoading(true);
+
+    fetch(`${API_BASE}/api/analysis/report/latest?code=${stock.stock_code}&report_type=${reportType}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.cached) {
+          setTask({ status: 'cached', report_id: d.report_id, report_date: d.report_date, report_type: reportType });
+        } else if (d.task_id) {
+          setTask({ status: d.status, task_id: d.task_id, report_id: d.report_id, report_type: reportType });
+          if (d.status === 'pending' || d.status === 'running') startPoll(d.task_id);
+        } else {
+          setTask({ status: null });
+        }
+      })
+      .catch(() => setTask({ status: null }))
+      .finally(() => setLoading(false));
+
+    return stopPoll;
+  }, [stock.stock_code, reportType, startPoll]);
+
+  const submit = useCallback(async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/analysis/report/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stock_code: stock.stock_code,
+          stock_name: stock.stock_name || stock.stock_code,
+          report_type: reportType,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setTask({ status: 'failed', error_msg: data.detail || '提交失败' });
+        return;
       }
-      return `<p style="margin:0 0 8px;color:var(--text-secondary);font-size:13px;line-height:1.7">${inlined}</p>`;
-    })
-    .join('\n');
+      if (data.status === 'cached') {
+        setTask({ status: 'cached', report_id: data.report_id, report_type: reportType });
+      } else {
+        setTask({ status: data.status, task_id: data.task_id, report_type: reportType });
+        if (data.task_id && (data.status === 'submitted' || data.status === 'pending' || data.status === 'running')) {
+          // treat submitted same as pending for polling
+          setTask((prev) => ({ ...prev, status: 'pending' }));
+          startPoll(data.task_id);
+        }
+      }
+    } catch (e) {
+      setTask({ status: 'failed', error_msg: String(e) });
+    } finally {
+      setSubmitting(false);
+    }
+  }, [stock, reportType, submitting, startPoll]);
+
+  return { task, loading, submitting, submit };
+}
+
+// ---------------------------------------------------------------------------
+// Shared report status banner
+// ---------------------------------------------------------------------------
+
+function ReportStatusBanner({
+  task,
+  submitting,
+  onSubmit,
+  submitLabel,
+  resubmitLabel,
+}: {
+  task: ReportTask;
+  submitting: boolean;
+  onSubmit: () => void;
+  submitLabel: string;
+  resubmitLabel: string;
+}) {
+  const isPending = task.status === 'pending' || task.status === 'running';
+  const isDone = task.status === 'done' || task.status === 'cached';
+  const isFailed = task.status === 'failed';
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+      {!isPending && (
+        <button
+          onClick={onSubmit}
+          disabled={submitting}
+          style={{
+            padding: '7px 20px', borderRadius: '6px', fontSize: '13px', fontWeight: 510,
+            background: submitting ? 'var(--bg-elevated)' : 'var(--accent)',
+            color: submitting ? 'var(--text-muted)' : '#fff',
+            border: 'none', cursor: submitting ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {submitting ? '提交中...' : (isDone ? resubmitLabel : submitLabel)}
+        </button>
+      )}
+
+      {isPending && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 14px', background: 'rgba(113,112,255,0.08)', borderRadius: '6px', border: '1px solid rgba(113,112,255,0.2)' }}>
+          <span style={{ fontSize: '13px', color: 'var(--accent)', fontWeight: 510 }}>
+            报告生成中，请稍后刷新查看
+          </span>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>（每5秒自动检查）</span>
+        </div>
+      )}
+
+      {isFailed && task.error_msg && (
+        <div style={{ fontSize: '12px', color: '#e5534b', padding: '6px 12px', background: 'rgba(229,83,75,0.08)', borderRadius: '6px' }}>
+          生成失败: {task.error_msg.slice(0, 120)}
+        </div>
+      )}
+
+      {isDone && (
+        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+          {task.report_date ? `生成日期: ${task.report_date}` : '已生成'}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ReportViewer (markdown -> HTML)
+// ---------------------------------------------------------------------------
+
+function ReportViewer({ markdown }: { markdown: string }) {
+  const [html, setHtml] = useState('');
+  useEffect(() => { mdToHtml(markdown).then(setHtml); }, [markdown]);
+  return (
+    <>
+      <style>{`
+        .md-body { font-size: 14px; line-height: 1.8; color: var(--text-primary); }
+        .md-body h1 { font-size: 18px; font-weight: 650; margin: 20px 0 10px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 6px; }
+        .md-body h2 { font-size: 15px; font-weight: 590; margin: 16px 0 8px; }
+        .md-body h3 { font-size: 13px; font-weight: 560; margin: 12px 0 5px; color: var(--text-secondary); }
+        .md-body p  { margin: 5px 0; color: var(--text-secondary); }
+        .md-body ul, .md-body ol { margin: 5px 0 5px 20px; color: var(--text-secondary); }
+        .md-body li { margin: 3px 0; }
+        .md-body table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+        .md-body th { background: var(--bg-elevated); padding: 6px 10px; text-align: left; color: var(--text-muted); font-weight: 510; border-bottom: 1px solid var(--border-subtle); }
+        .md-body td { padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); }
+        .md-body blockquote { border-left: 3px solid var(--accent); padding: 6px 12px; margin: 10px 0; background: var(--bg-elevated); color: var(--text-muted); }
+        .md-body code { background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+        .md-body hr { border: none; border-top: 1px solid var(--border-subtle); margin: 16px 0; }
+        .md-body strong { color: var(--text-primary); }
+      `}</style>
+      <div className="md-body" dangerouslySetInnerHTML={{ __html: html }} />
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Markdown report tab (one-pager, fundamental, comprehensive text)
+// ---------------------------------------------------------------------------
+
+function MarkdownReportTab({
+  stock,
+  reportType,
+  submitLabel,
+  resubmitLabel,
+  placeholder,
+  showHistory,
+}: {
+  stock: StockOption;
+  reportType: string;
+  submitLabel: string;
+  resubmitLabel: string;
+  placeholder: string;
+  showHistory?: boolean;
+}) {
+  const { task, loading, submitting, submit } = useReportTask(stock, reportType);
+  const [content, setContent] = useState('');
+  const [history, setHistory] = useState<{ id: number; report_date: string }[]>([]);
+  const [viewingId, setViewingId] = useState<number | null>(null);
+  const [viewingContent, setViewingContent] = useState('');
+
+  // Fetch report content when task is done/cached
+  useEffect(() => {
+    const rid = task.report_id;
+    if ((task.status === 'done' || task.status === 'cached') && rid) {
+      fetch(`${API_BASE}/api/analysis/rag-report/${rid}`)
+        .then((r) => r.json())
+        .then((d) => setContent(d.content || ''))
+        .catch(() => setContent(''));
+    } else if (task.status !== 'done' && task.status !== 'cached') {
+      setContent('');
+    }
+  }, [task.status, task.report_id]);
+
+  // Load history for one-pager
+  useEffect(() => {
+    if (!showHistory) return;
+    fetch(`${API_BASE}/api/analysis/one-pager/history?code=${stock.stock_code}&limit=10`)
+      .then((r) => r.json())
+      .then((d) => setHistory(Array.isArray(d) ? d : []))
+      .catch(() => setHistory([]));
+  }, [stock.stock_code, showHistory]);
+
+  function loadHistoryItem(id: number) {
+    setViewingId(id);
+    fetch(`${API_BASE}/api/analysis/rag-report/${id}`)
+      .then((r) => r.json())
+      .then((d) => setViewingContent(d.content || ''))
+      .catch(() => setViewingContent('[加载失败]'));
+  }
+
+  const displayContent = viewingId ? viewingContent : content;
+
+  if (loading) {
+    return <div style={{ padding: '40px 0', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>加载中...</div>;
+  }
+
+  return (
+    <div>
+      <ReportStatusBanner
+        task={task}
+        submitting={submitting}
+        onSubmit={submit}
+        submitLabel={submitLabel}
+        resubmitLabel={resubmitLabel}
+      />
+
+      {showHistory && history.length > 0 && (
+        <div style={{ marginBottom: '14px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>历史报告</div>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {history.map((h) => (
+              <button
+                key={h.id}
+                onClick={() => {
+                  if (viewingId === h.id) { setViewingId(null); setViewingContent(''); }
+                  else loadHistoryItem(h.id);
+                }}
+                style={{
+                  padding: '3px 10px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer',
+                  border: `1px solid ${viewingId === h.id ? 'var(--accent)' : 'var(--border-subtle)'}`,
+                  background: viewingId === h.id ? 'rgba(113,112,255,0.1)' : 'var(--bg-card)',
+                  color: viewingId === h.id ? 'var(--accent)' : 'var(--text-secondary)',
+                }}
+              >
+                {h.report_date}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {displayContent ? (
+        <div style={{
+          padding: '20px 24px', background: 'var(--bg-card)',
+          border: '1px solid var(--border-subtle)', borderRadius: '8px',
+          lineHeight: '1.7', maxHeight: '70vh', overflowY: 'auto',
+        }}>
+          <ReportViewer markdown={displayContent} />
+        </div>
+      ) : (task.status === null || task.status === 'failed') ? (
+        <div style={{
+          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+          borderRadius: '8px', padding: '60px 24px', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{placeholder}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// HTML report tab (five-section, iframe)
+// ---------------------------------------------------------------------------
+
+function HtmlReportTab({
+  stock,
+  reportType,
+  submitLabel,
+  resubmitLabel,
+  placeholder,
+  iframeTitle,
+}: {
+  stock: StockOption;
+  reportType: string;
+  submitLabel: string;
+  resubmitLabel: string;
+  placeholder: string;
+  iframeTitle: string;
+}) {
+  const { task, loading, submitting, submit } = useReportTask(stock, reportType);
+
+  const reportUrl = task.report_id
+    ? `${API_BASE}/api/analysis/rag-report-html/${task.report_id}`
+    : '';
+
+  if (loading) {
+    return <div style={{ padding: '40px 0', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>加载中...</div>;
+  }
+
+  const isDone = task.status === 'done' || task.status === 'cached';
+
+  return (
+    <div>
+      <ReportStatusBanner
+        task={task}
+        submitting={submitting}
+        onSubmit={submit}
+        submitLabel={submitLabel}
+        resubmitLabel={resubmitLabel}
+      />
+
+      {isDone && reportUrl ? (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+            <a
+              href={reportUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                padding: '3px 12px', fontSize: '12px', borderRadius: '5px',
+                background: 'var(--accent)', color: '#fff', textDecoration: 'none',
+              }}
+            >
+              在新标签页打开
+            </a>
+          </div>
+          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px', overflow: 'hidden' }}>
+            <iframe
+              src={reportUrl}
+              title={iframeTitle}
+              style={{ width: '100%', height: '80vh', border: 'none', display: 'block' }}
+            />
+          </div>
+        </div>
+      ) : (task.status === null || task.status === 'failed') ? (
+        <div style={{
+          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+          borderRadius: '8px', padding: '60px 24px', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{placeholder}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Technical tab (keeps list view, uses task queue for generate)
+// ---------------------------------------------------------------------------
+
+interface TechReport {
+  id: number; stock_code: string; stock_name: string; trade_date: string;
+  score: number; score_label: string; max_severity: string; summary: string;
+  signal_count: number; ma_pattern?: string; has_html?: boolean;
+  signals: { name: string; level: string; description: string }[];
+  indicators: Record<string, number | null>;
+}
+
+function TechReportList({ reports, latestDate }: { reports: TechReport[]; latestDate: string }) {
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  if (reports.length === 0) return null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      {reports.map((rep) => {
+        const isExpanded = expandedId === rep.id;
+        return (
+          <div key={rep.id} style={{
+            background: 'var(--bg-card)', borderRadius: '8px', overflow: 'hidden',
+            border: '1px solid var(--border-subtle)',
+            borderLeft: `3px solid ${severityColor(rep.max_severity)}`,
+          }}>
+            <div
+              onClick={() => setExpandedId(isExpanded ? null : rep.id)}
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', cursor: 'pointer' }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-nav-hover)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-primary)' }}>
+                  {rep.trade_date}
+                  {rep.trade_date === latestDate && (
+                    <span style={{ marginLeft: '6px', fontSize: '10px', color: 'var(--accent)' }}>最新</span>
+                  )}
+                </span>
+                <ScoreBadge score={rep.score} label={rep.score_label} />
+                {rep.ma_pattern && (
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', background: 'var(--bg-elevated)', padding: '1px 6px', borderRadius: '4px' }}>
+                    {rep.ma_pattern}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                {rep.has_html && (
+                  <a
+                    href={`${API_BASE}/api/analysis/report-html/${rep.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      padding: '2px 10px', fontSize: '11px', borderRadius: '4px',
+                      background: 'var(--accent)', color: '#fff',
+                      border: '1px solid var(--accent)', textDecoration: 'none',
+                    }}
+                  >
+                    完整报告
+                  </a>
+                )}
+                <span style={{ fontSize: '11px', color: 'var(--accent)' }}>{isExpanded ? '收起' : '展开'}</span>
+              </div>
+            </div>
+            <div style={{ padding: '0 16px 10px', fontSize: '12px', color: 'var(--text-muted)' }}>{rep.summary}</div>
+            {isExpanded && rep.signals && rep.signals.length > 0 && (
+              <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {rep.signals.map((sig, i) => (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'center', gap: '8px',
+                    padding: '5px 8px', background: 'var(--bg-elevated)', borderRadius: '5px', fontSize: '12px',
+                  }}>
+                    <span style={{ padding: '1px 6px', borderRadius: '3px', fontSize: '11px', fontWeight: 600, color: severityColor(sig.level), background: `${severityColor(sig.level)}18` }}>{sig.level}</span>
+                    <span style={{ fontWeight: 510, color: 'var(--text-primary)', minWidth: '80px' }}>{sig.name}</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{sig.description}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {isExpanded && rep.indicators && Object.keys(rep.indicators).length > 0 && (
+              <div style={{ padding: '0 16px 16px' }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 510, marginBottom: '6px' }}>关键指标</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '6px' }}>
+                  {Object.entries(rep.indicators).slice(0, 16).map(([k, v]) => (
+                    <div key={k} style={{ background: 'var(--bg-elevated)', padding: '5px 8px', borderRadius: '5px' }}>
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>{k}</div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 510 }}>
+                        {v != null ? Number(v).toFixed(3) : '--'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TechnicalTab({ stock }: { stock: StockOption }) {
+  const { task, loading: taskLoading, submitting, submit } = useReportTask(stock, 'technical_report');
+  const [reports, setReports] = useState<TechReport[]>([]);
+  const [listLoading, setListLoading] = useState(true);
+  const [latestDate, setLatestDate] = useState('');
+
+  useEffect(() => {
+    setReports([]); setListLoading(true);
+    Promise.all([
+      fetch(`${API_BASE}/api/analysis/reports/by-stock?code=${stock.stock_code}&days=3`).then((r) => r.json()),
+      fetch(`${API_BASE}/api/market/latest-date`).then((r) => r.json()),
+    ]).then(([reps, ld]) => {
+      setReports(Array.isArray(reps) ? reps : []);
+      setLatestDate(ld.latest_date || '');
+    }).catch(() => {}).finally(() => setListLoading(false));
+  }, [stock.stock_code]);
+
+  // When task completes, reload list
+  useEffect(() => {
+    if (task.status === 'done') {
+      fetch(`${API_BASE}/api/analysis/reports/by-stock?code=${stock.stock_code}&days=3`)
+        .then((r) => r.json())
+        .then((reps) => setReports(Array.isArray(reps) ? reps : []))
+        .catch(() => {});
+    }
+  }, [task.status, stock.stock_code]);
+
+  const hasLatest = reports.some((r) => r.trade_date === latestDate);
+
+  if (listLoading || taskLoading) {
+    return <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '30px 0' }}>加载中...</div>;
+  }
+
+  return (
+    <div>
+      {latestDate && !hasLatest && (
+        <ReportStatusBanner
+          task={task}
+          submitting={submitting}
+          onSubmit={submit}
+          submitLabel={`生成 ${latestDate} 报告`}
+          resubmitLabel={`重新生成 ${latestDate} 报告`}
+        />
+      )}
+      {reports.length === 0 ? (
+        <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '20px 0' }}>
+          近3天暂无报告{latestDate && !hasLatest ? '，点击上方按钮生成' : ''}
+        </div>
+      ) : (
+        <TechReportList reports={reports} latestDate={latestDate} />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// News tab (placeholder)
+// ---------------------------------------------------------------------------
+
+function NewsTab({ stock }: { stock: StockOption }) {
+  return (
+    <div style={{
+      background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+      borderRadius: '8px', padding: '40px 24px', textAlign: 'center',
+    }}>
+      <div style={{ fontSize: '14px', fontWeight: 510, color: 'var(--text-secondary)', marginBottom: '8px' }}>
+        {stock.stock_name} 个股动态
+      </div>
+      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+        公司公告、重大事件抓取即将上线
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -199,11 +721,7 @@ function StockSearchBox({ onSelect, compact }: { onSelect: (s: StockOption) => v
           {results.map((item) => (
             <div
               key={item.stock_code}
-              onClick={() => {
-                setKw(`${item.stock_code} ${item.stock_name || ''}`);
-                setOpen(false);
-                onSelect(item);
-              }}
+              onClick={() => { setKw(`${item.stock_code} ${item.stock_name || ''}`); setOpen(false); onSelect(item); }}
               style={{
                 padding: '8px 12px', cursor: 'pointer', fontSize: '13px',
                 display: 'flex', justifyContent: 'space-between',
@@ -223,122 +741,8 @@ function StockSearchBox({ onSelect, compact }: { onSelect: (s: StockOption) => v
 }
 
 // ---------------------------------------------------------------------------
-// Stock card grid (home view)
+// Stock card grid
 // ---------------------------------------------------------------------------
-
-function StockCardGrid({ onSelect }: { onSelect: (s: StockOption) => void }) {
-  const [cards, setCards] = useState<StockCard[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [marketFilter, setMarketFilter] = useState<MarketFilter>('all');
-  const [capFilter, setCapFilter] = useState<CapFilter>('all');
-
-  useEffect(() => {
-    fetch(`${API_BASE}/api/analysis/analyzed-stocks`)
-      .then((r) => r.json())
-      .then((d) => setCards(d.data || []))
-      .catch(() => setCards([]))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const filtered = cards.filter((c) => {
-    if (marketFilter !== 'all' && marketCategory(c.stock_code) !== marketFilter) return false;
-    if (capFilter !== 'all' && capCategory(c.market_cap) !== capFilter) return false;
-    return true;
-  });
-
-  return (
-    <div>
-      {/* Filter bar */}
-      <div style={{ display: 'flex', gap: '20px', alignItems: 'center', marginBottom: '18px', flexWrap: 'wrap' }}>
-        <FilterPills
-          label="市场"
-          options={Object.entries(MARKET_LABELS) as [MarketFilter, string][]}
-          value={marketFilter}
-          onChange={setMarketFilter}
-        />
-        <FilterPills
-          label="市值"
-          options={Object.entries(CAP_LABELS) as [CapFilter, string][]}
-          value={capFilter}
-          onChange={setCapFilter}
-        />
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-          {filtered.length} 只股票
-        </span>
-      </div>
-
-      {loading && (
-        <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-          加载中...
-        </div>
-      )}
-
-      {!loading && filtered.length === 0 && (
-        <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-          暂无分析记录，搜索股票开始分析
-        </div>
-      )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
-        {filtered.map((card) => (
-          <div
-            key={card.stock_code}
-            onClick={() => onSelect({ stock_code: card.stock_code, stock_name: card.stock_name })}
-            style={{
-              background: 'var(--bg-card)',
-              border: `1px solid var(--border-subtle)`,
-              borderLeft: `3px solid ${severityColor(card.max_severity)}`,
-              borderRadius: '8px', padding: '14px 16px',
-              cursor: 'pointer', transition: 'all 0.12s',
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-nav-hover)';
-              (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--accent)40';
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-card)';
-              (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border-subtle)';
-            }}
-          >
-            {/* Stock name + code */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-              <div>
-                <div style={{ fontSize: '14px', fontWeight: 590, color: 'var(--text-primary)' }}>
-                  {card.stock_name}
-                </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                  {card.stock_code}
-                </div>
-              </div>
-              <ScoreBadge score={card.score} label={card.score_label} />
-            </div>
-
-            {/* Market cap + date */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-muted)' }}>
-              <span>
-                {card.market_cap != null ? `${card.market_cap.toFixed(0)}亿` : '-'}
-                {' · '}
-                {marketCategory(card.stock_code) === 'sh' ? '沪市' : '深市'}
-              </span>
-              <span>{card.latest_date}</span>
-            </div>
-
-            {/* Summary snippet */}
-            {card.summary && (
-              <div style={{
-                marginTop: '8px', fontSize: '12px', color: 'var(--text-muted)',
-                overflow: 'hidden', display: '-webkit-box',
-                WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-              }}>
-                {card.summary}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function FilterPills<T extends string>({
   label, options, value, onChange,
@@ -373,737 +777,107 @@ function FilterPills<T extends string>({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Tab content components
-// ---------------------------------------------------------------------------
-
-interface StepItem { step: string; name: string; status: 'pending' | 'running' | 'done'; }
-
-function ReportViewer({ markdown }: { markdown: string }) {
-  const [html, setHtml] = useState('');
-  useEffect(() => { mdToHtml(markdown).then(setHtml); }, [markdown]);
-  return (
-    <>
-      <style>{`
-        .md-body { font-size: 14px; line-height: 1.8; color: var(--text-primary); }
-        .md-body h1 { font-size: 18px; font-weight: 650; margin: 20px 0 10px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 6px; }
-        .md-body h2 { font-size: 15px; font-weight: 590; margin: 16px 0 8px; }
-        .md-body h3 { font-size: 13px; font-weight: 560; margin: 12px 0 5px; color: var(--text-secondary); }
-        .md-body p  { margin: 5px 0; color: var(--text-secondary); }
-        .md-body ul, .md-body ol { margin: 5px 0 5px 20px; color: var(--text-secondary); }
-        .md-body li { margin: 3px 0; }
-        .md-body table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
-        .md-body th { background: var(--bg-elevated); padding: 6px 10px; text-align: left; color: var(--text-muted); font-weight: 510; border-bottom: 1px solid var(--border-subtle); }
-        .md-body td { padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); }
-        .md-body blockquote { border-left: 3px solid var(--accent); padding: 6px 12px; margin: 10px 0; background: var(--bg-elevated); color: var(--text-muted); }
-        .md-body code { background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
-        .md-body hr { border: none; border-top: 1px solid var(--border-subtle); margin: 16px 0; }
-        .md-body strong { color: var(--text-primary); }
-      `}</style>
-      <div className="md-body" dangerouslySetInnerHTML={{ __html: html }} />
-    </>
-  );
-}
-
-function ComprehensiveTab({ stock }: { stock: StockOption }) {
-  const [generating, setGenerating] = useState(false);
-  const [reportId, setReportId] = useState<number | null>(null);
-  const [reportDate, setReportDate] = useState('');
-  const [error, setError] = useState('');
+function StockCardGrid({ onSelect }: { onSelect: (s: StockOption) => void }) {
+  const [cards, setCards] = useState<StockCard[]>([]);
   const [loading, setLoading] = useState(true);
+  const [marketFilter, setMarketFilter] = useState<MarketFilter>('all');
+  const [capFilter, setCapFilter] = useState<CapFilter>('all');
 
-  // Check DB cache on mount / stock change
   useEffect(() => {
-    setReportId(null); setReportDate(''); setError('');
-    setLoading(true);
-    fetch(`${API_BASE}/api/analysis/five-section/today?code=${stock.stock_code}`)
+    fetch(`${API_BASE}/api/analysis/analyzed-stocks`)
       .then((r) => r.json())
-      .then((d) => {
-        if (d.exists && d.report) {
-          setReportId(d.report.id);
-          setReportDate(d.report.report_date || '');
-        }
-      })
-      .catch(() => {})
+      .then((d) => setCards(d.data || []))
+      .catch(() => setCards([]))
       .finally(() => setLoading(false));
-  }, [stock.stock_code]);
+  }, []);
 
-  async function generate() {
-    if (generating) return;
-    setError('');
-    setGenerating(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/analysis/five-section/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stock_code: stock.stock_code,
-          stock_name: stock.stock_name || stock.stock_code,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.detail || '生成失败'); return; }
-      setReportId(data.report_id);
-      setReportDate(data.report_date || new Date().toISOString().slice(0, 10));
-    } catch (e) { setError(String(e)); }
-    finally { setGenerating(false); }
-  }
-
-  const hasCached = reportId != null && !generating;
-  const reportUrl = reportId ? `${API_BASE}/api/analysis/rag-report-html/${reportId}` : '';
-
-  if (loading) {
-    return <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '40px 0', textAlign: 'center' }}>加载中...</div>;
-  }
+  const filtered = cards.filter((c) => {
+    if (marketFilter !== 'all' && marketCategory(c.stock_code) !== marketFilter) return false;
+    if (capFilter !== 'all' && capCategory(c.market_cap) !== capFilter) return false;
+    return true;
+  });
 
   return (
     <div>
-      {/* Not yet generated: show generate button */}
-      {!hasCached && !generating && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-          <button
-            onClick={generate}
+      <div style={{ display: 'flex', gap: '20px', alignItems: 'center', marginBottom: '18px', flexWrap: 'wrap' }}>
+        <FilterPills
+          label="市场"
+          options={Object.entries(MARKET_LABELS) as [MarketFilter, string][]}
+          value={marketFilter}
+          onChange={setMarketFilter}
+        />
+        <FilterPills
+          label="市值"
+          options={Object.entries(CAP_LABELS) as [CapFilter, string][]}
+          value={capFilter}
+          onChange={setCapFilter}
+        />
+        <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+          {filtered.length} 只股票
+        </span>
+      </div>
+
+      {loading && (
+        <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>加载中...</div>
+      )}
+      {!loading && filtered.length === 0 && (
+        <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>暂无分析记录，搜索股票开始分析</div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
+        {filtered.map((card) => (
+          <div
+            key={card.stock_code}
+            onClick={() => onSelect({ stock_code: card.stock_code, stock_name: card.stock_name })}
             style={{
-              padding: '8px 24px', borderRadius: '6px', fontSize: '13px', fontWeight: 510,
-              background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer',
+              background: 'var(--bg-card)',
+              border: `1px solid var(--border-subtle)`,
+              borderLeft: `3px solid ${severityColor(card.max_severity)}`,
+              borderRadius: '8px', padding: '14px 16px',
+              cursor: 'pointer', transition: 'all 0.12s',
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-nav-hover)';
+              (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--accent)40';
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-card)';
+              (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border-subtle)';
             }}
           >
-            生成五截面分析报告
-          </button>
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            技术面 / 资金面 / 基本面 / 情绪面 / 资本周期
-          </span>
-        </div>
-      )}
-
-      {/* Generating */}
-      {generating && (
-        <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '13px', color: 'var(--accent)', fontWeight: 510 }}>正在生成五截面分析报告，请稍候...</span>
-        </div>
-      )}
-
-      {error && (
-        <div style={{ marginBottom: '12px', fontSize: '12px', color: '#e5534b', padding: '8px 12px', background: 'rgba(229,83,75,0.08)', borderRadius: '6px' }}>
-          {error}
-        </div>
-      )}
-
-      {/* Report ready: show link + iframe */}
-      {hasCached && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              生成日期: {reportDate}
-            </span>
-            <a
-              href={reportUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                padding: '3px 12px', fontSize: '12px', borderRadius: '5px', cursor: 'pointer',
-                background: 'var(--accent)', color: '#fff', border: 'none', textDecoration: 'none',
-              }}
-            >
-              在新标签页打开
-            </a>
-          </div>
-          <div style={{
-            background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px',
-            overflow: 'hidden',
-          }}>
-            <iframe
-              src={reportUrl}
-              title="五截面分析报告"
-              style={{
-                width: '100%', height: '80vh', border: 'none',
-                display: 'block',
-              }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Placeholder */}
-      {!hasCached && !generating && !error && (
-        <div style={{
-          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px',
-          padding: '60px 24px', textAlign: 'center',
-        }}>
-          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-            今日尚未生成五截面分析报告，点击上方按钮开始分析
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Technical tab
-// ---------------------------------------------------------------------------
-
-interface TechReport {
-  id: number; stock_code: string; stock_name: string; trade_date: string;
-  score: number; score_label: string; max_severity: string; summary: string;
-  signal_count: number; ma_pattern?: string; has_html?: boolean;
-  signals: { name: string; level: string; description: string }[];
-  indicators: Record<string, number | null>;
-}
-
-function TechReportList({ reports, latestDate }: { reports: TechReport[]; latestDate: string }) {
-  const [expandedId, setExpandedId] = useState<number | null>(null);
-
-  if (reports.length === 0) return null;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-      {reports.map((rep) => {
-        const isExpanded = expandedId === rep.id;
-        return (
-          <div key={rep.id} style={{
-            background: 'var(--bg-card)', borderRadius: '8px', overflow: 'hidden',
-            border: '1px solid var(--border-subtle)',
-            borderLeft: `3px solid ${severityColor(rep.max_severity)}`,
-          }}>
-            {/* Header row */}
-            <div
-              onClick={() => setExpandedId(isExpanded ? null : rep.id)}
-              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', cursor: 'pointer' }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-nav-hover)'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-primary)' }}>
-                  {rep.trade_date}
-                  {rep.trade_date === latestDate && (
-                    <span style={{ marginLeft: '6px', fontSize: '10px', color: 'var(--accent)' }}>最新</span>
-                  )}
-                </span>
-                <ScoreBadge score={rep.score} label={rep.score_label} />
-                {rep.ma_pattern && (
-                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', background: 'var(--bg-elevated)', padding: '1px 6px', borderRadius: '4px' }}>
-                    {rep.ma_pattern}
-                  </span>
-                )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+              <div>
+                <div style={{ fontSize: '14px', fontWeight: 590, color: 'var(--text-primary)' }}>{card.stock_name}</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{card.stock_code}</div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                {rep.has_html && (
-                  <a
-                    href={`${API_BASE}/api/analysis/report-html/${rep.id}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    style={{
-                      padding: '2px 10px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer',
-                      background: 'var(--accent)', color: '#fff',
-                      border: '1px solid var(--accent)',
-                      textDecoration: 'none', display: 'inline-block',
-                    }}
-                  >
-                    完整报告
-                  </a>
-                )}
-                <span style={{ fontSize: '11px', color: 'var(--accent)' }}>{isExpanded ? '收起' : '展开'}</span>
-              </div>
+              <ScoreBadge score={card.score} label={card.score_label} />
             </div>
-
-            {/* Summary */}
-            <div style={{ padding: '0 16px 10px', fontSize: '12px', color: 'var(--text-muted)' }}>{rep.summary}</div>
-
-            {/* Signal list */}
-            {isExpanded && rep.signals && rep.signals.length > 0 && (
-              <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                {rep.signals.map((sig, i) => (
-                  <div key={i} style={{
-                    display: 'flex', alignItems: 'center', gap: '8px',
-                    padding: '5px 8px', background: 'var(--bg-elevated)', borderRadius: '5px', fontSize: '12px',
-                  }}>
-                    <span style={{ padding: '1px 6px', borderRadius: '3px', fontSize: '11px', fontWeight: 600, color: severityColor(sig.level), background: `${severityColor(sig.level)}18` }}>{sig.level}</span>
-                    <span style={{ fontWeight: 510, color: 'var(--text-primary)', minWidth: '80px' }}>{sig.name}</span>
-                    <span style={{ color: 'var(--text-secondary)' }}>{sig.description}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Key indicators */}
-            {isExpanded && rep.indicators && Object.keys(rep.indicators).length > 0 && (
-              <div style={{ padding: '0 16px 16px' }}>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 510, marginBottom: '6px' }}>关键指标</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '6px' }}>
-                  {Object.entries(rep.indicators).slice(0, 16).map(([k, v]) => (
-                    <div key={k} style={{ background: 'var(--bg-elevated)', padding: '5px 8px', borderRadius: '5px' }}>
-                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>{k}</div>
-                      <div style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 510 }}>
-                        {v != null ? Number(v).toFixed(3) : '--'}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <span>
+                {card.market_cap != null ? `${card.market_cap.toFixed(0)}亿` : '-'}
+                {' · '}
+                {marketCategory(card.stock_code) === 'sh' ? '沪市' : '深市'}
+              </span>
+              <span>{card.latest_date}</span>
+            </div>
+            {card.summary && (
+              <div style={{
+                marginTop: '8px', fontSize: '12px', color: 'var(--text-muted)',
+                overflow: 'hidden', display: '-webkit-box',
+                WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+              }}>
+                {card.summary}
               </div>
             )}
           </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function TechnicalTab({ stock }: { stock: StockOption }) {
-  const [reports, setReports] = useState<TechReport[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [latestDate, setLatestDate] = useState('');
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    setReports([]); setError(''); setLoading(true);
-    Promise.all([
-      fetch(`${API_BASE}/api/analysis/reports/by-stock?code=${stock.stock_code}&days=3`).then((r) => r.json()),
-      fetch(`${API_BASE}/api/market/latest-date`).then((r) => r.json()),
-    ]).then(([reps, ld]) => {
-      setReports(Array.isArray(reps) ? reps : []);
-      setLatestDate(ld.latest_date || '');
-    }).catch(() => setError('加载失败')).finally(() => setLoading(false));
-  }, [stock.stock_code]);
-
-  const hasLatest = reports.some((r) => r.trade_date === latestDate);
-
-  async function generate() {
-    setGenerating(true); setError('');
-    try {
-      const res = await fetch(`${API_BASE}/api/analysis/reports/generate`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stock_code: stock.stock_code, stock_name: stock.stock_name || '' }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.detail || '生成失败'); return; }
-      setReports((p) => [data.report, ...p.filter((r) => r.trade_date !== data.report.trade_date)]);
-    } catch (e) { setError(String(e)); }
-    finally { setGenerating(false); }
-  }
-
-  if (loading) return <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '30px 0' }}>加载中...</div>;
-
-  return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-        {latestDate && !hasLatest && (
-          <button onClick={generate} disabled={generating} style={{
-            padding: '6px 16px', fontSize: '12px', fontWeight: 510, borderRadius: '6px', border: 'none',
-            background: generating ? 'transparent' : 'var(--accent)',
-            color: generating ? 'var(--text-muted)' : '#fff',
-            cursor: generating ? 'not-allowed' : 'pointer',
-          }}>
-            {generating ? '生成中...' : `生成 ${latestDate} 报告`}
-          </button>
-        )}
-        {error && <span style={{ fontSize: '12px', color: '#e5534b' }}>{error}</span>}
-      </div>
-
-      {reports.length === 0 && !generating && (
-        <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '20px 0' }}>
-          近3天暂无报告{latestDate && !hasLatest ? '，点击上方按钮生成' : ''}
-        </div>
-      )}
-
-      <TechReportList reports={reports} latestDate={latestDate} />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Fundamental tab (five-step fundamental report, mirrors ComprehensiveTab)
-// ---------------------------------------------------------------------------
-
-function FundamentalTab({ stock }: { stock: StockOption }) {
-  const [steps, setSteps] = useState<StepItem[]>([]);
-  const [generating, setGenerating] = useState(false);
-  const [reportContent, setReportContent] = useState('');
-  const [reportDate, setReportDate] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
-
-  // Check DB cache on mount / stock change
-  useEffect(() => {
-    setReportContent(''); setReportDate(''); setError(''); setSteps([]);
-    setLoading(true);
-    fetch(`${API_BASE}/api/analysis/comprehensive/today?code=${stock.stock_code}&report_type=fundamental`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.exists && d.report) {
-          setReportContent(d.report.content || '');
-          setReportDate(d.report.report_date || '');
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [stock.stock_code]);
-
-  async function generate() {
-    if (generating) return;
-    setError(''); setSteps([]);
-    setGenerating(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/analysis/comprehensive/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stock_code: stock.stock_code,
-          stock_name: stock.stock_name || stock.stock_code,
-          report_type: 'fundamental',
-        }),
-      });
-      if (!res.ok || !res.body) { setError(`请求失败: ${res.status}`); setGenerating(false); return; }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const ev = JSON.parse(line.slice(6));
-            if (ev.type === 'cached') {
-              setReportContent(ev.report?.content || '');
-              setReportDate(ev.report?.report_date || '');
-            } else if (ev.type === 'plan') {
-              setSteps((ev.sections as string[]).map((name: string, i: number) => ({ step: `s${i}`, name, status: 'pending' })));
-            } else if (ev.type === 'step_start') {
-              setSteps((p) => p.map((s) => s.name === ev.name ? { ...s, status: 'running' } : s));
-            } else if (ev.type === 'step_done') {
-              setSteps((p) => p.map((s) => s.name === ev.name ? { ...s, status: 'done' } : s));
-            } else if (ev.type === 'done') {
-              setReportContent(ev.content || '');
-              setReportDate(new Date().toISOString().slice(0, 10));
-            } else if (ev.type === 'error') {
-              setError(ev.message || '生成失败');
-            }
-          } catch { /* skip */ }
-        }
-      }
-    } catch (e) { setError(String(e)); }
-    finally { setGenerating(false); }
-  }
-
-  const hasCached = !!reportContent && !generating;
-
-  if (loading) {
-    return <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '40px 0', textAlign: 'center' }}>加载中...</div>;
-  }
-
-  return (
-    <div>
-      {/* Not yet generated: show generate button */}
-      {!hasCached && !generating && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-          <button
-            onClick={generate}
-            style={{
-              padding: '8px 24px', borderRadius: '6px', fontSize: '13px', fontWeight: 510,
-              background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer',
-            }}
-          >
-            生成基本面研报
-          </button>
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            五步法深度分析: 财报发现 / 驱动逻辑 / 估值偏差 / 催化剂 / 风险建议
-          </span>
-        </div>
-      )}
-
-      {/* Generating: show step progress */}
-      {generating && (
-        <div style={{ marginBottom: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-            <span style={{ fontSize: '13px', color: 'var(--accent)', fontWeight: 510 }}>正在生成...</span>
-          </div>
-          {steps.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-              {steps.map((s) => (
-                <span key={s.step} style={{
-                  fontSize: '11px', padding: '3px 10px', borderRadius: '10px',
-                  color: s.status === 'done' ? '#27a644' : s.status === 'running' ? 'var(--accent)' : 'var(--text-muted)',
-                  background: s.status === 'done' ? 'rgba(39,166,68,0.1)' : s.status === 'running' ? 'rgba(113,112,255,0.1)' : 'var(--bg-elevated)',
-                  border: `1px solid ${s.status === 'done' ? 'rgba(39,166,68,0.3)' : s.status === 'running' ? 'rgba(113,112,255,0.3)' : 'var(--border-subtle)'}`,
-                  fontWeight: s.status === 'running' ? 510 : 400,
-                }}>
-                  {s.status === 'done' ? 'v ' : s.status === 'running' ? '... ' : ''}{s.name}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {error && (
-        <div style={{ marginBottom: '12px', fontSize: '12px', color: '#e5534b', padding: '8px 12px', background: 'rgba(229,83,75,0.08)', borderRadius: '6px' }}>
-          {error}
-        </div>
-      )}
-
-      {/* Report content */}
-      {hasCached && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              生成日期: {reportDate}
-            </span>
-            <button
-              onClick={() => {
-                const b = new Blob([reportContent], { type: 'text/markdown' });
-                const u = URL.createObjectURL(b);
-                const a = document.createElement('a');
-                a.href = u; a.download = `${stock.stock_code}_fundamental_${reportDate}.md`; a.click();
-                URL.revokeObjectURL(u);
-              }}
-              style={{ fontSize: '12px', color: 'var(--accent)', background: 'none', border: '1px solid var(--accent)', borderRadius: '5px', padding: '3px 10px', cursor: 'pointer' }}
-            >
-              下载 .md
-            </button>
-          </div>
-          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '24px' }}>
-            <ReportViewer markdown={reportContent} />
-          </div>
-        </div>
-      )}
-
-      {/* Placeholder when not generated and not generating */}
-      {!hasCached && !generating && !error && (
-        <div style={{
-          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px',
-          padding: '60px 24px', textAlign: 'center',
-        }}>
-          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-            今日尚未生成基本面研报，点击上方按钮开始分析
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// News tab (placeholder)
-// ---------------------------------------------------------------------------
-
-function NewsTab({ stock }: { stock: StockOption }) {
-  return (
-    <div style={{
-      background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
-      borderRadius: '8px', padding: '40px 24px', textAlign: 'center',
-    }}>
-      <div style={{ fontSize: '14px', fontWeight: 510, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-        {stock.stock_name} 个股动态
-      </div>
-      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-        公司公告、重大事件抓取即将上线
+        ))}
       </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// One-pager tab
-// ---------------------------------------------------------------------------
-
-function OnePagerTab({ stock }: { stock: StockOption }) {
-  const [cachedReport, setCachedReport] = useState<RagReport | null>(null);
-  const [checkDone, setCheckDone] = useState(false);
-  const [streaming, setStreaming] = useState(false);
-  const [steps, setSteps] = useState<SseStep[]>([]);
-  const [finalContent, setFinalContent] = useState<string>('');
-  const [error, setError] = useState<string>('');
-  const [history, setHistory] = useState<OnePagerHistory[]>([]);
-  const [viewingHistoryId, setViewingHistoryId] = useState<number | null>(null);
-  const [historyContent, setHistoryContent] = useState<string>('');
-  const [loadingHistory, setLoadingHistory] = useState(false);
-
-  useEffect(() => {
-    setCachedReport(null); setCheckDone(false); setSteps([]);
-    setFinalContent(''); setError(''); setStreaming(false);
-    setHistory([]); setViewingHistoryId(null); setHistoryContent('');
-
-    Promise.all([
-      fetch(`${API_BASE}/api/analysis/one-pager/today?code=${stock.stock_code}`)
-        .then((r) => r.json())
-        .then((d) => {
-          if (d.exists && d.report) {
-            setCachedReport(d.report);
-            setFinalContent(d.report.content || '');
-          }
-        })
-        .catch(() => {}),
-      fetch(`${API_BASE}/api/analysis/one-pager/history?code=${stock.stock_code}&limit=10`)
-        .then((r) => r.json())
-        .then((d) => setHistory(d || []))
-        .catch(() => {}),
-    ]).finally(() => setCheckDone(true));
-  }, [stock.stock_code]);
-
-  function loadHistoryReport(id: number) {
-    setViewingHistoryId(id); setLoadingHistory(true);
-    fetch(`${API_BASE}/api/analysis/rag-report/${id}`)
-      .then((r) => r.json())
-      .then((d) => { setHistoryContent(d?.content || ''); setLoadingHistory(false); })
-      .catch(() => { setLoadingHistory(false); setHistoryContent('[加载失败]'); });
-  }
-
-  function startGenerate() {
-    setError(''); setSteps([]); setFinalContent(''); setStreaming(true);
-    setViewingHistoryId(null); setHistoryContent('');
-
-    fetch(`${API_BASE}/api/analysis/one-pager/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stock_code: stock.stock_code, stock_name: stock.stock_name }),
-    }).then(async (res) => {
-      if (!res.ok || !res.body) { setError('请求失败'); setStreaming(false); return; }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const msg = JSON.parse(line.slice(6));
-            if (msg.type === 'cached') {
-              setCachedReport(msg.report); setFinalContent(msg.report?.content || ''); setStreaming(false);
-            } else if (msg.type === 'plan') {
-              setSteps((msg.sections as string[]).map((name: string, i: number) => ({ step: `part${i + 1}`, name, done: false })));
-            } else if (msg.type === 'step_start') {
-              setSteps((prev) => prev.map((s) => s.name === msg.name ? { ...s, done: false } : s));
-            } else if (msg.type === 'step_done') {
-              setSteps((prev) => prev.map((s) => s.name === msg.name ? { ...s, content: msg.content, done: true } : s));
-            } else if (msg.type === 'done') {
-              setFinalContent(msg.content || ''); setStreaming(false);
-              fetch(`${API_BASE}/api/analysis/one-pager/history?code=${stock.stock_code}&limit=10`)
-                .then((r) => r.json()).then((d) => setHistory(d || [])).catch(() => {});
-            } else if (msg.type === 'error') {
-              setError(msg.message || '生成失败'); setStreaming(false);
-            }
-          } catch { /* skip */ }
-        }
-      }
-      setStreaming(false);
-    }).catch((e) => { setError(String(e)); setStreaming(false); });
-  }
-
-  if (!checkDone) {
-    return <div style={{ padding: '40px 0', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>检查缓存...</div>;
-  }
-
-  const displayContent = viewingHistoryId ? historyContent : finalContent;
-  const isMarkdown = !viewingHistoryId || !displayContent.startsWith('<');
-
-  return (
-    <div style={{ marginTop: '8px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
-        <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-          {cachedReport ? `今日报告已生成` : '今日尚未生成一页纸研究'}
-        </div>
-        {!streaming && (
-          <button onClick={startGenerate} style={{
-            padding: '5px 14px', fontSize: '12px', fontWeight: 510,
-            background: 'var(--accent)', color: '#fff',
-            border: 'none', borderRadius: '6px', cursor: 'pointer',
-          }}>
-            {cachedReport ? '重新生成' : '生成一页纸研究'}
-          </button>
-        )}
-        {streaming && (
-          <span style={{ fontSize: '12px', color: 'var(--accent)', animation: 'pulse 1.5s infinite' }}>生成中...</span>
-        )}
-      </div>
-
-      {error && (
-        <div style={{ padding: '8px 12px', background: 'rgba(229,83,75,0.08)', border: '1px solid rgba(229,83,75,0.25)', borderRadius: '6px', fontSize: '12px', color: '#e5534b', marginBottom: '12px' }}>
-          {error}
-        </div>
-      )}
-
-      {streaming && steps.length > 0 && (
-        <div style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          {steps.map((s) => (
-            <div key={s.name} style={{
-              display: 'flex', alignItems: 'center', gap: '8px',
-              padding: '7px 12px', borderRadius: '6px',
-              background: s.done ? 'rgba(39,166,68,0.06)' : 'var(--bg-card)',
-              border: `1px solid ${s.done ? 'rgba(39,166,68,0.2)' : 'var(--border-subtle)'}`,
-              fontSize: '12px',
-            }}>
-              <span style={{ color: s.done ? '#27a644' : 'var(--text-muted)', fontSize: '13px' }}>{s.done ? '[OK]' : '[ ]'}</span>
-              <span style={{ color: s.done ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: s.done ? 510 : 400 }}>{s.name}</span>
-              {s.done && s.content && (
-                <span style={{ color: 'var(--text-muted)', fontSize: '11px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {s.content.slice(0, 80)}...
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {history.length > 0 && !streaming && (
-        <div style={{ marginBottom: '16px' }}>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 510, marginBottom: '8px' }}>历史报告</div>
-          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-            {history.map((h) => (
-              <button key={h.id}
-                onClick={() => {
-                  if (viewingHistoryId === h.id) { setViewingHistoryId(null); setHistoryContent(''); }
-                  else if (cachedReport && h.id === cachedReport.id) { setViewingHistoryId(null); setHistoryContent(''); }
-                  else { loadHistoryReport(h.id); }
-                }}
-                style={{
-                  padding: '4px 10px', fontSize: '11px', borderRadius: '4px',
-                  border: `1px solid ${viewingHistoryId === h.id ? 'var(--accent)' : 'var(--border-subtle)'}`,
-                  background: viewingHistoryId === h.id ? 'rgba(59,130,246,0.1)' : 'var(--bg-card)',
-                  color: viewingHistoryId === h.id ? 'var(--accent)' : 'var(--text-secondary)',
-                  cursor: 'pointer',
-                }}
-              >
-                {h.report_date}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {loadingHistory && (
-        <div style={{ padding: '20px 0', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>加载历史报告...</div>
-      )}
-
-      {displayContent && !streaming && !loadingHistory && (
-        <div style={{
-          padding: '20px 24px', background: 'var(--bg-card)',
-          border: '1px solid var(--border-subtle)', borderRadius: '8px',
-          lineHeight: '1.7', maxHeight: '70vh', overflowY: 'auto',
-        }} dangerouslySetInnerHTML={{ __html: isMarkdown ? renderMarkdown(displayContent) : displayContent }} />
-      )}
-
-      {!displayContent && !streaming && !error && !loadingHistory && (
-        <div style={{ padding: '40px 0', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>
-          点击"生成一页纸研究"开始深度分析
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Stock detail view (after selecting a stock)
+// Stock detail view
 // ---------------------------------------------------------------------------
 
 function StockDetail({
@@ -1116,7 +890,6 @@ function StockDetail({
 }) {
   return (
     <div>
-      {/* Stock header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
         <button
           onClick={onBack}
@@ -1138,7 +911,6 @@ function StockDetail({
         </div>
       </div>
 
-      {/* Tab bar */}
       <div style={{
         display: 'flex', gap: '0', background: 'var(--bg-card)',
         border: '1px solid var(--border-subtle)', borderRadius: '8px',
@@ -1162,13 +934,38 @@ function StockDetail({
         ))}
       </div>
 
-      {/* Tab content */}
       <div key={stock.stock_code}>
-        {activeTab === 'one-pager'     && <OnePagerTab      stock={stock} />}
-        {activeTab === 'comprehensive' && <ComprehensiveTab stock={stock} />}
-        {activeTab === 'technical'     && <TechnicalTab     stock={stock} />}
-        {activeTab === 'fundamental'   && <FundamentalTab   stock={stock} />}
-        {activeTab === 'news'          && <NewsTab           stock={stock} />}
+        {activeTab === 'one-pager' && (
+          <MarkdownReportTab
+            stock={stock}
+            reportType="one_pager"
+            submitLabel="生成一页纸研究"
+            resubmitLabel="重新生成"
+            placeholder="点击生成一页纸研究开始深度分析"
+            showHistory
+          />
+        )}
+        {activeTab === 'comprehensive' && (
+          <HtmlReportTab
+            stock={stock}
+            reportType="five_section"
+            submitLabel="生成五截面分析报告"
+            resubmitLabel="重新生成"
+            placeholder="今日尚未生成五截面分析报告，点击上方按钮开始"
+            iframeTitle="五截面分析报告"
+          />
+        )}
+        {activeTab === 'technical' && <TechnicalTab stock={stock} />}
+        {activeTab === 'fundamental' && (
+          <MarkdownReportTab
+            stock={stock}
+            reportType="fundamental"
+            submitLabel="生成基本面研报"
+            resubmitLabel="重新生成"
+            placeholder="今日尚未生成基本面研报，点击上方按钮开始分析"
+          />
+        )}
+        {activeTab === 'news' && <NewsTab stock={stock} />}
       </div>
     </div>
   );
@@ -1193,7 +990,6 @@ export default function StockPage() {
 
   return (
     <AppShell>
-      {/* Page header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px', flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: '20px', fontWeight: 590, color: 'var(--text-primary)', letterSpacing: '-0.3px', margin: 0 }}>
           {selectedStock ? '个股分析' : '个股'}
