@@ -285,10 +285,57 @@ exec: "uvicorn": executable file not found in PATH
 | financial_dividend | 0 | - | ❌ 空表 |
 
 **待办事项：**
-- [ ] 下载财务数据（一页纸研报需要）
-- [ ] 更新 daily_basic 数据
-- [ ] 更新 RPS 数据
-- [ ] 更新 extended_factor 数据
+- [x] 下载财务数据（一页纸研报需要）
+- [x] 更新 daily_basic 数据
+- [x] 更新 RPS 数据
+- [x] 更新 extended_factor 数据
+
+---
+
+## 2026-04-14 数据完备度页面 + 因子补算 + OOM 修复
+
+### 今日工作内容
+
+#### 1. 数据完备度检查页面 `/data-health`
+
+新增数据完备度可视化页面，展示各数据维度的最新更新时间、距今天数和记录数。
+
+**后端 (`GET /api/admin/data-health`)：**
+- 查询 16 个数据维度，按分组展示（行情/因子/财务/资金/情绪/宏观/策略）
+- 不暴露表名，使用友好描述
+- 状态判断：正常(绿点)/偏旧(黄点)/异常(红点)
+- 无需登录即可访问（方便快速检查）
+
+**前端 (`/data-health`)：**
+- 紧凑表格布局，分组标题行
+- 状态圆点 + 等宽字体日期 + 距今标签
+- 每2分钟自动刷新
+
+#### 2. 数据补算
+
+发现多个数据表严重滞后，逐一补算：
+
+| 数据 | 补算前 | 补算后 | 方式 |
+|------|--------|--------|------|
+| A股每日指标 | 4月10日 (1586只) | 4月13日 (5199只) | AKShare `daily_basic_history_fetcher` |
+| 基础量价因子 | 3月22日 | 4月13日 (5171只) | `basic_factor_calculator --backfill` |
+| 扩展因子 | 3月23日 | 4月13日 (4707只) | `extended_factor_calculator --start` |
+
+#### 3. 因子回填 OOM 修复
+
+**问题：** `basic_factor_calculator.backfill_factors()` 一次性加载全量K线数据（5000只 x 3年），导致 ECS 3.6G RAM + 4G Swap OOM 崩溃。
+
+**修复：** 改为分批模式，每批500只股票，加载该批数据 -> 计算因子 -> 保存 -> 释放内存 -> 下一批。内存峰值从 4GB+ 降至约 200MB。
+
+同步为 `extended_factor_calculator` 添加 `--start`/`--end` 命令行参数，支持指定回填范围。
+
+#### 4. 各数据维度使用情况梳理
+
+| 数据 | 使用方 |
+|------|--------|
+| 基础量价因子 | strategist 本地回测（doctor_tao/multi_factor），API 未直接使用 |
+| 扩展因子 | `analysis_service` 个股基本面分析、`theme_pool_score` 主题评分（ROE/利润增长） |
+| A股每日指标 | doctor_tao/multi_factor/microcap 策略（市值过滤/PE筛选）、research_pipeline |
 
 ---
 
