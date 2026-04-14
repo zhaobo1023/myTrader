@@ -271,7 +271,7 @@ class OnePagerDataCollector:
     def _collect_valuation(self, bare: str, full: str) -> str:
         # Latest valuation
         latest = self._q(
-            "SELECT trade_date, pe_ttm, pb, ps_ttm, dv_ttm, total_mv, circ_mv "
+            "SELECT trade_date, pe_ttm, pb, ps_ttm, total_mv, circ_mv "
             "FROM trade_stock_daily_basic WHERE stock_code LIKE %s "
             "ORDER BY trade_date DESC LIMIT 1",
             (bare + "%",),
@@ -283,7 +283,7 @@ class OnePagerDataCollector:
         pe = _sf(v["pe_ttm"])
         pb = _sf(v["pb"])
         ps = _sf(v["ps_ttm"])
-        dv = _sf(v["dv_ttm"])
+        dv = None
         mv = _sf(v["total_mv"])
 
         # Latest close price
@@ -890,7 +890,7 @@ class OnePagerDataCollector:
     def _compute_valuation_verdict(self, bare: str, full: str) -> str:
         # Latest valuation
         v = self._q(
-            "SELECT pe_ttm, pb, ps_ttm, dv_ttm, total_mv FROM trade_stock_daily_basic "
+            "SELECT pe_ttm, pb, ps_ttm, total_mv FROM trade_stock_daily_basic "
             "WHERE stock_code LIKE %s ORDER BY trade_date DESC LIMIT 1",
             (bare + "%",),
         )
