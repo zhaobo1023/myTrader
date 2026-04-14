@@ -48,7 +48,7 @@ except ImportError:
 # ============================================================
 # 配置
 # ============================================================
-MACRO_DATA_START = '20200101'  # 默认起始日期
+MACRO_DATA_START = '20240101'  # 默认起始日期
 
 
 # ============================================================
@@ -324,7 +324,10 @@ def fetch_north_flow(start_date: str) -> pd.DataFrame:
 
 def fetch_index_daily(symbol: str, start_date: str) -> pd.DataFrame:
     """
-    通用指数日线数据拉取，使用 ak.index_zh_a_hist
+    通用指数日线数据拉取
+
+    优先使用 ak.index_zh_a_hist，失败时回退到 ak.stock_zh_index_daily_em，
+    再回退到 ak.stock_zh_index_daily。
 
     Args:
         symbol: 指数代码，如 '000985'
@@ -336,22 +339,57 @@ def fetch_index_daily(symbol: str, start_date: str) -> pd.DataFrame:
     if not HAS_AKSHARE:
         raise RuntimeError("AKShare 未安装")
 
-    # 统一转换为 YYYYMMDD
     start_date_no_dash = start_date.replace('-', '')
+    start_dt = pd.to_datetime(start_date_no_dash, format='%Y%m%d')
 
-    df = ak.index_zh_a_hist(
-        symbol=symbol,
-        period='daily',
-        start_date=start_date_no_dash,
-        end_date='99991231',
-    )
-    if df is None or df.empty:
-        return pd.DataFrame()
+    # --- 尝试方案 1: index_zh_a_hist (东财 web，部分云服务器被封) ---
+    try:
+        df = ak.index_zh_a_hist(
+            symbol=symbol,
+            period='daily',
+            start_date=start_date_no_dash,
+            end_date='99991231',
+        )
+        if df is not None and not df.empty:
+            df['日期'] = pd.to_datetime(df['日期'])
+            df = df[['日期', '收盘']].rename(columns={'日期': 'date', '收盘': 'value'})
+            return df
+    except Exception:
+        pass
 
-    df['日期'] = pd.to_datetime(df['日期'])
-    df = df[['日期', '收盘']].rename(columns={'日期': 'date', '收盘': 'value'})
+    # --- 尝试方案 2: stock_zh_index_daily_em (东财 app 接口，限制较松) ---
+    # 需要 sh/sz 前缀；上证指数用 sh，深证/中证用 sz，部分两边都有
+    _EXCHANGE_MAP = {
+        '000001': 'sh', '000300': 'sh', '000905': 'sh',
+    }
+    for prefix in [_EXCHANGE_MAP.get(symbol, 'sh'), 'sz']:
+        try:
+            em_sym = '{}{}'.format(prefix, symbol)
+            df = ak.stock_zh_index_daily_em(symbol=em_sym)
+            if df is not None and not df.empty:
+                df['date'] = pd.to_datetime(df['date'])
+                # 列名: date, open, high, low, close, volume
+                df = df[['date', 'close']].rename(columns={'close': 'value'})
+                df = df[df['date'] >= start_dt]
+                return df
+        except Exception:
+            continue
 
-    return df
+    # --- 尝试方案 3: stock_zh_index_daily (新浪接口，数据可能不全) ---
+    for prefix in [_EXCHANGE_MAP.get(symbol, 'sh'), 'sz']:
+        try:
+            sina_sym = '{}{}'.format(prefix, symbol)
+            df = ak.stock_zh_index_daily(symbol=sina_sym)
+            if df is not None and not df.empty:
+                df['date'] = pd.to_datetime(df['date'])
+                df = df[['date', 'close']].rename(columns={'close': 'value'})
+                df = df[df['date'] >= start_dt]
+                if not df.empty:
+                    return df
+        except Exception:
+            continue
+
+    return pd.DataFrame()
 
 
 def _make_index_fetcher(symbol: str):
