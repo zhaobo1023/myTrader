@@ -24,6 +24,20 @@ interface StockCard {
   summary: string;
   market_cap: number | null;
   circ_market_cap: number | null;
+  industry: string;
+  sw_level1: string;
+  sw_level2: string;
+}
+
+interface IndustryChild {
+  name: string;
+  count: number;
+}
+
+interface IndustryNode {
+  name: string;
+  count: number;
+  children: IndustryChild[];
 }
 
 // Task status from /api/analysis/report/status or /report/latest
@@ -59,11 +73,9 @@ const TAB_REPORT_TYPE: Record<StockTab, string> = {
   'news':          '',
 };
 
-type MarketFilter = 'all' | 'sh' | 'sz';
-type CapFilter    = 'all' | 'large' | 'mid' | 'small';
+type CapFilter = 'all' | 'large' | 'mid' | 'small';
 
-const MARKET_LABELS: Record<MarketFilter, string> = { all: '全部', sh: '沪市', sz: '深市' };
-const CAP_LABELS:    Record<CapFilter, string>    = { all: '全部市值', large: '大盘(>=500亿)', mid: '中盘(100-500亿)', small: '小盘(<100亿)' };
+const CAP_LABELS: Record<CapFilter, string> = { all: '全部市值', large: '大盘(>=500亿)', mid: '中盘(100-500亿)', small: '小盘(<100亿)' };
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -101,10 +113,10 @@ function capCategory(market_cap: number | null): CapFilter {
   return 'small';
 }
 
-function marketCategory(code: string): MarketFilter {
-  if (code.endsWith('.SH')) return 'sh';
-  if (code.endsWith('.SZ')) return 'sz';
-  return 'all';
+function marketLabel(code: string): string {
+  if (code.endsWith('.SH')) return '沪市';
+  if (code.endsWith('.SZ')) return '深市';
+  return '';
 }
 
 async function mdToHtml(md: string): Promise<string> {
@@ -777,51 +789,184 @@ function FilterPills<T extends string>({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Industry filter: level1 pills + level2 pills (linked)
+// ---------------------------------------------------------------------------
+
+const PILL_STYLE = (active: boolean): React.CSSProperties => ({
+  padding: '3px 10px', borderRadius: '20px', fontSize: '12px', cursor: 'pointer',
+  border: `1px solid ${active ? 'var(--accent)' : 'var(--border-subtle)'}`,
+  background: active ? 'rgba(113,112,255,0.1)' : 'transparent',
+  color: active ? 'var(--accent)' : 'var(--text-secondary)',
+  fontWeight: active ? 510 : 400,
+  transition: 'all 0.1s',
+  whiteSpace: 'nowrap' as const,
+});
+
+function IndustryFilterPanel({
+  tree,
+  selectedL1,
+  selectedL2,
+  onSelectL1,
+  onSelectL2,
+}: {
+  tree: IndustryNode[];
+  selectedL1: string;
+  selectedL2: string;
+  onSelectL1: (v: string) => void;
+  onSelectL2: (v: string) => void;
+}) {
+  const activeNode = tree.find((n) => n.name === selectedL1);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      {/* Level 1 row */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: '12px', color: 'var(--text-muted)', flexShrink: 0, paddingTop: '3px', width: '28px' }}>
+          一级
+        </span>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+          <button style={PILL_STYLE(selectedL1 === '')} onClick={() => { onSelectL1(''); onSelectL2(''); }}>
+            全部
+          </button>
+          {tree.map((node) => (
+            <button
+              key={node.name}
+              style={PILL_STYLE(selectedL1 === node.name)}
+              onClick={() => {
+                if (selectedL1 === node.name) { onSelectL1(''); onSelectL2(''); }
+                else { onSelectL1(node.name); onSelectL2(''); }
+              }}
+            >
+              {node.name}
+              <span style={{ marginLeft: '4px', fontSize: '11px', opacity: 0.55 }}>{node.count}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Level 2 row — only shown when a L1 is selected and has children */}
+      {activeNode && activeNode.children.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '12px', color: 'var(--text-muted)', flexShrink: 0, paddingTop: '3px', width: '28px' }}>
+            二级
+          </span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+            <button style={PILL_STYLE(selectedL2 === '')} onClick={() => onSelectL2('')}>
+              全部
+            </button>
+            {activeNode.children.map((child) => (
+              <button
+                key={child.name}
+                style={PILL_STYLE(selectedL2 === child.name)}
+                onClick={() => onSelectL2(selectedL2 === child.name ? '' : child.name)}
+              >
+                {child.name}
+                <span style={{ marginLeft: '4px', fontSize: '11px', opacity: 0.55 }}>{child.count}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StockCardGrid({ onSelect }: { onSelect: (s: StockOption) => void }) {
   const [cards, setCards] = useState<StockCard[]>([]);
+  const [tree, setTree] = useState<IndustryNode[]>([]);
   const [loading, setLoading] = useState(true);
-  const [marketFilter, setMarketFilter] = useState<MarketFilter>('all');
+  const [selectedL1, setSelectedL1] = useState('');
+  const [selectedL2, setSelectedL2] = useState('');
   const [capFilter, setCapFilter] = useState<CapFilter>('all');
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/analysis/analyzed-stocks`)
-      .then((r) => r.json())
-      .then((d) => setCards(d.data || []))
-      .catch(() => setCards([]))
+    Promise.all([
+      fetch(`${API_BASE}/api/analysis/analyzed-stocks`).then((r) => r.json()),
+      fetch(`${API_BASE}/api/analysis/industry-tree`).then((r) => r.json()),
+    ])
+      .then(([stocksData, indData]) => {
+        const stockList: StockCard[] = stocksData.data || [];
+        setCards(stockList);
+
+        // Build tree filtered to only show industries present in analyzed stocks
+        const l1Count: Record<string, number> = {};
+        const l2Count: Record<string, Record<string, number>> = {};
+        stockList.forEach((c) => {
+          const l1 = c.sw_level1 || c.industry;
+          const l2 = c.sw_level2;
+          if (l1) {
+            l1Count[l1] = (l1Count[l1] || 0) + 1;
+            if (l2) {
+              if (!l2Count[l1]) l2Count[l1] = {};
+              l2Count[l1][l2] = (l2Count[l1][l2] || 0) + 1;
+            }
+          }
+        });
+
+        // Merge with full tree for correct ordering (by full-market count)
+        const fullTree: IndustryNode[] = (indData.tree || []);
+        const filteredTree: IndustryNode[] = fullTree
+          .filter((n) => l1Count[n.name])
+          .map((n) => ({
+            ...n,
+            count: l1Count[n.name] || 0,
+            children: n.children
+              .filter((c) => l2Count[n.name]?.[c.name])
+              .map((c) => ({ ...c, count: l2Count[n.name]?.[c.name] || 0 }))
+              .sort((a, b) => b.count - a.count),
+          }))
+          .sort((a, b) => b.count - a.count);
+
+        setTree(filteredTree);
+      })
+      .catch(() => { setCards([]); setTree([]); })
       .finally(() => setLoading(false));
   }, []);
 
   const filtered = cards.filter((c) => {
-    if (marketFilter !== 'all' && marketCategory(c.stock_code) !== marketFilter) return false;
+    const l1 = c.sw_level1 || c.industry;
+    if (selectedL1 && l1 !== selectedL1) return false;
+    if (selectedL2 && c.sw_level2 !== selectedL2) return false;
     if (capFilter !== 'all' && capCategory(c.market_cap) !== capFilter) return false;
     return true;
   });
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: '20px', alignItems: 'center', marginBottom: '18px', flexWrap: 'wrap' }}>
-        <FilterPills
-          label="市场"
-          options={Object.entries(MARKET_LABELS) as [MarketFilter, string][]}
-          value={marketFilter}
-          onChange={setMarketFilter}
+      {/* Filters */}
+      <div style={{
+        background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+        borderRadius: '8px', padding: '12px 16px', marginBottom: '16px',
+        display: 'flex', flexDirection: 'column', gap: '10px',
+      }}>
+        <IndustryFilterPanel
+          tree={tree}
+          selectedL1={selectedL1}
+          selectedL2={selectedL2}
+          onSelectL1={setSelectedL1}
+          onSelectL2={setSelectedL2}
         />
-        <FilterPills
-          label="市值"
-          options={Object.entries(CAP_LABELS) as [CapFilter, string][]}
-          value={capFilter}
-          onChange={setCapFilter}
-        />
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-          {filtered.length} 只股票
-        </span>
+        <div style={{ display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--border-subtle)', paddingTop: '10px' }}>
+          <FilterPills
+            label="市值"
+            options={Object.entries(CAP_LABELS) as [CapFilter, string][]}
+            value={capFilter}
+            onChange={setCapFilter}
+          />
+          <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+            {filtered.length} / {cards.length} 只股票
+          </span>
+        </div>
       </div>
 
       {loading && (
         <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>加载中...</div>
       )}
       {!loading && filtered.length === 0 && (
-        <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>暂无分析记录，搜索股票开始分析</div>
+        <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+          {cards.length === 0 ? '暂无分析记录，搜索股票开始分析' : '当前筛选条件下无股票'}
+        </div>
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
@@ -854,9 +999,14 @@ function StockCardGrid({ onSelect }: { onSelect: (s: StockOption) => void }) {
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-muted)' }}>
               <span>
-                {card.market_cap != null ? `${card.market_cap.toFixed(0)}亿` : '-'}
-                {' · '}
-                {marketCategory(card.stock_code) === 'sh' ? '沪市' : '深市'}
+                {card.sw_level2 ? (
+                  <>{card.sw_level1 || card.industry}<span style={{ opacity: 0.5, margin: '0 3px' }}>›</span>{card.sw_level2}</>
+                ) : (card.sw_level1 || card.industry) ? (
+                  <>{card.sw_level1 || card.industry}</>
+                ) : null}
+                {card.market_cap != null && <span style={{ marginLeft: '6px' }}>{card.market_cap.toFixed(0)}亿</span>}
+                <span style={{ margin: '0 4px', opacity: 0.4 }}>·</span>
+                {marketLabel(card.stock_code)}
               </span>
               <span>{card.latest_date}</span>
             </div>

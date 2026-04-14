@@ -680,7 +680,8 @@ async def get_stock_recent_reports(stock_code: str, days: int = 3) -> list:
 async def list_analyzed_stocks() -> dict:
     """
     Return the latest tech report for each distinct stock, joined with the
-    most recent market cap from trade_stock_valuation_factor.
+    most recent market cap from trade_stock_valuation_factor and industry
+    from trade_stock_basic.
     Used for the stock card grid.
     """
     # Latest report per stock
@@ -717,6 +718,17 @@ async def list_analyzed_stocks() -> dict:
     cap_rows = list(execute_query(cap_sql, tuple(codes)))
     cap_map = {r['stock_code']: r for r in cap_rows}
 
+    # Industry from trade_stock_basic (strip .SH/.SZ suffix for lookup)
+    bare_codes = [c.split('.')[0] if '.' in c else c for c in codes]
+    bare_placeholders = ','.join(['%s'] * len(bare_codes))
+    ind_sql = f"""
+        SELECT stock_code, industry, sw_level1, sw_level2
+        FROM trade_stock_basic
+        WHERE stock_code IN ({bare_placeholders})
+    """
+    ind_rows = list(execute_query(ind_sql, tuple(bare_codes), env='online'))
+    ind_map = {r['stock_code']: r for r in ind_rows}
+
     def _fmt_date(v):
         if v is None:
             return ''
@@ -732,6 +744,8 @@ async def list_analyzed_stocks() -> dict:
         cmc_raw = cap.get('circ_market_cap')
         mc  = round(float(mc_raw)  / 1e8, 1) if mc_raw  else None
         cmc = round(float(cmc_raw) / 1e8, 1) if cmc_raw else None
+        bare = r['stock_code'].split('.')[0] if '.' in r['stock_code'] else r['stock_code']
+        ind_row = ind_map.get(bare, {})
         data.append({
             'stock_code':     r['stock_code'],
             'stock_name':     r['stock_name'],
@@ -742,9 +756,65 @@ async def list_analyzed_stocks() -> dict:
             'summary':        r['summary'] or '',
             'market_cap':     mc,
             'circ_market_cap': cmc,
+            'industry':       ind_row.get('industry', ''),
+            'sw_level1':      ind_row.get('sw_level1', '') or ind_row.get('industry', ''),
+            'sw_level2':      ind_row.get('sw_level2', ''),
         })
 
     return {'data': data}
+
+
+async def list_industry_tree() -> dict:
+    """
+    Return the SW industry hierarchy (level1 -> level2) with stock counts.
+    Structure:
+    {
+      "tree": [
+        {
+          "name": "电子",
+          "count": 477,
+          "children": [
+            {"name": "半导体", "count": 171},
+            ...
+          ]
+        },
+        ...
+      ]
+    }
+    Falls back to level1-only when sw_level2 data is sparse.
+    """
+    sql = """
+        SELECT industry, sw_level1, sw_level2, COUNT(*) as cnt
+        FROM trade_stock_basic
+        WHERE industry IS NOT NULL AND industry != ''
+        GROUP BY industry, sw_level1, sw_level2
+    """
+    rows = list(execute_query(sql, env='online'))
+
+    # Aggregate: level1 -> {level2 -> count}
+    l1_totals: dict = {}
+    l1_children: dict = {}
+
+    for r in rows:
+        l1 = r['sw_level1'] or r['industry']
+        l2 = r['sw_level2'] or ''
+        cnt = int(r['cnt'])
+
+        l1_totals[l1] = l1_totals.get(l1, 0) + cnt
+        if l2:
+            if l1 not in l1_children:
+                l1_children[l1] = {}
+            l1_children[l1][l2] = l1_children[l1].get(l2, 0) + cnt
+
+    tree = []
+    for l1, total in sorted(l1_totals.items(), key=lambda x: -x[1]):
+        children = []
+        if l1 in l1_children:
+            for l2, cnt in sorted(l1_children[l1].items(), key=lambda x: -x[1]):
+                children.append({'name': l2, 'count': cnt})
+        tree.append({'name': l1, 'count': total, 'children': children})
+
+    return {'tree': tree}
 
 
 async def get_tech_report_html(report_id: int) -> Optional[str]:

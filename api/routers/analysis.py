@@ -91,10 +91,16 @@ async def get_reports_by_stock(
 @router.get('/analyzed-stocks')
 async def list_analyzed_stocks():
     """
-    Return the most recent tech report per stock, joined with market cap.
+    Return the most recent tech report per stock, joined with market cap and industry.
     Used for the stock card grid on the home view.
     """
     return await analysis_service.list_analyzed_stocks()
+
+
+@router.get('/industry-tree')
+async def list_industry_tree():
+    """Return SW level-1 industry list with stock counts."""
+    return await analysis_service.list_industry_tree()
 
 
 @router.get('/reports/{code}/{trade_date}', response_model=TechReportDetail)
