@@ -129,21 +129,49 @@ class OnePagerAnalyzer:
     def _fetch_rag_context(
         self, stock_code: str, stock_name: str, collection: str
     ) -> str:
-        """Fetch RAG context from ChromaDB."""
+        """Fetch RAG context from ChromaDB.
+
+        Queries both the passed collection (e.g. 'reports') and
+        'annual_reports' (year report PDFs), merging results.
+        """
         tools = self._get_rag_tools()
         if tools is None:
             return "[无研报检索服务]"
+
+        parts = []
+        bare = stock_code.split(".")[0] if "." in stock_code else stock_code
+
+        # Query primary collection (sell-side reports / announcements)
         try:
-            return tools.query_rag_multi(
+            text = tools.query_rag_multi(
                 queries=ONE_PAGER_RAG_QUERIES,
                 stock_name=stock_name,
-                stock_code=stock_code,
+                stock_code=bare,
                 collection=collection,
                 top_k_per_query=3,
             )
+            if text and "no relevant content" not in text and "检索失败" not in text:
+                parts.append(f"[研报/公告]\n{text}")
         except Exception as e:
-            logger.warning("[OnePager] RAG fetch failed: %s", e)
-            return "[研报检索失败]"
+            logger.warning("[OnePager] RAG fetch (primary) failed: %s", e)
+
+        # Query annual_reports collection (PDF-extracted annual reports)
+        try:
+            annual_text = tools.query_rag_multi(
+                queries=ONE_PAGER_RAG_QUERIES,
+                stock_name=stock_name,
+                stock_code=bare,
+                collection="annual_reports",
+                top_k_per_query=3,
+            )
+            if annual_text and "no relevant content" not in annual_text and "检索失败" not in annual_text:
+                parts.append(f"[年度报告原文]\n{annual_text}")
+        except Exception as e:
+            logger.warning("[OnePager] RAG fetch (annual_reports) failed: %s", e)
+
+        if not parts:
+            return "[无研报及年报检索结果]"
+        return "\n\n".join(parts)
 
     def _build_prompt(
         self,

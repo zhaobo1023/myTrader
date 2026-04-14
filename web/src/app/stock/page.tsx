@@ -975,9 +975,24 @@ function StockDetail({
 // Page
 // ---------------------------------------------------------------------------
 
+function useTriggerAnnualReportIngest(stock: StockOption | null) {
+  useEffect(() => {
+    if (!stock) return;
+    const bare = stock.stock_code.includes('.') ? stock.stock_code.split('.')[0] : stock.stock_code;
+    // Fire-and-forget: silently trigger background ingest, don't block UI
+    fetch(`${API_BASE}/api/analysis/annual-report/ingest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stock_code: bare, stock_name: stock.stock_name || bare, years: 3 }),
+    }).catch(() => {/* ignore errors, this is best-effort */});
+  }, [stock?.stock_code]);
+}
+
 export default function StockPage() {
   const [selectedStock, setSelectedStock] = useState<StockOption | null>(null);
   const [activeTab, setActiveTab] = useState<StockTab>('one-pager');
+
+  useTriggerAnnualReportIngest(selectedStock);
 
   const handleSelect = useCallback((s: StockOption) => {
     setSelectedStock(s);

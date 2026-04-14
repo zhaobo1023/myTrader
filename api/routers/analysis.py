@@ -746,3 +746,69 @@ async def get_latest_report(
         'stock_code': code,
         'status': None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Annual Report Ingest Endpoints
+# ---------------------------------------------------------------------------
+
+class IngestTriggerRequest(BaseModel):
+    stock_code: str
+    stock_name: str
+    years: int = 3
+
+
+@router.post('/annual-report/ingest')
+async def trigger_annual_report_ingest(body: IngestTriggerRequest):
+    """
+    Trigger background ingestion of annual report PDFs into ChromaDB.
+    Idempotent: skips years already ingested.
+    Returns immediately; processing happens in Celery worker.
+    """
+    from api.tasks.ingest_tasks import ingest_annual_reports_task
+
+    bare = body.stock_code.split('.')[0] if '.' in body.stock_code else body.stock_code
+    task = ingest_annual_reports_task.delay(
+        stock_code=bare,
+        stock_name=body.stock_name,
+        years=body.years,
+    )
+    logger.info(
+        '[api] ingest_annual_reports triggered: stock=%s task_id=%s',
+        bare, task.id,
+    )
+    return {
+        'task_id': task.id,
+        'stock_code': bare,
+        'stock_name': body.stock_name,
+        'years': body.years,
+        'message': 'Annual report ingest started in background',
+    }
+
+
+@router.get('/annual-report/status')
+async def get_annual_report_ingest_status(code: str = Query(..., description='6-digit stock code')):
+    """Check how many annual report chunks are in ChromaDB for a stock."""
+    try:
+        from investment_rag.config import load_config
+        from investment_rag.store.chroma_client import ChromaClient
+
+        cfg = load_config()
+        client = ChromaClient(config=cfg)
+        col = client.get_collection('annual_reports')
+        results = col.get(
+            where={"stock_code": {"$eq": code}},
+            limit=1000,
+        )
+        ids = results.get('ids', [])
+        metadatas = results.get('metadatas', [])
+        years = sorted({m.get('report_year', '') for m in (metadatas or []) if m.get('report_year')}, reverse=True)
+        return {
+            'stock_code': code,
+            'total_chunks': len(ids),
+            'years_available': years,
+            'has_data': len(ids) > 0,
+        }
+    except Exception as e:
+        logger.error('[api] annual-report status error: %s', e)
+        return {'stock_code': code, 'total_chunks': 0, 'years_available': [], 'has_data': False}

@@ -13,6 +13,7 @@ from api.tasks import theme_pool_score
 from api.tasks import fear_index
 from api.tasks import daily_strategies
 from api.tasks import report_tasks
+from api.tasks import ingest_tasks
 
 __all__ = [
     'preset_strategies',
@@ -23,4 +24,5 @@ __all__ = [
     'fear_index',
     'daily_strategies',
     'report_tasks',
+    'ingest_tasks',
 ]
