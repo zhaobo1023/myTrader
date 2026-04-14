@@ -188,3 +188,108 @@ fcf9dba fix: macro_fetcher index fallback to stock_zh_index_daily_em
 ---
 
 *文档维护：每次开发后更新此文件，新日期追加在上方*
+
+---
+
+## 2026-04-14 策略系统重构与数据完备性监控
+
+### 今日工作内容
+
+#### 1. 预设策略从 Threading 迁移到 Celery
+
+**问题：** 之前使用 threading 执行策略任务，微盘股策略卡住（运行6小时+），无法监控和重试。
+
+**解决方案：**
+- 创建 `/root/app/api/tasks/celery_app.py` 配置 Celery Beat 定时任务
+- 修改 `/root/app/api/tasks/preset_strategies.py` 使用 Celery 任务
+- 添加 `_get_recent_occurrence_counts()` 统计5日出现次数
+
+**定时任务配置：**
+```python
+'watchlist-scan': '0 16:30 * * 1-5'      # 工作日 16:30 扫描自选股
+'preset-strategies': '0 19:30 * * 1-5'  # 工作日 19:30 运行预设策略
+'log-bias-daily': '0 16:00 * * 1-5'     # 工作日 16:00 对数乖离率
+```
+
+#### 2. 策略日期逻辑修复
+
+**问题：** 策略使用 `date.today()` 作为日期，导致盘后运行时日期不匹配。
+
+**解决：** 从数据库查询最新交易日期：
+```python
+trade_date_rows = execute_query(
+    "SELECT MAX(trade_date) AS max_date FROM trade_stock_daily WHERE ..."
+)
+trade_date_str = str(trade_date_rows[0]['max_date'])
+```
+
+#### 3. 动量反转策略5日出现次数统计
+
+**功能：** 显示每只股票在最近5日内的出现次数，便于识别频繁信号股票。
+
+**实现：**
+- 后端：`_get_recent_occurrence_counts(stock_codes, days=5)`
+- 前端：策略信号表格新增"5日出现"列
+- 颜色标识：≥3次红色，≥2次橙色
+- 已回填历史数据（04-12、04-13）
+
+#### 4. 数据完备性检查系统
+
+**问题：** 各数据表状态未知，缺少监控。
+
+**解决方案：**
+- 创建 `scheduler/check_data_completeness.py` 每日检查脚本
+- 新建 `trade_data_health` 表存储检查历史
+- API 端点：
+  - `GET /api/analysis/health-check/latest` - 最新检查结果
+  - `GET /api/analysis/health-check/summary` - 状态摘要
+  - `POST /api/analysis/health-check/run` - 手动触发检查
+
+**检查状态分类：**
+| 状态 | 含义 |
+|------|------|
+| ok | 数据正常 |
+| warning | 数据滞后1-3天 |
+| critical | 数据滞后>3天 |
+| empty | 空表 |
+
+#### 5. 前端修复
+
+**问题修复：**
+- 统一 API 环境变量：`NEXT_PUBLIC_API_URL` → `NEXT_PUBLIC_API_BASE_URL`
+- 修复搜索接口指向 localhost 的问题
+- 隐藏组合管理入口（暂时）
+
+#### 6. Docker 部署问题修复
+
+**问题1：** uvicorn 找不到
+```
+exec: "uvicorn": executable file not found in PATH
+```
+**原因：** `-v /root/app/.pip_cache:/root/.local` 覆盖了镜像中的依赖
+**解决：** 移除该卷挂载
+
+**问题2：** RAG_API_KEY 未配置
+**解决：** 配置 DashScope API Key 到环境变量
+
+#### 7. 数据完备性检查结果
+
+| 数据表 | 记录数 | 最新日期 | 状态 |
+|--------|--------|----------|------|
+| trade_stock_daily | 662万+ | 2026-04-13 | ✅ OK |
+| trade_stock_daily_basic | 567万+ | 2026-04-10 | ⚠️ 滞后3天 |
+| trade_stock_rps | 658万+ | 2026-03-31 | 🔴 滞后13天 |
+| trade_log_bias_daily | 3,180 | 2026-04-10 | ⚠️ 滞后3天 |
+| financial_income | 0 | - | ❌ 空表 |
+| financial_balance | 0 | - | ❌ 空表 |
+| financial_dividend | 0 | - | ❌ 空表 |
+
+**待办事项：**
+- [ ] 下载财务数据（一页纸研报需要）
+- [ ] 更新 daily_basic 数据
+- [ ] 更新 RPS 数据
+- [ ] 更新 extended_factor 数据
+
+---
+
+*文档维护：每次开发后更新此文件，新日期追加在上方*
