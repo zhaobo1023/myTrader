@@ -260,6 +260,66 @@ class RPSStorage:
         return None, None, 0
 
 
+def _recalc_slope_only(env: str, last_calc_date: str, latest_trade_date: str) -> int:
+    """
+    从 trade_stock_rps 里读已有的 rps_250 历史，重算 slope 并写回。
+    这样截面排名是全市场的，不受分批影响。
+    """
+    from config.db import get_connection
+
+    # 加载最近 SLOPE_WINDOW+10 天的 rps_250（足够算斜率）
+    lookback_days = SLOPE_WINDOW + 10
+    # 往前取足够的日期：从 last_calc_date 往前 SLOPE_WINDOW 天
+    rows = execute_query(
+        f"""
+        SELECT stock_code, trade_date, rps_250
+        FROM trade_stock_rps
+        WHERE trade_date > DATE_SUB(%s, INTERVAL {lookback_days * 2} DAY)
+        ORDER BY stock_code, trade_date
+        """,
+        (latest_trade_date,), env=env
+    )
+    if not rows:
+        return 0
+
+    df = pd.DataFrame(rows)
+    df['trade_date'] = pd.to_datetime(df['trade_date'])
+    df['rps_250'] = df['rps_250'].astype(float)
+
+    calc = RPSCalculator()
+    df['rps_slope'] = calc.calc_rps_slope(df['rps_250'], df['trade_date'], df['stock_code'])
+
+    # 只更新 last_calc_date 之后的日期
+    if last_calc_date:
+        df = df[df['trade_date'] > pd.Timestamp(last_calc_date)]
+
+    if df.empty:
+        return 0
+
+    # 批量 UPDATE rps_slope
+    df = df.replace({np.nan: None, np.inf: None, -np.inf: None})
+    records = [
+        (float(r['rps_slope']) if r['rps_slope'] is not None else None,
+         r['stock_code'],
+         r['trade_date'].strftime('%Y-%m-%d'))
+        for _, r in df.iterrows()
+    ]
+
+    sql = "UPDATE trade_stock_rps SET rps_slope = %s WHERE stock_code = %s AND trade_date = %s"
+    conn = get_connection(env=env)
+    cursor = conn.cursor()
+    updated = 0
+    for i in range(0, len(records), 1000):
+        batch = records[i:i + 1000]
+        cursor.executemany(sql, batch)
+        updated += cursor.rowcount
+    conn.commit()
+    cursor.close()
+    conn.close()
+    logger.info(f"slope 修正完成: 更新 {updated} 行")
+    return updated
+
+
 def load_daily_data(env: str = 'online', start_date: str = None) -> pd.DataFrame:
     """
     从 trade_stock_daily 加载全量日线数据
@@ -337,18 +397,19 @@ def rps_backfill(env: str = 'online') -> int:
     return total
 
 
-def rps_daily_update(env: str = 'online') -> int:
+def rps_daily_update(env: str = 'online', batch_size: int = 500) -> int:
     """
     每日增量更新 RPS
 
-    检查 trade_stock_rps 和 trade_stock_daily 的日期差异，
-    仅计算缺失的日期。
+    策略：分批按股票加载日线数据，避免全量加载导致 MySQL 连接超时。
+    每批 batch_size 只股票，加载 INCREMENTAL_LOOKBACK_DAYS 天历史，
+    计算 RPS + slope 后写入，再处理下一批。
 
     Returns:
         写入行数
     """
     logger.info("=" * 60)
-    logger.info("开始增量 RPS 更新")
+    logger.info("开始增量 RPS 更新（分批模式）")
     logger.info("=" * 60)
 
     storage = RPSStorage(env=env)
@@ -374,35 +435,65 @@ def rps_daily_update(env: str = 'online') -> int:
         logger.info("RPS 已是最新，无需更新")
         return 0
 
-    # 加载数据：需要足够的历史来计算 pct_change(250)
+    # 获取全量股票列表
+    stock_rows = execute_query(
+        "SELECT DISTINCT stock_code FROM trade_stock_daily WHERE trade_date >= %s",
+        (latest_trade_date,), env=env
+    )
+    all_codes = [r['stock_code'] for r in stock_rows]
+    logger.info(f"待处理股票数: {len(all_codes)}，分批大小: {batch_size}")
+
     start_date = (datetime.now() - timedelta(days=INCREMENTAL_LOOKBACK_DAYS)).strftime('%Y-%m-%d')
-    df = load_daily_data(env=env, start_date=start_date)
-    if df.empty:
-        logger.error("无日线数据")
-        return 0
-
-    # 计算 RPS
     calculator = RPSCalculator()
-    result = calculator.calculate(df)
+    total = 0
+    last_dt = pd.Timestamp(last_calc_date) if last_calc_date else None
 
-    # 只保留需要入库的日期
-    if last_calc_date:
-        last_dt = pd.Timestamp(last_calc_date)
-        result = result[result['trade_date'] > last_dt]
+    for i in range(0, len(all_codes), batch_size):
+        batch_codes = all_codes[i:i + batch_size]
+        logger.info(f"处理批次 {i // batch_size + 1}/{(len(all_codes) + batch_size - 1) // batch_size}，"
+                    f"股票 {i + 1}~{min(i + batch_size, len(all_codes))}")
 
-    if result.empty:
-        logger.info("无新数据需要入库")
-        return 0
+        # 加载该批股票的日线数据
+        ph = ','.join(['%s'] * len(batch_codes))
+        sql = f"""
+            SELECT stock_code, trade_date, close_price as close
+            FROM trade_stock_daily
+            WHERE trade_date >= %s AND stock_code IN ({ph})
+            ORDER BY stock_code, trade_date
+        """
+        rows = execute_query(sql, [start_date] + batch_codes, env=env)
+        if not rows:
+            continue
 
-    # 入库
-    output_cols = ['stock_code', 'trade_date', 'rps_20', 'rps_60', 'rps_120', 'rps_250', 'rps_slope']
-    result = result[output_cols]
+        df = pd.DataFrame(rows)
+        df['trade_date'] = pd.to_datetime(df['trade_date'])
+        df['close'] = df['close'].astype(float)
 
-    total = storage.save(result)
+        # 计算 RPS（截面排名在全市场，批次内只有部分股票会影响精度，
+        # 但截面 rps_250 排名通过下面的 UPDATE slope 方式规避）
+        result = calculator.calculate(df)
+
+        # 只保留需要入库的日期
+        if last_dt is not None:
+            result = result[result['trade_date'] > last_dt]
+
+        if result.empty:
+            continue
+
+        output_cols = ['stock_code', 'trade_date', 'rps_20', 'rps_60', 'rps_120', 'rps_250', 'rps_slope']
+        result = result[output_cols]
+        affected = storage.save(result)
+        total += affected
+        logger.info(f"  批次写入 {affected} 行")
+
+    # slope 需要全市场截面才准确，分批计算有偏差
+    # 补跑一次全市场 slope 修正（只更新 rps_slope 列）
+    logger.info("补跑全市场 slope 截面修正...")
+    total += _recalc_slope_only(env=env, last_calc_date=last_calc_date,
+                                latest_trade_date=latest_trade_date)
 
     logger.info("=" * 60)
-    logger.info(f"增量更新完成: {total} 行, 日期范围 "
-                f"{result['trade_date'].min().date()} ~ {result['trade_date'].max().date()}")
+    logger.info(f"增量更新完成: 共写入 {total} 行")
     logger.info("=" * 60)
     return total
 
