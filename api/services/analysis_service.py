@@ -715,7 +715,7 @@ async def list_analyzed_stocks() -> dict:
             GROUP BY stock_code
         ) latest ON v.stock_code = latest.stock_code AND v.calc_date = latest.max_date
     """
-    cap_rows = list(execute_query(cap_sql, tuple(codes)))
+    cap_rows = list(execute_query(cap_sql, tuple(codes), env='online'))
     cap_map = {r['stock_code']: r for r in cap_rows}
 
     # Industry from trade_stock_basic (strip .SH/.SZ suffix for lookup)
@@ -839,3 +839,191 @@ async def get_tech_report_detail(stock_code: str, trade_date_str: str) -> dict:
     if not rows:
         raise HTTPException(status_code=404, detail=f'Report not found for {code} on {trade_date_str}')
     return _row_to_detail(rows[0])
+
+
+# ---------------------------------------------------------------------------
+# 估值分位服务
+# ---------------------------------------------------------------------------
+
+async def get_industry_valuation_temperature(trade_date: str = None) -> dict:
+    """
+    获取申万一级行业估值温度（最新日或指定日）。
+    """
+    if trade_date:
+        date_filter = 'trade_date = %s'
+        params = (trade_date,)
+    else:
+        date_filter = 'trade_date = (SELECT MAX(trade_date) FROM sw_industry_valuation)'
+        params = ()
+
+    sql = f"""
+        SELECT trade_date, sw_name, pe_ttm, pe_ttm_eq, pe_ttm_med,
+               pb, pb_med, pe_pct_5y, pb_pct_5y, pe_pct_10y, pb_pct_10y,
+               valuation_score, valuation_label
+        FROM sw_industry_valuation
+        WHERE {date_filter}
+        ORDER BY valuation_score ASC
+    """
+    rows = list(execute_query(sql, params, env='online'))
+    if not rows:
+        return {'date': trade_date or '', 'items': []}
+
+    actual_date = str(rows[0]['trade_date']) if rows else ''
+    items = []
+    for r in rows:
+        items.append({
+            'name': r['sw_name'],
+            'pe_ttm': float(r['pe_ttm']) if r['pe_ttm'] is not None else None,
+            'pe_ttm_eq': float(r['pe_ttm_eq']) if r['pe_ttm_eq'] is not None else None,
+            'pe_ttm_med': float(r['pe_ttm_med']) if r['pe_ttm_med'] is not None else None,
+            'pb': float(r['pb']) if r['pb'] is not None else None,
+            'pb_med': float(r['pb_med']) if r['pb_med'] is not None else None,
+            'pe_pct_5y': float(r['pe_pct_5y']) if r['pe_pct_5y'] is not None else None,
+            'pb_pct_5y': float(r['pb_pct_5y']) if r['pb_pct_5y'] is not None else None,
+            'pe_pct_10y': float(r['pe_pct_10y']) if r['pe_pct_10y'] is not None else None,
+            'pb_pct_10y': float(r['pb_pct_10y']) if r['pb_pct_10y'] is not None else None,
+            'valuation_score': float(r['valuation_score']) if r['valuation_score'] is not None else None,
+            'valuation_label': r['valuation_label'] or '',
+        })
+
+    return {'date': actual_date, 'items': items}
+
+
+async def get_industry_valuation_history(industry_name: str, metric: str = 'pe_ttm', years: int = 5) -> dict:
+    """
+    获取某行业估值历史走势 + 分位带。
+
+    metric: pe_ttm | pe_ttm_med | pb | pb_med
+    years: 5 | 10
+    """
+    allowed_metrics = {'pe_ttm', 'pe_ttm_eq', 'pe_ttm_med', 'pb', 'pb_med'}
+    if metric not in allowed_metrics:
+        raise HTTPException(status_code=400, detail=f'metric must be one of {allowed_metrics}')
+
+    from datetime import date, timedelta
+    start = (date.today() - timedelta(days=int(years) * 365)).strftime('%Y-%m-%d')
+
+    sql = f"""
+        SELECT trade_date, {metric} as value, pe_pct_5y, pb_pct_5y,
+               valuation_score, valuation_label
+        FROM sw_industry_valuation
+        WHERE sw_name = %s AND trade_date >= %s
+        ORDER BY trade_date ASC
+    """
+    rows = list(execute_query(sql, (industry_name, start), env='online'))
+    if not rows:
+        return {'industry': industry_name, 'metric': metric, 'history': [], 'percentile_bands': {}}
+
+    history = [
+        {
+            'date': str(r['trade_date']),
+            'value': float(r['value']) if r['value'] is not None else None,
+        }
+        for r in rows
+    ]
+
+    # 计算分位带（基于同期历史数据）
+    values = [h['value'] for h in history if h['value'] is not None]
+    if values:
+        arr = sorted(values)
+        n = len(arr)
+        p20 = arr[int(n * 0.2)]
+        p50 = arr[int(n * 0.5)]
+        p80 = arr[int(n * 0.8)]
+        percentile_bands = {'p20': p20, 'p50': p50, 'p80': p80}
+    else:
+        percentile_bands = {}
+
+    # 最新估值状态
+    latest_row = rows[-1]
+    current = {
+        'date': str(latest_row['trade_date']),
+        'value': float(latest_row['value']) if latest_row['value'] is not None else None,
+        'valuation_score': float(latest_row['valuation_score']) if latest_row['valuation_score'] is not None else None,
+        'valuation_label': latest_row['valuation_label'] or '',
+    }
+
+    return {
+        'industry': industry_name,
+        'metric': metric,
+        'current': current,
+        'history': history,
+        'percentile_bands': percentile_bands,
+    }
+
+
+async def get_stock_valuation_history(stock_code: str, years: int = 5) -> dict:
+    """
+    获取个股历史 PE/PB 走势 + 历史分位带。
+    """
+    code = _normalize_stock_code(stock_code)
+    from datetime import date, timedelta
+    start = (date.today() - timedelta(days=int(years) * 365)).strftime('%Y-%m-%d')
+
+    # 基本信息
+    info = list(execute_query(
+        'SELECT stock_name FROM trade_stock_basic WHERE stock_code = %s',
+        (code,), env='online'
+    ))
+    stock_name = info[0]['stock_name'] if info else code
+
+    # 历史 PE/PB
+    sql = """
+        SELECT trade_date, pe_ttm, pb
+        FROM trade_stock_daily_basic
+        WHERE stock_code = %s AND trade_date >= %s
+          AND pe_ttm > 0 AND pe_ttm < 300
+          AND pb > 0
+        ORDER BY trade_date ASC
+    """
+    rows = list(execute_query(sql, (code, start), env='online'))
+    if not rows:
+        return {'code': code, 'name': stock_name, 'history': [], 'percentile_bands': {}}
+
+    history = [
+        {
+            'date': str(r['trade_date']),
+            'pe_ttm': float(r['pe_ttm']) if r['pe_ttm'] is not None else None,
+            'pb': float(r['pb']) if r['pb'] is not None else None,
+        }
+        for r in rows
+    ]
+
+    # 分位带
+    pe_vals = sorted([h['pe_ttm'] for h in history if h['pe_ttm'] is not None])
+    pb_vals = sorted([h['pb'] for h in history if h['pb'] is not None])
+    n_pe, n_pb = len(pe_vals), len(pb_vals)
+
+    percentile_bands = {}
+    if n_pe >= 10:
+        percentile_bands['pe_ttm'] = {
+            'p20': pe_vals[int(n_pe * 0.2)],
+            'p50': pe_vals[int(n_pe * 0.5)],
+            'p80': pe_vals[int(n_pe * 0.8)],
+        }
+    if n_pb >= 10:
+        percentile_bands['pb'] = {
+            'p20': pb_vals[int(n_pb * 0.2)],
+            'p50': pb_vals[int(n_pb * 0.5)],
+            'p80': pb_vals[int(n_pb * 0.8)],
+        }
+
+    latest = rows[-1]
+    current = {
+        'date': str(latest['trade_date']),
+        'pe_ttm': float(latest['pe_ttm']) if latest['pe_ttm'] is not None else None,
+        'pb': float(latest['pb']) if latest['pb'] is not None else None,
+    }
+    # 当前 PE 在历史中的分位
+    if pe_vals and current['pe_ttm']:
+        current['pe_pct'] = round(sum(1 for v in pe_vals if v < current['pe_ttm']) / n_pe, 3)
+    if pb_vals and current['pb']:
+        current['pb_pct'] = round(sum(1 for v in pb_vals if v < current['pb']) / n_pb, 3)
+
+    return {
+        'code': code,
+        'name': stock_name,
+        'current': current,
+        'history': history,
+        'percentile_bands': percentile_bands,
+    }

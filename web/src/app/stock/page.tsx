@@ -1005,7 +1005,9 @@ function StockCardGrid({ onSelect }: { onSelect: (s: StockOption) => void }) {
                   <>{card.sw_level1 || card.industry}</>
                 ) : null}
                 {card.market_cap != null && <span style={{ marginLeft: '6px' }}>{card.market_cap.toFixed(0)}亿</span>}
-                <span style={{ margin: '0 4px', opacity: 0.4 }}>·</span>
+                {(card.sw_level1 || card.industry || card.market_cap != null) && (
+                  <span style={{ margin: '0 4px', opacity: 0.4 }}>·</span>
+                )}
                 {marketLabel(card.stock_code)}
               </span>
               <span>{card.latest_date}</span>
