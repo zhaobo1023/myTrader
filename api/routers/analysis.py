@@ -288,7 +288,17 @@ async def generate_comprehensive(body: ComprehensiveReportRequest):
 
         yield f"data: {json.dumps({'type': 'plan', 'sections': sections}, ensure_ascii=False)}\n\n"
 
-        analyzer = FiveStepAnalyzer(db_env='online')
+        try:
+            analyzer = FiveStepAnalyzer(db_env='online')
+        except ValueError as exc:
+            if 'RAG_API_KEY' in str(exc):
+                yield f"data: {json.dumps({'type': 'error', 'message': 'RAG_API_KEY 未配置，请联系管理员配置 DashScope API Key'}, ensure_ascii=False)}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'error', 'message': f'配置错误: {exc}'}, ensure_ascii=False)}\n\n"
+            return
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'初始化失败: {exc}'}, ensure_ascii=False)}\n\n"
+            return
         builder = ReportBuilder()
         fundamental_results = {}
         tech_section = ''
@@ -451,6 +461,15 @@ async def generate_one_pager(body: OnePagerRequest):
 
         try:
             analyzer = OnePagerAnalyzer(db_env='online')
+        except ValueError as exc:
+            if 'RAG_API_KEY' in str(exc):
+                yield f"data: {json.dumps({'type': 'error', 'message': 'RAG_API_KEY 未配置，请联系管理员配置 DashScope API Key'}, ensure_ascii=False)}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'error', 'message': f'配置错误: {exc}'}, ensure_ascii=False)}\n\n"
+            return
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'初始化失败: {exc}'}, ensure_ascii=False)}\n\n"
+            return
 
             # Data collection step
             yield f"data: {json.dumps({'type': 'step_start', 'step': 'data', 'name': '数据采集'}, ensure_ascii=False)}\n\n"
