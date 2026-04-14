@@ -129,24 +129,21 @@ def calc_temperature() -> dict:
             result['indicators']['volume_ratio_ma20'] = {'value': None, 'signal': 'unknown'}
             result['volume_series'] = []
 
-        # 2) Turnover rate - reuse market_overview logic
-        try:
-            from data_analyst.market_overview.calculator import calc_market_turnover
-            turnover_data = calc_market_turnover()
-            if turnover_data.get('available'):
-                result['indicators']['turnover_pct_rank'] = {
-                    'value': turnover_data.get('pct_rank'),
-                    'signal': _signal(
-                        turnover_data.get('pct_rank') or 50,
-                        C.TURNOVER_PCT_THRESHOLDS,
-                        C.TURNOVER_PCT_LEVELS,
-                    ),
-                    'turnover_rate': turnover_data.get('value'),
-                }
-            else:
-                result['indicators']['turnover_pct_rank'] = {'value': None, 'signal': 'unknown'}
-        except Exception as e:
-            logger.warning("calc_market_turnover failed: %s", e)
+        # 2) Turnover rate - compute from macro_data market_volume instead of
+        #    trade_stock_daily (which is too large for real-time query)
+        if not vol_series.empty and len(vol_series) >= 20:
+            window = vol_series.tail(252) if len(vol_series) >= 252 else vol_series
+            cur_vol_val = float(vol_series.iloc[-1])
+            pct_rank = round(float((window < cur_vol_val).mean() * 100), 1) if len(window) > 10 else None
+            result['indicators']['turnover_pct_rank'] = {
+                'value': pct_rank,
+                'signal': _signal(
+                    pct_rank or 50,
+                    C.TURNOVER_PCT_THRESHOLDS,
+                    C.TURNOVER_PCT_LEVELS,
+                ),
+            }
+        else:
             result['indicators']['turnover_pct_rank'] = {'value': None, 'signal': 'unknown'}
 
         # 3) Advance / decline count
