@@ -83,7 +83,7 @@ def load_config() -> RAGConfig:
         reranker_model=os.getenv('RAG_RERANKER_MODEL', _env.get('RAG_RERANKER_MODEL', 'gte-reranker-v2')),
         reranker_api_key=api_key,
         reranker_base_url=os.getenv('RAG_RERANKER_BASE_URL', _env.get('RAG_RERANKER_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')),
-        chroma_persist_dir=os.getenv('CHROMA_PERSIST_DIR', _env.get('CHROMA_PERSIST_DIR', '')),
+        chroma_persist_dir=os.getenv('CHROMA_PERSIST_DIR') or _env.get('CHROMA_PERSIST_DIR', ''),
         research_dir=os.getenv('RAG_RESEARCH_DIR', _env.get('RAG_RESEARCH_DIR', '')),
     )
 
