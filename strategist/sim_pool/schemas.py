@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS sim_trade_log (
     slippage_cost DOUBLE COMMENT 'slippage cost',
     stamp_tax   DOUBLE COMMENT 'stamp duty (sell only)',
     net_amount  DOUBLE COMMENT 'actual cash change (negative=outflow)',
-    trigger     VARCHAR(20) COMMENT 'entry|stop_loss|take_profit|max_hold|strategy',
+    `trigger`   VARCHAR(20) COMMENT 'entry|stop_loss|take_profit|max_hold|strategy',
     created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_pool (pool_id),
     INDEX idx_date (trade_date)
