@@ -131,8 +131,8 @@ function ScoreTable({ scores }: { scores: IndustryScore[] }) {
   }
 
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+    <div className="table-scroll">
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '500px' }}>
         <thead>
           <tr style={{ background: 'var(--bg-panel)' }}>
             {['行业', '短期分位', '长期分位', '截面分位', '动量斜率', '信号'].map(c => (
@@ -536,8 +536,8 @@ function LogBiasCard() {
       {expanded && (
         <>
           {sorted.length > 0 ? (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+            <div className="table-scroll">
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '400px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-panel)' }}>
                     {['ETF', '代码', '收盘', '乖离率', '信号', ''].map((h, i) => (
@@ -831,8 +831,8 @@ function SwRotationCard() {
 
       {/* Run history table */}
       {runs.length > 0 && (
-        <div>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+        <div className="table-scroll">
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '520px' }}>
             <thead>
               <tr style={{ background: 'var(--bg-panel)' }}>
                 {['日期', '状态', '行业数', '过热', '上升', '启动候选', '退潮', '操作'].map(h => (

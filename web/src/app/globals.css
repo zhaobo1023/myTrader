@@ -73,3 +73,106 @@ html, body {
 ::-webkit-scrollbar-thumb:hover {
   background: #b8b8c4;
 }
+
+/* ============================================================
+   Responsive grid utilities
+   ============================================================ */
+
+/* Generic responsive grid: 1 col on mobile, n cols on wider screens */
+.grid-responsive-2 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.grid-responsive-3 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.grid-responsive-5 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (min-width: 640px) {
+  .grid-responsive-2 { grid-template-columns: repeat(2, 1fr); }
+  .grid-responsive-3 { grid-template-columns: repeat(2, 1fr); }
+  .grid-responsive-5 { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (min-width: 1024px) {
+  .grid-responsive-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid-responsive-5 { grid-template-columns: repeat(5, 1fr); }
+}
+
+/* Two-column layout that stacks on mobile */
+.layout-split {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+@media (min-width: 768px) {
+  .layout-split { grid-template-columns: 2fr 1fr; }
+}
+
+/* RAG page: sidebar + main, stacks on mobile */
+.layout-split-rag {
+  grid-template-columns: 1fr !important;
+}
+@media (min-width: 768px) {
+  .layout-split-rag { grid-template-columns: minmax(0, 320px) 1fr !important; }
+}
+
+/* Scrollable table container */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Hide on mobile, show on desktop */
+.desktop-only {
+  display: none;
+}
+@media (min-width: 768px) {
+  .desktop-only { display: unset; }
+}
+
+/* Show on mobile only */
+.mobile-only {
+  display: unset;
+}
+@media (min-width: 768px) {
+  .mobile-only { display: none; }
+}
+
+/* Mobile-friendly padding override for main content */
+@media (max-width: 767px) {
+  .main-content {
+    padding: 16px !important;
+  }
+}
+
+/* Search bar full-width on mobile */
+@media (max-width: 640px) {
+  .search-bar-container {
+    width: 100% !important;
+  }
+}
+
+/* Markdown report tables: scroll on mobile */
+.md-report table,
+.md-body table {
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
+/* SVG charts in theme-pool: constrain on mobile */
+@media (max-width: 767px) {
+  svg[width="600"] {
+    width: 100%;
+    height: auto;
+  }
+}

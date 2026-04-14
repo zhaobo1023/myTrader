@@ -67,7 +67,7 @@ function OverviewTab({ data }: { data: MarketOverviewSummary }) {
   return (
     <div>
       <SectionHeader title="Macro Pulse" />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '10px' }}>
+      <div className="grid-responsive-5">
         <StatCard title="QVIX" subtitle="A股恐慌指数" value={mp?.qvix?.value != null ? mp.qvix.value.toFixed(2) : undefined} signal={mp?.qvix?.signal} unavailable={!mp?.qvix?.value} description="市场恐慌指标。>25恐慌, >35极度恐慌。" />
         <StatCard title="北向资金" subtitle="5日累计(亿)" value={mp?.north_flow?.sum_5d != null ? `${mp.north_flow.sum_5d > 0 ? '+' : ''}${fmt(mp.north_flow.sum_5d)}` : undefined} signal={mp?.north_flow?.signal} unavailable={!mp?.north_flow} description="外资通过沪深港通5日净流入。" />
         <StatCard title="M2同比" subtitle="广义货币供应" value={mp?.m2_yoy?.value != null ? `${fmt(mp.m2_yoy.value)}%` : undefined} unavailable={!mp?.m2_yoy?.value} description="M2同比增速，越高流动性越宽松。" />
@@ -76,7 +76,7 @@ function OverviewTab({ data }: { data: MarketOverviewSummary }) {
       </div>
 
       <SectionHeader title="市场指标" />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+      <div className="grid-responsive-3">
         <StatCard title="市场换手率" subtitle={mt?.last_date} value={mt?.available ? `${fmt(mt.value as number)}%` : undefined} signal={(mt?.signal as string) ?? undefined} unavailable={!mt?.available} description={`日均换手率。252日百分位: ${fmt(mt?.pct_rank as number, 0)}%。高=投机活跃。`}>
           {mt?.available && mt.series && (mt.series as Array<{value?: number}>).length > 0 && (
             <MiniSparkline data={mt.series as Array<{value?: number}>} valueKey="value" width={100} height={28} color="#7170ff" className="mt-1" />
@@ -87,7 +87,7 @@ function OverviewTab({ data }: { data: MarketOverviewSummary }) {
       </div>
 
       <SectionHeader title="风格轮动" />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+      <div className="grid-responsive-2">
         <StatCard title="规模轮动" subtitle="大盘 vs 小盘 (沪深300/中证1000)" value={scale?.available ? `评分: ${scale.total ?? '--'}` : undefined} signal={scale?.strength as string} unavailable={!scale?.available} description={`方向: ${scale?.direction ?? '--'}。3个子信号: 布林带、5年均线、40日动量。`}>
           {scale?.available && scale.series && (scale.series as Array<{ratio?: number}>).length > 0 && (
             <MiniSparkline data={scale.series as Array<{ratio?: number}>} valueKey="ratio" width={100} height={28} color="#8b5cf6" className="mt-1" />
@@ -101,7 +101,7 @@ function OverviewTab({ data }: { data: MarketOverviewSummary }) {
       </div>
 
       <SectionHeader title="股息追踪 (中证红利)" />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+      <div className="grid-responsive-3">
         {(() => {
           const ys = div?.yield_spread as (Record<string, unknown> & {available?: boolean; spread?: number; signal?: string; div_yield?: number; cn_bond?: number});
           return <StatCard title="股息利差" subtitle="股息率减10Y国债" value={ys?.available !== false ? `${fmt(ys?.spread as number)}%` : undefined} signal={ys?.signal as string} unavailable={!ys || ys.available === false} description={`股息率: ${fmt(ys?.div_yield as number)}%, 国债: ${fmt(ys?.cn_bond as number)}%. >3%极具吸引力。`} />;
@@ -117,7 +117,7 @@ function OverviewTab({ data }: { data: MarketOverviewSummary }) {
       </div>
 
       <SectionHeader title="估值锚" />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+      <div className="grid-responsive-2">
         <StatCard title="5年均线锚" subtitle={`中证全A vs 5年均线 | ${anchor?.last_date ?? ''}`} value={anchor?.available ? `${fmt(anchor.deviation_pct as number)}% 偏离` : undefined} signal={anchor?.signal as string} unavailable={!anchor?.available} description="当前价格与5年移动均线的偏离度。<-10%低估, >+20%高估。">
           {anchor?.available && anchor.series && (anchor.series as Array<{value?: number}>).length > 0 && (
             <MiniSparkline data={anchor.series as Array<{value?: number}>} valueKey="value" width={120} height={32} color="#0ea5e9" className="mt-1" />
@@ -172,12 +172,12 @@ function StocksTab() {
 
   return (
     <div>
-      <form onSubmit={handleSearch} style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
-        <input type="text" value={searchCode} onChange={(e) => setSearchCode(e.target.value)} placeholder="输入股票代码 (如 600519)" style={{ ...inputStyle, width: '220px' }} />
-        <button type="submit" style={{ padding: '6px 16px', background: 'var(--accent-bg)', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: 510, cursor: 'pointer' }}>查询</button>
+      <form onSubmit={handleSearch} style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexWrap: 'wrap' }}>
+        <input type="text" value={searchCode} onChange={(e) => setSearchCode(e.target.value)} placeholder="输入股票代码 (如 600519)" style={{ ...inputStyle, flex: '1 1 160px', minWidth: 0 }} />
+        <button type="submit" style={{ padding: '6px 16px', background: 'var(--accent-bg)', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: 510, cursor: 'pointer', flexShrink: 0 }}>查询</button>
       </form>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px' }}>
+      <div className="layout-split">
         <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <div>
@@ -197,8 +197,8 @@ function StocksTab() {
           {klineLoading ? (
             <div style={{ height: '240px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>加载中...</div>
           ) : kline?.data && kline.data.length > 0 ? (
-            <div style={{ height: '240px', overflowY: 'auto' }}>
-              <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
+            <div style={{ height: '240px', overflowY: 'auto' }} className="table-scroll">
+              <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse', minWidth: '400px' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                     {['日期', '开盘', '最高', '最低', '收盘', '成交量'].map((h) => (

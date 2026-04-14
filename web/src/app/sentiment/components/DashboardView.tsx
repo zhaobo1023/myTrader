@@ -439,8 +439,8 @@ export default function DashboardView() {
   if (isLoading) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        {/* Loading skeleton: 2 rows of 3 cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+        {/* Loading skeleton: responsive grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <div
               key={i}
@@ -488,7 +488,7 @@ export default function DashboardView() {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
           gap: '12px',
         }}
       >

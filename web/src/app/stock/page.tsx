@@ -631,7 +631,7 @@ function TechReportList({ reports, latestDate }: { reports: TechReport[]; latest
             {isExpanded && rep.indicators && Object.keys(rep.indicators).length > 0 && (
               <div style={{ padding: '0 16px 16px' }}>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 510, marginBottom: '6px' }}>关键指标</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '6px' }}>
                   {Object.entries(rep.indicators).slice(0, 16).map(([k, v]) => (
                     <div key={k} style={{ background: 'var(--bg-elevated)', padding: '5px 8px', borderRadius: '5px' }}>
                       <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>{k}</div>
@@ -1142,18 +1142,19 @@ function StockDetail({
       <div style={{
         display: 'flex', gap: '0', background: 'var(--bg-card)',
         border: '1px solid var(--border-subtle)', borderRadius: '8px',
-        padding: '4px', width: 'fit-content', marginBottom: '20px',
+        padding: '4px', marginBottom: '20px',
+        overflowX: 'auto', WebkitOverflowScrolling: 'touch',
       }}>
         {TAB_CONFIG.map((t) => (
           <button
             key={t.key}
             onClick={() => onTabChange(t.key)}
             style={{
-              padding: '6px 18px', fontSize: '13px', borderRadius: '6px', border: 'none',
+              padding: '6px 14px', fontSize: '13px', borderRadius: '6px', border: 'none',
               fontWeight: activeTab === t.key ? 510 : 400,
               color: activeTab === t.key ? 'var(--text-primary)' : 'var(--text-tertiary)',
               background: activeTab === t.key ? 'var(--bg-nav-active)' : 'none',
-              cursor: 'pointer', transition: 'all 0.12s',
+              cursor: 'pointer', transition: 'all 0.12s', whiteSpace: 'nowrap', flexShrink: 0,
             }}
           >
             {t.label}

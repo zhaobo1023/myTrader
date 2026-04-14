@@ -154,7 +154,7 @@ function SearchBar({ onAdd }: { onAdd: (code: string, name: string) => Promise<v
   }, [onAdd]);
 
   return (
-    <div ref={containerRef} style={{ position: 'relative', width: '320px' }}>
+    <div ref={containerRef} className="search-bar-container" style={{ position: 'relative', width: '320px' }}>
       <div style={{ position: 'relative' }}>
         <input
           type="text"
@@ -289,7 +289,7 @@ export default function DashboardPage() {
       </div>
 
       {wLoading ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px' }}>
+        <div className="grid-responsive-5" style={{ gap: '12px' }}>
           {[...Array(5)].map((_, i) => (
             <div key={i} style={{ background: 'var(--bg-card)', borderRadius: '8px', height: '140px', opacity: 0.4 }} />
           ))}

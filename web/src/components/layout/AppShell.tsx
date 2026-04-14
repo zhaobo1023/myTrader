@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuthStore } from '@/lib/store';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 
 // ----------------------------------------------------------------
 // Nav structure
@@ -74,16 +74,6 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   // 组合管理暂时隐藏
-  // {
-  //   href: '/portfolio-mgmt',
-  //   label: '组合管理',
-  //   labelEn: 'Portfolio',
-  //   icon: (
-  //     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-  //       <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-  //     </svg>
-  //   ),
-  // },
 ];
 
 // ----------------------------------------------------------------
@@ -102,20 +92,39 @@ function Chevron({ open }: { open: boolean }) {
 }
 
 // ----------------------------------------------------------------
-// Sidebar
+// Hamburger icon
 // ----------------------------------------------------------------
-function Sidebar() {
+function HamburgerIcon({ open }: { open: boolean }) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {open ? (
+        <>
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </>
+      ) : (
+        <>
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </>
+      )}
+    </svg>
+  );
+}
+
+// ----------------------------------------------------------------
+// Sidebar Nav content (shared between desktop sidebar and mobile drawer)
+// ----------------------------------------------------------------
+function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
   const [mounted, setMounted] = useState(false);
 
-  // Track which parent menus are expanded
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
-    // Auto-expand if current path is under /strategy
     return { '/strategy': true };
   });
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setMounted(true); }, []);
 
   function toggleExpand(href: string) {
@@ -129,17 +138,7 @@ function Sidebar() {
   }
 
   return (
-    <aside
-      style={{
-        width: '200px',
-        minHeight: '100vh',
-        background: 'var(--bg-panel)',
-        borderRight: '1px solid var(--border-subtle)',
-        display: 'flex',
-        flexDirection: 'column',
-        flexShrink: 0,
-      }}
-    >
+    <>
       {/* Logo */}
       <div style={{ padding: '20px 16px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
         <span style={{ fontSize: '15px', fontWeight: 590, color: 'var(--text-primary)', letterSpacing: '-0.3px' }}>
@@ -156,7 +155,6 @@ function Sidebar() {
 
           return (
             <div key={item.href}>
-              {/* Parent row */}
               <div
                 style={{
                   display: 'flex', alignItems: 'center',
@@ -175,7 +173,10 @@ function Sidebar() {
               >
                 <Link
                   href={hasChildren ? '#' : item.href}
-                  onClick={hasChildren ? (e) => { e.preventDefault(); toggleExpand(item.href); } : undefined}
+                  onClick={hasChildren
+                    ? (e) => { e.preventDefault(); toggleExpand(item.href); }
+                    : onNavigate
+                  }
                   style={{
                     flex: 1, display: 'flex', alignItems: 'center', gap: '9px',
                     padding: '7px 10px',
@@ -197,7 +198,6 @@ function Sidebar() {
                 </Link>
               </div>
 
-              {/* Children */}
               {hasChildren && isOpen && (
                 <div style={{ marginBottom: '4px' }}>
                   {item.children!.map((child) => {
@@ -206,6 +206,7 @@ function Sidebar() {
                       <Link
                         key={child.href}
                         href={child.href}
+                        onClick={onNavigate}
                         style={{
                           display: 'flex', alignItems: 'center', gap: '8px',
                           padding: '6px 10px 6px 34px',
@@ -270,7 +271,151 @@ function Sidebar() {
           )}
         </div>
       )}
-    </aside>
+    </>
+  );
+}
+
+// ----------------------------------------------------------------
+// Desktop Sidebar (hidden on mobile)
+// ----------------------------------------------------------------
+function Sidebar() {
+  return (
+    <>
+      <style>{`
+        .app-sidebar {
+          width: 200px;
+          min-height: 100vh;
+          background: var(--bg-panel);
+          border-right: 1px solid var(--border-subtle);
+          display: flex;
+          flex-direction: column;
+          flex-shrink: 0;
+        }
+        @media (max-width: 767px) {
+          .app-sidebar { display: none; }
+        }
+      `}</style>
+      <aside className="app-sidebar">
+        <SidebarNav />
+      </aside>
+    </>
+  );
+}
+
+// ----------------------------------------------------------------
+// Mobile top bar + drawer
+// ----------------------------------------------------------------
+function MobileNav({ topBar }: { topBar?: React.ReactNode }) {
+  const pathname = usePathname();
+  const [open, setOpen] = useState(false);
+
+  // Close drawer on route change
+  useEffect(() => { setOpen(false); }, [pathname]);
+
+  // Prevent body scroll when drawer open
+  useEffect(() => {
+    if (open) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => { document.body.style.overflow = ''; };
+  }, [open]);
+
+  const close = useCallback(() => setOpen(false), []);
+
+  return (
+    <>
+      <style>{`
+        .mobile-topbar {
+          display: none;
+        }
+        @media (max-width: 767px) {
+          .mobile-topbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 12px;
+            height: 48px;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border-subtle);
+            flex-shrink: 0;
+            position: sticky;
+            top: 0;
+            z-index: 40;
+          }
+          .mobile-topbar-logo {
+            font-size: 15px;
+            font-weight: 590;
+            color: var(--text-primary);
+            letter-spacing: -0.3px;
+            flex-shrink: 0;
+          }
+          .mobile-topbar-slot {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            align-items: center;
+          }
+        }
+        .mobile-drawer-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(0,0,0,0.4);
+          z-index: 50;
+          animation: fadeIn 0.15s ease;
+        }
+        .mobile-drawer {
+          position: fixed;
+          top: 0;
+          left: 0;
+          bottom: 0;
+          width: 240px;
+          background: var(--bg-panel);
+          border-right: 1px solid var(--border-subtle);
+          display: flex;
+          flex-direction: column;
+          z-index: 51;
+          animation: slideIn 0.2s ease;
+          overflow-y: auto;
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to   { opacity: 1; }
+        }
+        @keyframes slideIn {
+          from { transform: translateX(-100%); }
+          to   { transform: translateX(0); }
+        }
+      `}</style>
+
+      <div className="mobile-topbar">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: 'var(--text-primary)', padding: '4px', display: 'flex', alignItems: 'center', flexShrink: 0,
+          }}
+          aria-label="Toggle menu"
+        >
+          <HamburgerIcon open={open} />
+        </button>
+        {topBar ? (
+          <div className="mobile-topbar-slot">{topBar}</div>
+        ) : (
+          <span className="mobile-topbar-logo">myTrader</span>
+        )}
+      </div>
+
+      {open && (
+        <>
+          <div className="mobile-drawer-overlay" onClick={close} />
+          <div className="mobile-drawer">
+            <SidebarNav onNavigate={close} />
+          </div>
+        </>
+      )}
+    </>
   );
 }
 
@@ -285,28 +430,57 @@ export default function AppShell({
   topBar?: React.ReactNode;
 }) {
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg-canvas)' }}>
-      <Sidebar />
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        {topBar && (
-          <header
-            style={{
-              height: '48px',
-              borderBottom: '1px solid var(--border-subtle)',
-              display: 'flex',
-              alignItems: 'center',
-              padding: '0 24px',
-              flexShrink: 0,
-              background: 'var(--bg-panel)',
-            }}
-          >
-            {topBar}
-          </header>
-        )}
-        <main style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>
-          {children}
-        </main>
+    <>
+      <style>{`
+        .app-shell {
+          display: flex;
+          min-height: 100vh;
+          background: var(--bg-canvas);
+        }
+        .app-main {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
+        }
+        .app-topbar {
+          height: 48px;
+          border-bottom: 1px solid var(--border-subtle);
+          display: flex;
+          align-items: center;
+          padding: 0 24px;
+          flex-shrink: 0;
+          background: var(--bg-panel);
+        }
+        .app-content {
+          flex: 1;
+          overflow-y: auto;
+          padding: 24px;
+        }
+        @media (max-width: 767px) {
+          .app-content {
+            padding: 16px;
+          }
+          /* Desktop topbar hidden on mobile — topBar content is in MobileNav instead */
+          .app-topbar {
+            display: none;
+          }
+        }
+      `}</style>
+      <div className="app-shell">
+        <Sidebar />
+        <div className="app-main">
+          <MobileNav topBar={topBar} />
+          {topBar && (
+            <header className="app-topbar">
+              {topBar}
+            </header>
+          )}
+          <main className="app-content">
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </>
   );
 }

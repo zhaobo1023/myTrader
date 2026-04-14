@@ -325,7 +325,7 @@ export default function RAGPage() {
       {/* Generate tab                                                         */}
       {/* ------------------------------------------------------------------ */}
       {tab === 'generate' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '20px', alignItems: 'start' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 320px) 1fr', gap: '20px', alignItems: 'start' }} className="layout-split-rag">
           {/* Left panel: form */}
           <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '18px' }}>
             <div style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-muted)', marginBottom: '14px' }}>研报设置</div>

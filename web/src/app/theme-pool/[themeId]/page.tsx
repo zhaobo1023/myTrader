@@ -103,8 +103,8 @@ function AddStockSection({ themeId, onAdded }: { themeId: number; onAdded: () =>
       padding: '12px 16px', borderRadius: '8px', marginBottom: '16px',
       border: '1px solid var(--border-subtle)', background: 'var(--bg-panel)',
     }}>
-      <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-        <div style={{ flex: 1, position: 'relative' }}>
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 180px', minWidth: 0, position: 'relative' }}>
           <input
             value={query}
             onChange={(e) => doSearch(e.target.value)}
@@ -144,7 +144,7 @@ function AddStockSection({ themeId, onAdded }: { themeId: number; onAdded: () =>
           onChange={(e) => setReason(e.target.value)}
           placeholder="推荐理由（选填）"
           style={{
-            width: '200px', padding: '7px 10px', borderRadius: '6px', fontSize: '12px',
+            flex: '1 1 140px', minWidth: 0, padding: '7px 10px', borderRadius: '6px', fontSize: '12px',
             border: '1px solid var(--border-subtle)', background: 'var(--bg-canvas)',
             color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box',
           }}
@@ -156,7 +156,7 @@ function AddStockSection({ themeId, onAdded }: { themeId: number; onAdded: () =>
             padding: '7px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: 500,
             border: 'none', background: 'var(--accent)', color: '#fff',
             cursor: selected ? 'pointer' : 'not-allowed', opacity: selected ? 1 : 0.5,
-            whiteSpace: 'nowrap',
+            whiteSpace: 'nowrap', flexShrink: 0,
           }}
         >
           + 添加
@@ -588,7 +588,7 @@ export default function ThemeDetailPage() {
         >
           &larr; 返回主题列表
         </button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: 'var(--text-primary)' }}>
             {theme?.name || '...'}
           </h1>

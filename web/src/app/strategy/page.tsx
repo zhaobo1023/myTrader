@@ -229,8 +229,8 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
     <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px', marginBottom: '20px', overflow: 'hidden' }}>
       {/* Card Header */}
       <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div style={{ flex: 1 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div style={{ flex: '1 1 200px', minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: 590, color: 'var(--text-primary)', margin: 0 }}>
                 {card.meta.name}
@@ -246,7 +246,7 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
               参数：{card.meta.params_desc}
             </p>
           </div>
-          <div style={{ marginLeft: '16px', flexShrink: 0 }}>
+          <div style={{ flexShrink: 0 }}>
             {renderTriggerButton()}
           </div>
         </div>
@@ -313,7 +313,8 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
           <div style={{ padding: '12px 20px 8px', fontSize: '12px', color: 'var(--text-muted)', fontWeight: 510 }}>
             最近执行记录
           </div>
-          <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
+          <div className="table-scroll">
+          <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse', minWidth: '480px' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-subtle)', borderTop: '1px solid var(--border-subtle)' }}>
                 {(card.meta.key === 'microcap_pure_mv'
@@ -423,8 +424,8 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                               {runDetail.signals.length === 0 ? (
                                 <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>无信号</div>
                               ) : card.meta.key === 'microcap_pure_mv' ? (
-                                <div style={{ overflowX: 'auto' }}>
-                                  <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
+                                <div className="table-scroll">
+                                  <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse', minWidth: '480px' }}>
                                     <thead>
                                       <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                                         {['#', '代码', '名称', '总市值(亿)', '流通市值(亿)', 'PE-TTM', 'PB'].map((h) => (
@@ -459,8 +460,8 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                                   </table>
                                 </div>
                               ) : (
-                                <div style={{ overflowX: 'auto' }}>
-                                  <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
+                                <div className="table-scroll">
+                                  <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse', minWidth: '560px' }}>
                                     <thead>
                                       <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                                         {['代码', '名称', '类型', 'RPS', '收盘', 'MA20', 'MA250', '量比', '5日出现'].map((h) => (
@@ -522,6 +523,7 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
