@@ -42,3 +42,19 @@ tasks:
     depends_on:
       - _gate_daily_price
     params: {}
+
+  - id: monitor_candidate_pool
+    name: "Candidate pool daily monitor + Feishu push"
+    module: scheduler.adapters
+    func: monitor_candidate_pool
+    tags: [indicator, daily, candidate]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+      - calc_technical_indicator
+    params:
+      env: online
+    retry:
+      max_attempts: 2
+      delay_seconds: 60
+    timeout_seconds: 300

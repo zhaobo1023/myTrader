@@ -1,0 +1,595 @@
+'use client';
+
+import React, { useState, useEffect, useCallback } from 'react';
+import AppShell from '@/components/layout/AppShell';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface EntrySnapshot {
+  rps_250?: number | null;
+  rps_120?: number | null;
+  close?: number | null;
+  score?: number | null;
+  signal_strength?: string | null;
+  signals?: string[];
+  industry_name?: string | null;
+  strategy_name?: string | null;
+}
+
+interface CandidateStock {
+  id: number;
+  stock_code: string;
+  stock_name: string;
+  source_type: 'industry' | 'strategy' | 'manual';
+  source_detail: string | null;
+  add_date: string | null;
+  status: 'watching' | 'focused' | 'excluded';
+  memo: string | null;
+  entry_snapshot: EntrySnapshot;
+  // monitor
+  monitor_date: string | null;
+  close: number | null;
+  rps_250: number | null;
+  rps_120: number | null;
+  rps_slope: number | null;
+  pct_since_add: number | null;
+  rps_change: number | null;
+  signals: string[];
+  alert_level: 'red' | 'yellow' | 'green' | 'info';
+}
+
+interface HistoryRow {
+  trade_date: string;
+  close: number | null;
+  rps_250: number | null;
+  pct_since_add: number | null;
+  signals: string[];
+  alert_level: string;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const STATUS_LABELS: Record<string, string> = {
+  watching: '观察中',
+  focused: '重点关注',
+  excluded: '已排除',
+};
+
+const STATUS_COLORS: Record<string, { color: string; bg: string }> = {
+  watching:  { color: 'var(--text-secondary)', bg: 'var(--bg-tag)' },
+  focused:   { color: '#5e6ad2', bg: 'rgba(94,106,210,0.12)' },
+  excluded:  { color: 'var(--text-muted)', bg: 'var(--bg-surface)' },
+};
+
+const ALERT_COLORS: Record<string, string> = {
+  red: '#e5534b', yellow: '#c69026', green: '#27a644', info: 'var(--text-muted)',
+};
+
+const ALERT_BG: Record<string, string> = {
+  red: 'rgba(229,83,75,0.08)', yellow: 'rgba(198,144,38,0.08)',
+  green: 'rgba(39,166,68,0.08)', info: 'transparent',
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  industry: '行业', strategy: '策略', manual: '手动',
+};
+
+function pctColor(v: number | null): string {
+  if (v == null) return 'var(--text-muted)';
+  if (v > 0) return '#27a644';
+  if (v < 0) return '#e5534b';
+  return 'var(--text-secondary)';
+}
+
+function pctFmt(v: number | null): string {
+  if (v == null) return '--';
+  return (v > 0 ? '+' : '') + v.toFixed(2) + '%';
+}
+
+function fmt(v: number | null | undefined, d = 1): string {
+  if (v == null) return '--';
+  return v.toFixed(d);
+}
+
+// ---------------------------------------------------------------------------
+// Alert badge
+// ---------------------------------------------------------------------------
+function AlertBadge({ level, signals }: { level: string; signals: string[] }) {
+  const color = ALERT_COLORS[level] || 'var(--text-muted)';
+  const bg = ALERT_BG[level] || 'transparent';
+  if (level === 'info' && signals.length === 0) {
+    return <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>-</span>;
+  }
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '2px' }}>
+      {signals.slice(0, 2).map((s, i) => (
+        <span key={i} style={{
+          fontSize: '10px', padding: '1px 6px', borderRadius: '3px',
+          color, background: bg, fontWeight: 510, whiteSpace: 'nowrap',
+        }}>
+          {s}
+        </span>
+      ))}
+      {signals.length > 2 && (
+        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>+{signals.length - 2}</span>
+      )}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// History mini-chart (sparkline)
+// ---------------------------------------------------------------------------
+function HistoryPanel({ stockCode, stockName }: { stockCode: string; stockName: string }) {
+  const [data, setData] = useState<HistoryRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${API_BASE}/api/candidate-pool/stocks/${stockCode}/history?days=30`)
+      .then(r => r.json())
+      .then(j => setData((j.data || []).reverse()))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [stockCode]);
+
+  if (loading) return <div style={{ padding: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>加载中...</div>;
+  if (!data.length) return <div style={{ padding: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>暂无监控数据</div>;
+
+  return (
+    <div style={{ padding: '12px 16px' }}>
+      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 510 }}>
+        {stockName} · 近30日监控记录
+      </div>
+      <div className="table-scroll">
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px', minWidth: '380px' }}>
+          <thead>
+            <tr>
+              {['日期', '收盘', 'RPS250', '加入涨跌', '信号', '级别'].map(h => (
+                <th key={h} style={{ padding: '4px 8px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 400, borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {data.map((r, i) => (
+              <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'var(--bg-card)' }}>
+                <td style={{ padding: '4px 8px', color: 'var(--text-muted)' }}>{r.trade_date}</td>
+                <td style={{ padding: '4px 8px' }}>{fmt(r.close, 2)}</td>
+                <td style={{ padding: '4px 8px', color: (r.rps_250 ?? 0) >= 80 ? '#27a644' : 'var(--text-secondary)' }}>{fmt(r.rps_250)}</td>
+                <td style={{ padding: '4px 8px', color: pctColor(r.pct_since_add) }}>{pctFmt(r.pct_since_add)}</td>
+                <td style={{ padding: '4px 8px', color: 'var(--text-secondary)' }}>{r.signals.slice(0, 2).join(' / ') || '-'}</td>
+                <td style={{ padding: '4px 8px' }}>
+                  <span style={{ fontSize: '10px', color: ALERT_COLORS[r.alert_level] || 'var(--text-muted)' }}>
+                    {r.alert_level === 'info' ? '-' : r.alert_level.toUpperCase()}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Stock row
+// ---------------------------------------------------------------------------
+function StockRow({
+  stock,
+  expanded,
+  onToggleExpand,
+  onStatusChange,
+  onRemove,
+}: {
+  stock: CandidateStock;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onStatusChange: (code: string, status: string) => void;
+  onRemove: (code: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [memo, setMemo] = useState(stock.memo || '');
+  const [saving, setSaving] = useState(false);
+
+  async function saveMemo() {
+    setSaving(true);
+    await fetch(`${API_BASE}/api/candidate-pool/stocks/${stock.stock_code}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memo }),
+    });
+    setSaving(false);
+    setEditing(false);
+  }
+
+  const statusStyle = STATUS_COLORS[stock.status] || STATUS_COLORS.watching;
+  const alertColor = ALERT_COLORS[stock.alert_level] || 'var(--text-muted)';
+  const rowBg = stock.alert_level === 'red' ? 'rgba(229,83,75,0.03)' : 'transparent';
+
+  return (
+    <>
+      <tr
+        style={{ background: expanded ? 'var(--bg-card-hover)' : rowBg, cursor: 'pointer' }}
+        onClick={onToggleExpand}
+        onMouseEnter={e => { if (!expanded) (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-card-hover)'; }}
+        onMouseLeave={e => { if (!expanded) (e.currentTarget as HTMLTableRowElement).style.background = rowBg; }}
+      >
+        {/* Alert indicator */}
+        <td style={{ padding: '10px 6px 10px 14px', width: '4px' }}>
+          <div style={{ width: '3px', height: '28px', borderRadius: '2px', background: alertColor }} />
+        </td>
+        <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div style={{ fontWeight: 510, color: 'var(--text-primary)', fontSize: '13px' }}>{stock.stock_name}</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-geist-mono)', marginTop: '1px' }}>{stock.stock_code}</div>
+        </td>
+        <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap' }}>
+          <span style={{
+            fontSize: '11px', padding: '2px 7px', borderRadius: '10px',
+            color: statusStyle.color, background: statusStyle.bg,
+          }}>
+            {STATUS_LABELS[stock.status] || stock.status}
+          </span>
+        </td>
+        <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)', fontSize: '11px', color: 'var(--text-muted)' }}>
+          <div>{SOURCE_LABELS[stock.source_type] || stock.source_type}</div>
+          {stock.source_detail && <div style={{ color: 'var(--text-tertiary)' }}>{stock.source_detail}</div>}
+        </td>
+        <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)', fontSize: '12px', color: 'var(--text-muted)' }}>
+          {stock.add_date || '--'}
+        </td>
+        <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'var(--font-geist-mono)', fontSize: '12px' }}>
+          <div style={{ fontWeight: 510, color: 'var(--text-primary)' }}>{fmt(stock.close, 2)}</div>
+          <div style={{ fontSize: '11px', color: pctColor(stock.pct_since_add) }}>{pctFmt(stock.pct_since_add)}</div>
+        </td>
+        <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'var(--font-geist-mono)', fontSize: '12px' }}>
+          <div style={{ color: (stock.rps_250 ?? 0) >= 80 ? '#27a644' : 'var(--text-secondary)' }}>
+            {fmt(stock.rps_250)}
+          </div>
+          {stock.rps_change != null && (
+            <div style={{ fontSize: '11px', color: pctColor(stock.rps_change) }}>
+              {stock.rps_change > 0 ? '+' : ''}{stock.rps_change.toFixed(1)}
+            </div>
+          )}
+        </td>
+        <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <AlertBadge level={stock.alert_level} signals={stock.signals} />
+        </td>
+        <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)', textAlign: 'right' }}>
+          <span style={{ fontSize: '11px', color: 'var(--accent)' }}>{expanded ? '收起' : '详情'}</span>
+        </td>
+      </tr>
+
+      {/* Expanded row */}
+      {expanded && (
+        <tr>
+          <td colSpan={9} style={{ padding: 0, borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)' }}>
+            <div onClick={e => e.stopPropagation()}>
+              {/* Action bar */}
+              <div style={{ padding: '10px 16px', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid var(--border-subtle)' }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>状态：</span>
+                {(['watching', 'focused', 'excluded'] as const).map(s => (
+                  <button
+                    key={s}
+                    onClick={() => onStatusChange(stock.stock_code, s)}
+                    style={{
+                      fontSize: '11px', padding: '3px 10px', borderRadius: '10px',
+                      border: stock.status === s ? 'none' : '1px solid var(--border-subtle)',
+                      background: stock.status === s ? STATUS_COLORS[s].bg : 'transparent',
+                      color: stock.status === s ? STATUS_COLORS[s].color : 'var(--text-muted)',
+                      cursor: 'pointer', fontWeight: stock.status === s ? 510 : 400,
+                    }}
+                  >
+                    {STATUS_LABELS[s]}
+                  </button>
+                ))}
+                <div style={{ flex: 1 }} />
+                <button
+                  onClick={() => onRemove(stock.stock_code)}
+                  style={{ fontSize: '11px', color: '#e5534b', background: 'none', border: '1px solid rgba(229,83,75,0.3)', borderRadius: '6px', padding: '3px 10px', cursor: 'pointer' }}
+                >
+                  移出候选池
+                </button>
+              </div>
+
+              {/* Entry snapshot */}
+              <div style={{ padding: '10px 16px', display: 'flex', gap: '24px', flexWrap: 'wrap', borderBottom: '1px solid var(--border-subtle)', fontSize: '12px' }}>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>加入时 RPS250：</span>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 510 }}>
+                    {stock.entry_snapshot?.rps_250 != null ? fmt(stock.entry_snapshot.rps_250) : '--'}
+                  </span>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>加入时收盘：</span>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 510 }}>
+                    {stock.entry_snapshot?.close != null ? fmt(stock.entry_snapshot.close, 2) : '--'}
+                  </span>
+                </div>
+                {stock.entry_snapshot?.score != null && (
+                  <div>
+                    <span style={{ color: 'var(--text-muted)' }}>策略得分：</span>
+                    <span style={{ color: 'var(--accent)', fontWeight: 510 }}>{fmt(stock.entry_snapshot.score, 3)}</span>
+                  </div>
+                )}
+                {stock.entry_snapshot?.signals && stock.entry_snapshot.signals.length > 0 && (
+                  <div>
+                    <span style={{ color: 'var(--text-muted)' }}>加入时信号：</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{stock.entry_snapshot.signals.join(', ')}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Memo */}
+              <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', paddingTop: '4px', flexShrink: 0 }}>备注：</span>
+                {editing ? (
+                  <>
+                    <input
+                      value={memo}
+                      onChange={e => setMemo(e.target.value)}
+                      style={{ flex: 1, fontSize: '12px', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--border-std)', background: 'var(--bg-input)', color: 'var(--text-primary)' }}
+                      autoFocus
+                    />
+                    <button onClick={saveMemo} disabled={saving} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '4px', background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer' }}>
+                      {saving ? '保存中' : '保存'}
+                    </button>
+                    <button onClick={() => { setEditing(false); setMemo(stock.memo || ''); }} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '4px', background: 'transparent', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                      取消
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ flex: 1, fontSize: '12px', color: memo ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+                      {memo || '点击添加备注'}
+                    </span>
+                    <button onClick={() => setEditing(true)} style={{ fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px' }}>编辑</button>
+                  </>
+                )}
+              </div>
+
+              {/* History */}
+              <HistoryPanel stockCode={stock.stock_code} stockName={stock.stock_name} />
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main Page
+// ---------------------------------------------------------------------------
+
+export default function CandidatePoolPage() {
+  const [stocks, setStocks] = useState<CandidateStock[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [filterStatus, setFilterStatus] = useState<string>('');
+  const [filterSource, setFilterSource] = useState<string>('');
+  const [expandedCode, setExpandedCode] = useState<string | null>(null);
+  const [triggering, setTriggering] = useState(false);
+  const [pushing, setPushing] = useState(false);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
+
+  const loadStocks = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (filterStatus) params.set('status', filterStatus);
+      if (filterSource) params.set('source_type', filterSource);
+      const res = await fetch(`${API_BASE}/api/candidate-pool/stocks?${params}`);
+      const j = await res.json();
+      setStocks(j.data || []);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  }, [filterStatus, filterSource]);
+
+  useEffect(() => { loadStocks(); }, [loadStocks]);
+
+  async function handleStatusChange(code: string, status: string) {
+    await fetch(`${API_BASE}/api/candidate-pool/stocks/${code}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    loadStocks();
+  }
+
+  async function handleRemove(code: string) {
+    if (!confirm('确认将该股票移出候选池？')) return;
+    await fetch(`${API_BASE}/api/candidate-pool/stocks/${code}`, { method: 'DELETE' });
+    setExpandedCode(null);
+    loadStocks();
+  }
+
+  async function handleTriggerMonitor() {
+    setTriggering(true);
+    setActionMsg(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/candidate-pool/monitor/trigger`, { method: 'POST' });
+      const j = await res.json();
+      setActionMsg(`监控完成：${j.monitored} 只股票，${j.trade_date || ''}`);
+      loadStocks();
+    } catch {
+      setActionMsg('监控触发失败');
+    } finally {
+      setTriggering(false);
+    }
+  }
+
+  async function handlePushFeishu() {
+    setPushing(true);
+    setActionMsg(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/candidate-pool/monitor/push`, { method: 'POST' });
+      const j = await res.json();
+      setActionMsg(j.success ? '飞书推送成功' : '飞书推送失败（检查 webhook 配置）');
+    } catch {
+      setActionMsg('推送请求失败');
+    } finally {
+      setPushing(false);
+    }
+  }
+
+  // Alert counts for summary bar
+  const alertCounts = stocks.reduce((acc, s) => {
+    if (s.monitor_date) acc[s.alert_level] = (acc[s.alert_level] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const displayed = stocks.filter(s => {
+    if (filterStatus && s.status !== filterStatus) return false;
+    if (filterSource && s.source_type !== filterSource) return false;
+    return true;
+  });
+
+  const selectStyle: React.CSSProperties = {
+    fontSize: '12px', padding: '5px 10px', borderRadius: '6px',
+    border: '1px solid var(--border-subtle)', background: 'var(--bg-input)',
+    color: 'var(--text-secondary)', cursor: 'pointer',
+  };
+
+  return (
+    <AppShell>
+      {/* Header */}
+      <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ fontSize: '20px', fontWeight: 590, color: 'var(--text-primary)', letterSpacing: '-0.3px', margin: 0 }}>
+            候选池
+          </h1>
+          <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '6px 0 0' }}>
+            从行业或策略加入的候选股票，每日盘后自动监控技术面
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+          <button
+            onClick={handleTriggerMonitor}
+            disabled={triggering}
+            style={{
+              fontSize: '12px', padding: '6px 14px', borderRadius: '6px',
+              background: triggering ? 'transparent' : 'var(--accent)', color: triggering ? 'var(--accent)' : '#fff',
+              border: '1px solid var(--accent)', cursor: triggering ? 'default' : 'pointer', fontWeight: 510,
+            }}
+          >
+            {triggering ? '监控中...' : '触发监控'}
+          </button>
+          <button
+            onClick={handlePushFeishu}
+            disabled={pushing}
+            style={{
+              fontSize: '12px', padding: '6px 14px', borderRadius: '6px',
+              background: 'transparent', color: 'var(--text-secondary)',
+              border: '1px solid var(--border-subtle)', cursor: pushing ? 'default' : 'pointer',
+            }}
+          >
+            {pushing ? '推送中...' : '推送飞书'}
+          </button>
+          <button
+            onClick={loadStocks}
+            style={{
+              fontSize: '12px', padding: '6px 12px', borderRadius: '6px',
+              background: 'transparent', color: 'var(--text-muted)',
+              border: '1px solid var(--border-subtle)', cursor: 'pointer',
+            }}
+          >
+            刷新
+          </button>
+        </div>
+      </div>
+
+      {actionMsg && (
+        <div style={{ marginBottom: '12px', padding: '8px 14px', borderRadius: '6px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', fontSize: '12px', color: 'var(--text-secondary)' }}>
+          {actionMsg}
+        </div>
+      )}
+
+      {/* Alert summary bar */}
+      {Object.keys(alertCounts).length > 0 && (
+        <div style={{ marginBottom: '16px', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+          {(['red', 'yellow', 'green', 'info'] as const).map(level => {
+            const cnt = alertCounts[level] || 0;
+            if (!cnt) return null;
+            return (
+              <span key={level} style={{
+                fontSize: '12px', padding: '4px 12px', borderRadius: '20px',
+                color: ALERT_COLORS[level], background: ALERT_BG[level] || 'var(--bg-tag)',
+                border: `1px solid ${ALERT_COLORS[level]}40`, fontWeight: 510,
+              }}>
+                {level === 'red' ? '需关注' : level === 'yellow' ? '提醒' : level === 'green' ? '积极信号' : '正常'} {cnt}
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Filters */}
+      <div style={{ marginBottom: '16px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={selectStyle}>
+          <option value=''>全部状态</option>
+          <option value='watching'>观察中</option>
+          <option value='focused'>重点关注</option>
+          <option value='excluded'>已排除</option>
+        </select>
+        <select value={filterSource} onChange={e => setFilterSource(e.target.value)} style={selectStyle}>
+          <option value=''>全部来源</option>
+          <option value='industry'>行业</option>
+          <option value='strategy'>策略</option>
+          <option value='manual'>手动</option>
+        </select>
+        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>共 {displayed.length} 只</span>
+      </div>
+
+      {/* Table */}
+      {loading ? (
+        <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>加载中...</div>
+      ) : displayed.length === 0 ? (
+        <div style={{
+          padding: '60px 20px', textAlign: 'center',
+          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px',
+          color: 'var(--text-muted)', fontSize: '13px',
+        }}>
+          候选池为空，从「行业」或「策略」页面添加股票
+        </div>
+      ) : (
+        <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px', overflow: 'hidden' }}>
+          <div className="table-scroll">
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '700px' }}>
+              <thead>
+                <tr style={{ background: 'var(--bg-panel)', borderBottom: '1px solid var(--border-subtle)' }}>
+                  <th style={{ width: '4px', padding: '0' }} />
+                  {['股票', '状态', '来源', '加入日', '价格/涨跌', 'RPS250/变化', '今日信号', ''].map(h => (
+                    <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontWeight: 510, color: 'var(--text-muted)', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {displayed.map(stock => (
+                  <StockRow
+                    key={stock.stock_code}
+                    stock={stock}
+                    expanded={expandedCode === stock.stock_code}
+                    onToggleExpand={() => setExpandedCode(prev => prev === stock.stock_code ? null : stock.stock_code)}
+                    onStatusChange={handleStatusChange}
+                    onRemove={handleRemove}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </AppShell>
+  );
+}

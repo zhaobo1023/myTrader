@@ -300,6 +300,21 @@ def run_dashboard_fetch(dry_run: bool = False, env: str = "online", trade_date: 
     fetch_all(trade_date=trade_date or None, env=env)
 
 
+def monitor_candidate_pool(dry_run: bool = False, env: str = "online"):
+    """Daily technical monitor for all candidate pool stocks + Feishu push."""
+    if dry_run:
+        logger.info("[DRY-RUN] monitor_candidate_pool: would monitor all candidate pool stocks (env=%s)", env)
+        return
+    from api.services.candidate_pool_service import run_daily_monitor, push_feishu_daily_report
+    summary = run_daily_monitor(env=env)
+    logger.info("[OK] candidate pool monitor done: %s", summary)
+    pushed = push_feishu_daily_report(env=env)
+    if pushed:
+        logger.info("[OK] candidate pool Feishu report pushed")
+    else:
+        logger.info("[WARN] Feishu push skipped (no webhook or empty pool)")
+
+
 def run_dashboard_compute(dry_run: bool = False):
     """Compute the 6-section dashboard and warm Redis cache."""
     if dry_run:
