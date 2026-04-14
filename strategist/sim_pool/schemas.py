@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS sim_pool (
     status          VARCHAR(20) NOT NULL DEFAULT 'pending'
                     COMMENT 'pending|active|closed',
     stock_count     INT COMMENT 'number of positions',
+    current_value   DOUBLE COMMENT 'current portfolio + cash value',
     total_return    DOUBLE COMMENT 'cumulative return',
     benchmark_code  VARCHAR(20) DEFAULT '000300.SH',
     benchmark_return DOUBLE COMMENT 'benchmark cumulative return',

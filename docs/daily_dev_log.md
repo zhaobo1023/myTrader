@@ -2,6 +2,152 @@
 
 ---
 
+## 2026-04-14 策略模拟池系统 (SimPool) 完整实现
+
+### 今日工作内容
+
+#### 1. SimPool 系统设计与任务拆分
+
+编写完整系统设计文档和任务拆分文档：
+
+- `docs/sim_pool_design.md` -- 系统概念、5 张表 DDL、模块结构、数据流、API 设计
+- `docs/sim_pool_tasks.md` -- 24 个任务，分 M1-M5 五个里程碑
+
+**核心设计原则：**
+- 无人工干预：创建后自动执行，不允许手动买卖
+- 交易成本：佣金 0.03% + 滑点 0.1% + 印花税 0.1%（仅卖出）
+- 整数手：持股数必须是 100 的整数倍，余额作为现金保留
+- 等权分配：`weight = 1 / N`，不超过 max_positions
+
+#### 2. 核心引擎实现 (M1)
+
+| 模块 | 文件 | 功能 |
+|------|------|------|
+| 建表 | `strategist/sim_pool/schemas.py` | 5 张表 DDL + `ensure_tables()` |
+| 配置 | `strategist/sim_pool/config.py` | `SimPoolConfig` dataclass |
+| 池子管理 | `strategist/sim_pool/pool_manager.py` | 创建/查询/关闭池子 |
+| 持仓跟踪 | `strategist/sim_pool/position_tracker.py` | T+1买入/价格更新/止盈止损/停牌处理 |
+| 净值计算 | `strategist/sim_pool/nav_calculator.py` | 日净值/回撤/基准净值 |
+
+**退出条件（按优先级）：**
+1. `stop_loss`: 净收益率 <= -10%
+2. `take_profit`: 净收益率 >= +20%
+3. `max_hold`: 持有天数 >= 60
+4. `suspended`: 连续停牌 >= 5 个交易日
+
+#### 3. 策略适配器 (M2)
+
+| 适配器 | 文件 | 封装模块 |
+|--------|------|---------|
+| 动量反转 | `strategies/momentum.py` | `doctor_tao.SignalScreener` |
+| 行业轮动 | `strategies/industry.py` | `universe_scanner.ScoringEngine` |
+| 微盘股 | `strategies/micro_cap.py` | `trade_stock_daily_basic` + `trade_stock_daily` |
+
+微盘股筛选条件：流通市值 < 50 亿，60日均成交额 >= 1000 万，价格 > MA20，排除 ST。
+
+#### 4. Celery 定时任务 (M2)
+
+| 任务 | 时间 | 功能 |
+|------|------|------|
+| `fill_entry_prices` | 工作日 09:35 | T+1 填充买入价 |
+| `daily_sim_pool_update` | 工作日 16:30 | 价格更新 -> 退出检查 -> 净值计算 -> 报告生成 -> 周报(周五) -> 关闭(全部退出) |
+
+`create_sim_pool_task` 由 API 端点异步触发，不在 Beat 调度中。
+
+#### 5. 报告生成 (M3)
+
+`ReportGenerator` 复用 `strategist.backtest.metrics.MetricsCalculator`，生成三种报告：
+- **日报**: 每日生成，包含累计收益/年化/回撤/Sharpe 等指标
+- **周报**: 周五生成，统计本周一到周五的绩效
+- **终报**: 池子关闭后生成，额外包含每只股贡献度排名和退出原因分布
+
+#### 6. REST API (M3)
+
+9 个端点，注册在 `/api/sim-pool`：
+
+| 方法 | 路径 | 功能 |
+|------|------|------|
+| GET | `/` | 池子列表（支持 strategy_type/status 过滤） |
+| POST | `/` | 创建模拟池（异步，返回 task_id） |
+| GET | `/tasks/{task_id}` | 轮询任务状态 |
+| GET | `/{id}` | 池子详情 |
+| GET | `/{id}/positions` | 持仓列表（支持 status 过滤） |
+| GET | `/{id}/nav` | 净值序列 |
+| GET | `/{id}/reports` | 报告列表 |
+| GET | `/{id}/reports/{date}/{type}` | 报告详情 |
+| GET | `/{id}/trades` | 交易日志 |
+| POST | `/{id}/close` | 强制关闭 |
+
+#### 7. 前端页面 (M4)
+
+**页面：** `web/src/app/sim-pool/page.tsx`
+
+**功能：**
+- 池子列表：卡片式展示，支持策略类型/状态过滤，"创建模拟池"按钮
+- 创建弹窗：策略类型选择、交易参数配置、异步任务轮询
+- 池子详情 4-Tab：
+  - 概览：8 个指标卡片（总收益/年化/超额收益/最大回撤/Sharpe/胜率/盈亏比/均持天数）+ SVG 净值曲线
+  - 持仓：表格含退出原因中文标签和颜色，支持 open/exited/all 过滤
+  - 报告：日报/周报/终报列表，点击展开 metrics JSON
+  - 交易记录：买卖明细表格（价格/数量/手续费/印花税/净金额）
+- 强制关闭按钮：仅非 closed 状态显示
+- 侧边栏新增"模拟池"导航项
+
+#### 8. 测试 (M5)
+
+41 个测试全部通过（25 单元 + 16 集成）：
+
+| 测试文件 | 数量 | 覆盖 |
+|---------|------|------|
+| `test_pool_manager.py` | 5 | 创建/等权/max_positions/过滤/关闭 |
+| `test_position_tracker.py` | 7 | 买入成本/止损/止盈/到期/不触发/印花税/停牌 |
+| `test_nav_calculator.py` | 4 | NAV=1/价格上涨/回撤计算/基准净值 |
+| `test_report_generator.py` | 4 | 日报字段/终报退出分布/终报贡献度/周报区间 |
+| `test_strategy_adapters.py` | 5 | 抽象类/动量DataFrame/meta序列化/行业过滤/市值过滤 |
+| `test_full_lifecycle.py` | 4 | 完整生命周期/止损/止盈/到期 |
+| `test_api_endpoints.py` | 12 | 列表/详情/持仓/净值/交易/关闭/报告/无效策略 |
+
+---
+
+### 修改的文件
+
+| 文件 | 类型 | 说明 |
+|------|------|------|
+| `strategist/sim_pool/` (12 文件) | 新增 | 核心引擎 + 策略适配器 |
+| `api/tasks/sim_pool_tasks.py` | 新增 | 3 个 Celery 任务 |
+| `api/services/sim_pool_service.py` | 新增 | 服务层 |
+| `api/routers/sim_pool.py` | 新增 | 9 个 REST 端点 |
+| `api/main.py` | 修改 | 注册 sim_pool router |
+| `api/tasks/__init__.py` | 修改 | 注册 sim_pool_tasks |
+| `api/tasks/celery_app.py` | 修改 | 添加 2 个 Beat 调度 |
+| `web/src/app/sim-pool/page.tsx` | 新增 | 前端页面 |
+| `web/src/components/layout/AppShell.tsx` | 修改 | 添加导航项 |
+| `tests/unit/sim_pool/` (5 文件) | 新增 | 单元测试 |
+| `tests/integration/sim_pool/` (2 文件) | 新增 | 集成测试 |
+| `docs/sim_pool_design.md` | 新增 | 系统设计文档 |
+| `docs/sim_pool_tasks.md` | 新增 | 任务拆分文档 |
+
+### 相关 Git 提交
+
+```
+13c3ec9 feat: implement Strategy Simulation Pool (SimPool) system
+612a1b1 docs: add sim_pool system design and task breakdown
+```
+
+---
+
+### 待解决问题
+
+1. **线上建表**：需在 API 容器内执行 `ensure_tables(env='online')` 创建 5 张 sim_pool 相关表
+2. **端到端验证**：实际创建一个动量策略模拟池，观察 T+1 买入和后续每日更新流程
+3. **Celery Beat 更新**：重启 Celery worker 以加载新的 Beat 调度配置
+
+---
+
+*文档维护：每次开发后更新此文件，新日期追加在上方*
+
+---
+
 ## 2026-04-14 大盘总览 Dashboard Phase 1 数据补全与性能优化
 
 ### 今日工作内容
