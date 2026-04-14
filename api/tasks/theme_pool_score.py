@@ -286,11 +286,15 @@ def _calc_tech_score_from_daily(stock_code: str, env: str) -> dict:
     from config.db import execute_query
 
     try:
+        if _is_etf(stock_code):
+            table, col = 'trade_etf_daily', 'fund_code'
+        else:
+            table, col = 'trade_stock_daily', 'stock_code'
         rows = list(execute_query(
-            "SELECT trade_date, close_price, volume "
-            "FROM trade_stock_daily "
-            "WHERE stock_code = %s "
-            "ORDER BY trade_date DESC LIMIT 260",
+            f"SELECT trade_date, close_price, volume "
+            f"FROM {table} "
+            f"WHERE {col} = %s "
+            f"ORDER BY trade_date DESC LIMIT 260",
             (stock_code,), env=env,
         ))
         if not rows:
@@ -489,17 +493,26 @@ def _calc_fundamental_score(stock_code: str, env: str) -> dict:
         return {'score': None, 'data': {}}
 
 
+def _is_etf(stock_code: str) -> bool:
+    code = stock_code.split('.')[0]
+    return code.startswith('15') or code.startswith('51') or code.startswith('16') or code.startswith('56')
+
+
 def _calc_returns(stock_code: str, entry_price: float, entry_date, score_date: date, env: str) -> dict:
-    """Calculate recent price returns (N-day momentum) and holding return from entry price."""
+    """Calculate recent price returns (N-day momentum)."""
     from config.db import execute_query
 
     result = {}
 
-    # Get recent close prices ordered by date desc
-    sql = """
+    if _is_etf(stock_code):
+        table, col = 'trade_etf_daily', 'fund_code'
+    else:
+        table, col = 'trade_stock_daily', 'stock_code'
+
+    sql = f"""
         SELECT trade_date, close_price
-        FROM trade_stock_daily
-        WHERE stock_code = %s
+        FROM {table}
+        WHERE {col} = %s
         ORDER BY trade_date DESC LIMIT 65
     """
     try:

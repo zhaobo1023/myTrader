@@ -452,17 +452,25 @@ async def _get_vote_summary(db: AsyncSession, stock_id: int, user_id: int) -> di
 # Helpers
 # ------------------------------------------------------------------
 
+def _is_etf(stock_code: str) -> bool:
+    """Check if code belongs to an ETF (15xxxx.SZ or 51xxxx.SH etc.)."""
+    code = stock_code.split('.')[0]
+    return code.startswith('15') or code.startswith('51') or code.startswith('16') or code.startswith('56')
+
+
 async def _get_latest_close(stock_code: str) -> float:
-    """Get latest close price from trade_stock_daily via config.db (sync)."""
+    """Get latest close price from trade_stock_daily or trade_etf_daily."""
     try:
         from config.db import execute_query
-        rows = execute_query(
-            "SELECT close_price FROM trade_stock_daily WHERE stock_code = %s "
-            "ORDER BY trade_date DESC LIMIT 1",
+        if _is_etf(stock_code):
+            table, col = 'trade_etf_daily', 'fund_code'
+        else:
+            table, col = 'trade_stock_daily', 'stock_code'
+        rows = list(execute_query(
+            f"SELECT close_price FROM {table} WHERE {col} = %s ORDER BY trade_date DESC LIMIT 1",
             (stock_code,),
             env='online',
-        )
-        rows = list(rows)
+        ))
         if rows:
             return float(rows[0]['close_price'])
     except Exception as e:
@@ -490,11 +498,15 @@ async def get_price_history(db: AsyncSession, theme_id: int, days: int = 60) -> 
     history = []
     for stock in stocks:
         try:
+            if _is_etf(stock.stock_code):
+                table, col = 'trade_etf_daily', 'fund_code'
+            else:
+                table, col = 'trade_stock_daily', 'stock_code'
             rows = list(execute_query(
-                "SELECT trade_date, open_price, high_price, low_price, close_price, volume "
-                "FROM trade_stock_daily "
-                "WHERE stock_code = %s "
-                "ORDER BY trade_date DESC LIMIT %s",
+                f"SELECT trade_date, open_price, high_price, low_price, close_price, volume "
+                f"FROM {table} "
+                f"WHERE {col} = %s "
+                f"ORDER BY trade_date DESC LIMIT %s",
                 (stock.stock_code, days),
                 env='online',
             ))

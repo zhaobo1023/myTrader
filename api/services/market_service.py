@@ -213,15 +213,19 @@ async def get_rps(
 
 
 async def search_stocks(keyword: str, limit: int = 20) -> dict:
-    """Search stocks by code or name."""
+    """Search stocks and ETFs by code or name."""
     keyword_stripped = keyword.strip()
     code_exact = _normalize_stock_code(keyword_stripped.upper())
     code_like = f'%{keyword_stripped}%'
 
     sql = """
-        SELECT stock_code, stock_name, industry as industry
+        SELECT stock_code, stock_name, industry
         FROM trade_stock_basic
         WHERE stock_code LIKE %s OR stock_name LIKE %s
+        UNION
+        SELECT fund_code AS stock_code, fund_code AS stock_name, 'ETF' AS industry
+        FROM (SELECT DISTINCT fund_code FROM trade_etf_daily) etf
+        WHERE fund_code LIKE %s
         ORDER BY
             CASE WHEN stock_code = %s THEN 1
                  WHEN stock_code LIKE %s THEN 2
@@ -229,10 +233,9 @@ async def search_stocks(keyword: str, limit: int = 20) -> dict:
         LIMIT %s
     """
     params = (
+        code_like, code_like,
         code_like,
-        code_like,
-        code_exact,
-        code_like,
+        code_exact, code_like,
         limit,
     )
 
