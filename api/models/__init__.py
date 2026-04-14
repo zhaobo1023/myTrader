@@ -15,6 +15,10 @@ from api.models.theme_pool import (
     ThemePool, ThemePoolStock, ThemePoolScore, ThemePoolVote,
     ThemeStatus, HumanStatus,
 )
+from api.models.candidate_pool import (
+    CandidatePoolStock, CandidateMonitorDaily,
+    CandidateStatus, AlertLevel,
+)
 
 __all__ = [
     'User', 'UserTier', 'UserRole',
@@ -28,4 +32,6 @@ __all__ = [
     'UserNotificationConfig',
     'ThemePool', 'ThemePoolStock', 'ThemePoolScore', 'ThemePoolVote',
     'ThemeStatus', 'HumanStatus',
+    'CandidatePoolStock', 'CandidateMonitorDaily',
+    'CandidateStatus', 'AlertLevel',
 ]
