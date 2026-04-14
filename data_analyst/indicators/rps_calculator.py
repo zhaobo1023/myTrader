@@ -37,8 +37,10 @@ RPS_WINDOWS = [20, 60, 120, 250]
 # RPS Slope 参数
 SLOPE_WINDOW = 20  # 滚动窗口（交易日），约 4 周
 
-# 增量更新时加载的自然日天数（覆盖 250 交易日 + buffer）
-INCREMENTAL_LOOKBACK_DAYS = 400
+# 增量更新时加载的自然日天数
+# rps_250 需要 250 交易日，slope 再需要 20 交易日，共约 270 交易日
+# 270 交易日 ≈ 378 自然日，加 buffer 取 560 天（约 400 交易日）
+INCREMENTAL_LOOKBACK_DAYS = 560
 
 
 class RPSCalculator:
@@ -100,11 +102,12 @@ class RPSCalculator:
         df = df.sort_values(['stock_code', 'trade_date'])
 
         def _slope(y):
-            if len(y) < window or y.isna().any():
+            valid = y.dropna()
+            if len(valid) < window:
                 return np.nan
-            x_vals = np.arange(len(y))
+            x_vals = np.arange(len(valid))
             try:
-                slope, _, _, _, _ = stats.linregress(x_vals, y.values)
+                slope, _, _, _, _ = stats.linregress(x_vals, valid.values)
                 return slope
             except (ValueError, np.linalg.LinAlgError):
                 return np.nan
@@ -113,10 +116,14 @@ class RPSCalculator:
             lambda x: x.rolling(window=window, min_periods=window).apply(_slope, raw=False)
         )
 
-        # 截面 Z-Score 标准化
-        df['slope_z'] = df.groupby('trade_date')['slope_raw'].transform(
-            lambda x: (x - x.mean()) / x.std() if x.std() > 0 else 0.0
-        )
+        # 截面 Z-Score 标准化（全 NaN 时保持 NaN，不写 0）
+        def _zscore(x):
+            s = x.std()
+            if s > 0:
+                return (x - x.mean()) / s
+            return pd.Series(np.nan, index=x.index)
+
+        df['slope_z'] = df.groupby('trade_date')['slope_raw'].transform(_zscore)
 
         return df['slope_z']
 
