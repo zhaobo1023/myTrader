@@ -107,23 +107,39 @@ class OnePagerDataCollector:
 
         result: Dict[str, str] = {}
 
-        result["company_profile"] = self._collect_profile(full, bare, stock_name)
-        result["financial_summary"] = self._collect_financial(bare)
-        result["balance_sheet"] = self._collect_balance(bare)
-        result["valuation_snapshot"] = self._collect_valuation(bare, full)
-        result["price_technical"] = self._collect_technical(full)
-        result["dividend_analysis"] = self._collect_dividend(bare, full)
-        result["cashflow_analysis"] = self._collect_cashflow(bare, full)
-        result["income_detail"] = self._collect_income_detail(bare)
-        result["rps_momentum"] = self._collect_rps(full)
-        result["quality_factors"] = self._collect_quality(full)
-        result["growth_analysis"] = self._compute_growth(bare)
-        result["roe_decomposition"] = self._compute_roe_trend(bare)
-        result["valuation_verdict"] = self._compute_valuation_verdict(bare, full)
+        _collectors = [
+            ("company_profile",    lambda: self._collect_profile(full, bare, stock_name)),
+            ("financial_summary",  lambda: self._collect_financial(bare)),
+            ("balance_sheet",      lambda: self._collect_balance(bare)),
+            ("valuation_snapshot", lambda: self._collect_valuation(bare, full)),
+            ("price_technical",    lambda: self._collect_technical(full)),
+            ("dividend_analysis",  lambda: self._collect_dividend(bare, full)),
+            ("cashflow_analysis",  lambda: self._collect_cashflow(bare, full)),
+            ("income_detail",      lambda: self._collect_income_detail(bare)),
+            ("rps_momentum",       lambda: self._collect_rps(full)),
+            ("quality_factors",    lambda: self._collect_quality(full)),
+            ("growth_analysis",    lambda: self._compute_growth(bare)),
+            ("roe_decomposition",  lambda: self._compute_roe_trend(bare)),
+            ("valuation_verdict",  lambda: self._compute_valuation_verdict(bare, full)),
+        ]
+
+        import logging as _logging
+        _log = _logging.getLogger("myTrader.one_pager_data")
+
+        for key, fn in _collectors:
+            try:
+                result[key] = fn()
+            except Exception as e:
+                _log.warning("[OnePagerData] %s failed for %s: %s", key, stock_code, e)
+                result[key] = f"[{key} 数据暂不可用]"
 
         # 银行专项数据：当 company_profile 中行业含"银行"时自动加入
-        if "银行" in result["company_profile"]:
-            result["bank_indicators"] = self._collect_bank_indicators(bare)
+        if "银行" in result.get("company_profile", ""):
+            try:
+                result["bank_indicators"] = self._collect_bank_indicators(bare)
+            except Exception as e:
+                _log.warning("[OnePagerData] bank_indicators failed for %s: %s", stock_code, e)
+                result["bank_indicators"] = ""
         else:
             result["bank_indicators"] = ""
 
