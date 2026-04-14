@@ -262,7 +262,7 @@ def calc_trend() -> dict:
 
         # 1) Index daily returns
         for idx_cfg in C.INDEX_CONFIG:
-            s = _load_macro(idx_cfg['key'], days=300)
+            s = _load_macro(idx_cfg['key'], days=500)
             if len(s) >= 2:
                 cur = float(s.iloc[-1])
                 prev = float(s.iloc[-2])
@@ -280,20 +280,20 @@ def calc_trend() -> dict:
                 }
 
         # 2) MA position and alignment for CSI300
-        csi300 = _load_macro('idx_csi300', days=300)
-        if len(csi300) >= 250:
+        csi300 = _load_macro('idx_csi300', days=500)
+        if len(csi300) >= 60:
             cur_price = float(csi300.iloc[-1])
             ma5 = float(csi300.tail(5).mean())
             ma20 = float(csi300.tail(20).mean())
             ma60 = float(csi300.tail(60).mean())
-            ma250 = float(csi300.tail(250).mean())
+            ma250 = float(csi300.tail(250).mean()) if len(csi300) >= 250 else None
 
             above = []
             below = []
             for name, val in [('MA5', ma5), ('MA20', ma20), ('MA60', ma60), ('MA250', ma250)]:
-                if cur_price > val:
+                if val is not None and cur_price > val:
                     above.append(name)
-                else:
+                elif val is not None:
                     below.append(name)
 
             result['indicators']['ma_position'] = {
