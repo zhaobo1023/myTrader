@@ -968,6 +968,19 @@ def get_signal_log(days: int = 7) -> list:
 # Master function
 # ---------------------------------------------------------------------------
 
+def _get_latest_trade_date() -> str:
+    """Get the latest trade date from macro_data (most recent data point)."""
+    try:
+        rows = execute_query(
+            "SELECT MAX(date) as max_date FROM macro_data WHERE indicator='idx_csi300'"
+        )
+        if rows and rows[0]['max_date']:
+            return rows[0]['max_date'].strftime('%Y-%m-%d')
+    except Exception:
+        pass
+    return date.today().strftime('%Y-%m-%d')
+
+
 def compute_dashboard() -> dict:
     """
     Compute the full 6-section market dashboard.
@@ -975,7 +988,7 @@ def compute_dashboard() -> dict:
     """
     logger.info("Computing market dashboard...")
     result = {
-        'updated_at': date.today().strftime('%Y-%m-%d'),
+        'updated_at': _get_latest_trade_date(),
         'temperature': calc_temperature(),
         'trend': calc_trend(),
         'sentiment': calc_sentiment(),

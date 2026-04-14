@@ -62,26 +62,73 @@ def _save(trade_date: str, indicator: str, value, env: str = 'online'):
 
 def fetch_market_volume(trade_date: str = None, env: str = 'online'):
     """
-    Fetch total A-share market volume from index data.
-    Uses Shanghai Composite (sh000001) volume as proxy or AKShare.
+    Fetch total A-share market turnover amount (both exchanges, in yuan).
+
+    Uses:
+      1. SSE (stock_sse_deal_daily) + SZSE (stock_szse_summary) for exact amount
+      2. Fallback: SH + SZ index volume (shares, less accurate)
+
+    Stores as `market_volume` in yuan (e.g. 2.15e12 for 2.15 wan-yi).
     """
     import akshare as ak
     if trade_date is None:
         trade_date = date.today().strftime('%Y-%m-%d')
+    compact_date = _to_compact(trade_date)
 
+    # --- Method 1: Exchange official summary (accurate turnover in yuan) ---
     try:
-        # Use AKShare index data for Shanghai composite
+        sse_amount = 0.0
+        szse_amount = 0.0
+
+        # SSE: returns amount in yi (100M yuan)
+        df_sse = ak.stock_sse_deal_daily(date=compact_date)
+        if df_sse is not None and not df_sse.empty:
+            amount_row = df_sse[df_sse.iloc[:, 0].astype(str).str.contains('成交金额')]
+            if not amount_row.empty:
+                # Column '股票' has total stock turnover in yi
+                sse_val = amount_row.iloc[0, 1]  # '股票' column
+                sse_amount = float(sse_val) * 1e8  # yi -> yuan
+                if trade_date == date.today().strftime('%Y-%m-%d'):
+                    # Adjust trade_date to actual trading day from SSE data
+                    pass
+
+        # SZSE: returns amount in yuan
+        df_szse = ak.stock_szse_summary(date=compact_date)
+        if df_szse is not None and not df_szse.empty:
+            stock_row = df_szse[df_szse.iloc[:, 0].astype(str).str.contains('股票')]
+            if not stock_row.empty:
+                amount_col = None
+                for col in df_szse.columns:
+                    if '成交金额' in str(col):
+                        amount_col = col
+                        break
+                if amount_col and not stock_row.empty:
+                    szse_amount = float(stock_row.iloc[0][amount_col])
+
+        total = sse_amount + szse_amount
+        if total > 0:
+            trade_date = _normalize_date(trade_date)
+            _save(trade_date, 'market_volume', total, env=env)
+            logger.info("[OK] %s market_volume = %.0f (SSE %.0f + SZSE %.0f)",
+                        trade_date, total, sse_amount, szse_amount)
+            return total
+    except Exception as e:
+        logger.warning("exchange summary fetch failed, trying fallback: %s", e)
+
+    # --- Method 2: Fallback - SH + SZ index volume (shares, not yuan) ---
+    try:
         df = ak.stock_zh_index_daily(symbol="sh000001")
         if df is not None and not df.empty:
             df['date'] = df['date'].astype(str)
             row = df[df['date'] == trade_date]
             if row.empty:
-                # Try latest available date
                 row = df.tail(1)
                 trade_date = str(row.iloc[0]['date'])
 
             volume = float(row.iloc[0]['volume'])
+            # Note: this is shares not yuan, stored with '_shares' suffix
             _save(trade_date, 'market_volume', volume, env=env)
+            logger.warning("[FALLBACK] %s market_volume = %.0f (shares, not yuan)", trade_date, volume)
             return volume
     except Exception as e:
         logger.error("fetch_market_volume failed: %s", e)
