@@ -4,14 +4,23 @@
 
 ```
 服务器: 123.56.3.1
-工作目录: /root/app
+SSH 别名: aliyun-ecs (见 ~/.ssh/config)
 ```
 
-### 目录映射
+### 两个代码目录说明
+
+| 目录 | 用途 | 说明 |
+|------|------|------|
+| `/root/app` | API + Celery 代码目录 | 卷挂载到容器 /app，git pull 后直接生效 |
+| `/app/myTrader` | 前端代码目录 | 用于构建 mytrader-web 镜像，git pull 后需重新 build |
+
+两个目录都指向同一个 GitHub 仓库，均需执行 `git pull`。
+
+### 目录映射（容器卷挂载）
 
 | 宿主机路径 | 容器内路径 | 说明 |
 |-----------|-----------|------|
-| `/root/app` | `/app` | 代码目录（卷挂载） |
+| `/root/app` | `/app` | API 代码目录（卷挂载，改动立即生效） |
 | `/root/app/output` | `/app/output` | 输出文件目录 |
 | `/root/app/.pip_cache` | `/root/.local` | Python 依赖缓存 |
 | `/root/app/nginx.conf` | `/etc/nginx/conf.d/default.conf` | Nginx 配置 |
@@ -27,53 +36,51 @@
 
 ## 重启脚本
 
-### restart.sh (旧版)
-```bash
-bash /root/app/restart.sh
-```
-问题：依赖安装不完整，缺少 pyarrow
-
-### restart_v2.sh (推荐)
+### restart_v2.sh (推荐，用于全量重启)
 ```bash
 bash /root/app/restart_v2.sh
 ```
-改进：
-- ✅ 添加 pyarrow 依赖
-- ✅ 更好的错误处理
-- ✅ 启动状态检测
-- ✅ 详细的部署信息
+注意：此脚本会重建并替换 API 和 Web 容器，适合全量重启场景。
 
 ## 常用运维命令
 
-### 服务管理
+### 查看状态
 ```bash
-# 重启所有服务
-bash /root/app/restart_v2.sh
-
-# 查看容器状态
 docker ps | grep mytrader
-
-# 查看容器日志
 docker logs -f mytrader-api
 docker logs -f mytrader-web
 docker logs -f mytrader-nginx-new
-
-# 重启单个容器
-docker restart mytrader-api
-
-# 停止所有服务
-docker stop mytrader-api mytrader-web mytrader-nginx-new
 ```
 
-### 代码更新
+### 代码更新 - 仅后端 Python 改动
 ```bash
-# 由于使用卷挂载，代码更新后无需重建镜像
-cd /root/app
-git pull origin main
-
-# 如果需要重启服务
-docker restart mytrader-api
+# API 使用卷挂载，git pull 后重启容器即可
+ssh aliyun-ecs "cd /root/app && git pull origin main && docker restart mytrader-api"
 ```
+
+### 代码更新 - 前端改动（需重新 build 镜像）
+```bash
+# 1. 拉取最新代码到前端目录
+ssh aliyun-ecs "cd /app/myTrader && git pull origin main"
+
+# 2. 重新构建镜像（NEXT_PUBLIC_API_BASE_URL 在 build 时静态嵌入，必须在此传入）
+ssh aliyun-ecs "cd /app/myTrader/web && \
+  NEXT_PUBLIC_API_BASE_URL=http://123.56.3.1 docker build \
+  --build-arg NEXT_PUBLIC_API_BASE_URL=http://123.56.3.1 \
+  -t mytrader-web:latest ."
+
+# 3. 替换运行中的容器
+ssh aliyun-ecs "docker stop mytrader-web && docker rm mytrader-web && \
+  docker run -d \
+    --name mytrader-web \
+    --network app_mytrader-network \
+    -p 127.0.0.1:3000:3000 \
+    -e NEXT_PUBLIC_API_BASE_URL=http://123.56.3.1 \
+    --restart unless-stopped \
+    mytrader-web:latest"
+```
+
+> 注意：`NEXT_PUBLIC_*` 变量在 Next.js build 时静态嵌入 JS bundle，运行时改环境变量无效，必须重新 build 镜像。
 
 ### 进入容器调试
 ```bash

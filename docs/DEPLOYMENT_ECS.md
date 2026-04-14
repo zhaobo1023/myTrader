@@ -1,4 +1,7 @@
-# ECS 部署指南 (systemd + Nginx)
+# [已废弃] ECS 部署指南 (systemd + Nginx)
+
+> 此文档描述的是基于 systemd 的早期部署方案，当前实际部署使用 Docker 容器方式。
+> 请参考项目根目录的 DEPLOYMENT.md。
 
 ## 一、初始化部署（首次）
 
