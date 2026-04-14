@@ -560,19 +560,19 @@ export default function ThemeDetailPage() {
 
   // Table headers
   const columns = [
-    { key: 'stock', label: '股票', width: '130px' },
-    { key: 'recommender', label: '推荐人', width: '70px' },
-    { key: 'reason', label: '推荐理由', width: '110px' },
-    { key: 'rps_20', label: 'RPS20', width: '50px' },
-    { key: 'tech', label: '技术面', width: '45px' },
-    { key: 'fund', label: '基本面', width: '45px' },
-    { key: 'total', label: '综合', width: '45px' },
-    { key: 'return_5d', label: '5日%', width: '50px' },
-    { key: 'return_20d', label: '20日%', width: '50px' },
-    { key: 'trend', label: '走势', width: '95px' },
-    { key: 'votes', label: '投票', width: '65px' },
-    { key: 'status', label: '标记', width: '85px' },
-    { key: 'actions', label: '', width: '60px' },
+    { key: 'stock', label: '股票', width: '130px', tip: null },
+    { key: 'recommender', label: '推荐人', width: '70px', tip: null },
+    { key: 'reason', label: '推荐理由', width: '110px', tip: null },
+    { key: 'rps_20', label: 'RPS20', width: '50px', tip: '相对价格强度(20日)：该股过去20日涨幅在全市场中的百分位排名，满分100。>80为强势，<50为弱势。' },
+    { key: 'tech', label: '技术面', width: '45px', tip: '技术面评分(0-100)：综合MA位置、MACD方向、RSI健康度、成交量变化计算。>70偏强，<40偏弱。' },
+    { key: 'fund', label: '基本面', width: '45px', tip: '基本面评分(0-100)：综合ROE、PE估值、净利润增速计算。>70质地优良，<40需谨慎。' },
+    { key: 'total', label: '综合', width: '45px', tip: '综合评分 = RPS×40% + 技术面×40% + 基本面×20%。用于主题内横向排名。' },
+    { key: 'return_5d', label: '5日%', width: '50px', tip: '近5个交易日涨跌幅：(今日收盘 - 5日前收盘) / 5日前收盘。反映短期动量，可横向比较主题内强弱。' },
+    { key: 'return_20d', label: '20日%', width: '50px', tip: '近20个交易日涨跌幅：(今日收盘 - 20日前收盘) / 20日前收盘。约1个月，反映中期趋势强度。' },
+    { key: 'trend', label: '走势', width: '95px', tip: null },
+    { key: 'votes', label: '投票', width: '65px', tip: null },
+    { key: 'status', label: '标记', width: '85px', tip: null },
+    { key: 'actions', label: '', width: '60px', tip: null },
   ];
 
   return (
@@ -664,6 +664,20 @@ export default function ThemeDetailPage() {
       {/* Add stock */}
       <AddStockSection themeId={themeId} onAdded={refetchStocks} />
 
+      {/* Metric legend */}
+      <div style={{
+        display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginBottom: '12px',
+        padding: '8px 12px', borderRadius: '6px',
+        background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)',
+        fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6,
+      }}>
+        <span><b style={{ color: 'var(--text-secondary)' }}>RPS20</b> 相对强度百分位，&gt;80强势</span>
+        <span><b style={{ color: 'var(--text-secondary)' }}>技术面</b> MA+MACD+RSI+量能，满分100</span>
+        <span><b style={{ color: 'var(--text-secondary)' }}>基本面</b> ROE+PE+增速，满分100</span>
+        <span><b style={{ color: 'var(--text-secondary)' }}>综合</b> RPS×40%+技术×40%+基本面×20%</span>
+        <span><b style={{ color: 'var(--text-secondary)' }}>5日% / 20日%</b> 近5/20交易日市场涨跌幅（非持仓收益）</span>
+      </div>
+
       {/* Filters */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', alignItems: 'center' }}>
         <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>筛选:</span>
@@ -710,13 +724,18 @@ export default function ThemeDetailPage() {
               {columns.map((col) => (
                 <th
                   key={col.key}
+                  title={col.tip || undefined}
                   style={{
                     padding: '8px 6px', textAlign: 'left', fontWeight: 500,
                     color: 'var(--text-muted)', borderBottom: '1px solid var(--border-subtle)',
                     width: col.width, whiteSpace: 'nowrap', fontSize: '11px',
+                    cursor: col.tip ? 'help' : 'default',
                   }}
                 >
                   {col.label}
+                  {col.tip && (
+                    <span style={{ marginLeft: '2px', fontSize: '10px', color: 'var(--text-muted)', opacity: 0.6 }}>?</span>
+                  )}
                 </th>
               ))}
             </tr>

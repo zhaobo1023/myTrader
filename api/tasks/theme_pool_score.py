@@ -490,11 +490,8 @@ def _calc_fundamental_score(stock_code: str, env: str) -> dict:
 
 
 def _calc_returns(stock_code: str, entry_price: float, entry_date, score_date: date, env: str) -> dict:
-    """Calculate returns from entry price at different windows."""
+    """Calculate recent price returns (N-day momentum) and holding return from entry price."""
     from config.db import execute_query
-
-    if not entry_price or entry_price <= 0:
-        return {}
 
     result = {}
 
@@ -503,7 +500,7 @@ def _calc_returns(stock_code: str, entry_price: float, entry_date, score_date: d
         SELECT trade_date, close_price
         FROM trade_stock_daily
         WHERE stock_code = %s
-        ORDER BY trade_date DESC LIMIT 60
+        ORDER BY trade_date DESC LIMIT 65
     """
     try:
         rows = list(execute_query(sql, (stock_code,), env=env))
@@ -514,18 +511,17 @@ def _calc_returns(stock_code: str, entry_price: float, entry_date, score_date: d
         if not latest_close:
             return {}
 
-        # Calculate return from entry_price to price at different windows
-        # return_5d = (price 5 days ago - entry_price) / entry_price * 100
+        # Near-term momentum: (today - N days ago) / N days ago * 100
+        # rows[0] = today, rows[N-1] = N trading days ago (rows[4] = 5d ago)
         for window, key in [(5, 'return_5d'), (10, 'return_10d'), (20, 'return_20d'), (60, 'return_60d')]:
-            if len(rows) >= window:
-                past_close = _to_float(rows[min(window - 1, len(rows) - 1)].get('close_price'))
+            if len(rows) > window:
+                past_close = _to_float(rows[window].get('close_price'))
                 if past_close and past_close > 0:
-                    result[key] = round((past_close - entry_price) / entry_price * 100, 2)
+                    result[key] = round((latest_close - past_close) / past_close * 100, 2)
                 else:
                     result[key] = None
             else:
-                # Not enough history, use latest close
-                result[key] = round((latest_close - entry_price) / entry_price * 100, 2)
+                result[key] = None
 
     except Exception as e:
         logger.warning('[THEME_POOL_SCORE] return calc failed for %s: %s', stock_code, e)
