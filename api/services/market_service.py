@@ -223,9 +223,9 @@ async def search_stocks(keyword: str, limit: int = 20) -> dict:
         FROM trade_stock_basic
         WHERE stock_code LIKE %s OR stock_name LIKE %s
         UNION
-        SELECT fund_code AS stock_code, fund_code AS stock_name, 'ETF' AS industry
-        FROM (SELECT DISTINCT fund_code FROM trade_etf_daily) etf
-        WHERE fund_code LIKE %s
+        SELECT fund_code AS stock_code, fund_name AS stock_name, 'ETF' AS industry
+        FROM trade_etf_info
+        WHERE fund_code LIKE %s OR fund_name LIKE %s
         ORDER BY
             CASE WHEN stock_code = %s THEN 1
                  WHEN stock_code LIKE %s THEN 2
@@ -234,7 +234,7 @@ async def search_stocks(keyword: str, limit: int = 20) -> dict:
     """
     params = (
         code_like, code_like,
-        code_like,
+        code_like, code_like,
         code_exact, code_like,
         limit,
     )
