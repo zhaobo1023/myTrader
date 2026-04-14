@@ -33,7 +33,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# 配置
+# 配置（可被命令行参数覆盖）
 BATCH_SIZE = 500  # 每批处理的股票数量
 START_DATE = '2024-01-01'
 END_DATE = date.today().strftime('%Y-%m-%d')
@@ -403,6 +403,21 @@ def save_factors_batch(factors_data):
 
 def main():
     """主函数 - 按股票分批回填扩展因子"""
+    import argparse as _ap
+    parser = _ap.ArgumentParser(description='扩展因子计算')
+    parser.add_argument('--start', type=str, default=None, help='回填起始日期 YYYY-MM-DD')
+    parser.add_argument('--end', type=str, default=None, help='回填结束日期 YYYY-MM-DD')
+    args = parser.parse_args()
+
+    global START_DATE, END_DATE, DATA_START_DATE
+    if args.start:
+        START_DATE = args.start
+        # data_start 往前推120天保证因子计算有足够历史
+        data_start_dt = pd.to_datetime(START_DATE) - pd.Timedelta(days=120)
+        DATA_START_DATE = data_start_dt.strftime('%Y-%m-%d')
+    if args.end:
+        END_DATE = args.end
+
     logger.info("=" * 60)
     logger.info("扩展因子计算程序")
     logger.info(f"回填范围: {START_DATE} ~ {END_DATE}")

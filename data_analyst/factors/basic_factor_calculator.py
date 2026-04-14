@@ -334,72 +334,100 @@ def calculate_and_save_factors(calc_date=None, start_date='2023-01-01'):
     logger.info("=" * 60)
 
 
-def backfill_factors(start_date='2024-01-01', end_date=None):
+def backfill_factors(start_date='2024-01-01', end_date=None, batch_size=500):
     """
-    回填历史因子数据 (优化版: 一次性计算所有日期)
+    回填历史因子数据 (分批模式: 每批 batch_size 只股票，避免 OOM)
+
+    每批加载该批股票从 data_start 到 end_date 的数据，计算后只保存
+    start_date ~ end_date 范围内的因子，然后释放内存继续下一批。
     """
     if end_date is None:
         end_date = date.today()
 
+    # 计算因子需要足够的历史数据（mom_60 需要60个交易日）
+    # 取 start_date 往前推120个自然日作为数据加载起点
+    start_dt = pd.to_datetime(start_date)
+    data_start = (start_dt - pd.Timedelta(days=120)).strftime('%Y-%m-%d')
+    end_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
+
     logger.info("=" * 60)
-    logger.info("因子回填程序 (优化版)")
-    logger.info(f"回填范围: {start_date} ~ {end_date}")
+    logger.info("因子回填程序 (分批模式)")
+    logger.info(f"回填范围: {start_date} ~ {end_str}")
+    logger.info(f"数据加载起点: {data_start}")
+    logger.info(f"每批股票数: {batch_size}")
     logger.info("=" * 60)
 
-    # 1. 创建表
     create_factor_table()
 
-    # 2. 一次性加载所有数据
-    logger.info(f"\n[1] 加载K线数据 (从 2023-01-01 开始)...")
-    t0 = time()
-    all_data = load_daily_data('2023-01-01', end_date)
-    logger.info(f"  加载完成: {len(all_data)} 只股票, 耗时 {time()-t0:.1f}s")
+    # 获取全部股票代码
+    codes_result = execute_query("SELECT DISTINCT stock_code FROM trade_stock_basic ORDER BY stock_code")
+    all_codes = [r['stock_code'] for r in codes_result] if codes_result else []
+    total = len(all_codes)
+    logger.info(f"共 {total} 只股票，分 {(total + batch_size - 1) // batch_size} 批处理")
 
-    if not all_data:
-        logger.error("  未加载到数据")
-        return
+    total_saved = 0
+    start_dt_filter = pd.to_datetime(start_date)
+    end_dt_filter = pd.to_datetime(end_str)
 
-    # 3. 一次性计算所有因子
-    logger.info(f"\n[2] 计算所有日期的基础因子...")
-    t0 = time()
-    all_factors = calc_all_factors_batch(all_data)
-    logger.info(f"  计算完成: {len(all_factors)} 只股票, 耗时 {time()-t0:.1f}s")
+    for batch_idx in range(0, total, batch_size):
+        batch_codes = all_codes[batch_idx:batch_idx + batch_size]
+        batch_num = batch_idx // batch_size + 1
+        total_batches = (total + batch_size - 1) // batch_size
+        logger.info(f"\n--- 批次 {batch_num}/{total_batches} ({len(batch_codes)} 只股票) ---")
 
-    if not all_factors:
-        logger.error("  因子计算失败")
-        return
+        # 只加载本批股票的数据
+        placeholders = ','.join(['%s'] * len(batch_codes))
+        sql = f"""
+            SELECT stock_code, trade_date, open_price, high_price, low_price,
+                   close_price, volume, amount, turnover_rate
+            FROM trade_stock_daily
+            WHERE trade_date >= %s AND trade_date <= %s
+              AND stock_code IN ({placeholders})
+            ORDER BY stock_code, trade_date ASC
+        """
+        params = [data_start, end_str] + batch_codes
+        t0 = time()
+        rows = execute_query(sql, params)
+        if not rows:
+            logger.warning(f"  批次 {batch_num}: 无数据，跳过")
+            continue
 
-    # 4. 过滤目标日期范围
-    logger.info(f"\n[3] 过滤目标日期范围 ({start_date} ~ {end_date})...")
-    filtered_factors = {}
-    start_dt = pd.to_datetime(start_date)
-    end_dt = pd.to_datetime(end_date)
+        df_all = pd.DataFrame(rows)
+        df_all['trade_date'] = pd.to_datetime(df_all['trade_date'])
+        for col in ['open_price', 'high_price', 'low_price', 'close_price', 'volume', 'amount', 'turnover_rate']:
+            if col in df_all.columns:
+                df_all[col] = pd.to_numeric(df_all[col], errors='coerce')
 
-    for code, factors_df in all_factors.items():
-        mask = (factors_df.index >= start_dt) & (factors_df.index <= end_dt)
-        filtered = factors_df[mask]
-        if not filtered.empty:
-            filtered_factors[code] = filtered
+        batch_data = {}
+        for code in df_all['stock_code'].unique():
+            group = df_all[df_all['stock_code'] == code]
+            batch_data[code] = group.set_index('trade_date').sort_index()
+        logger.info(f"  加载完成: {len(batch_data)} 只股票, {time()-t0:.1f}s")
 
-    # 统计日期数量
-    all_dates = set()
-    for factors_df in filtered_factors.values():
-        all_dates.update(factors_df.index.strftime('%Y-%m-%d').tolist())
-    logger.info(f"  过滤完成: {len(filtered_factors)} 只股票, {len(all_dates)} 个交易日")
+        # 计算因子
+        t0 = time()
+        all_factors = calc_all_factors_batch(batch_data)
+        logger.info(f"  因子计算: {len(all_factors)} 只股票, {time()-t0:.1f}s")
 
-    # 5. 批量保存
-    logger.info(f"\n[4] 批量保存到数据库...")
-    t0 = time()
-    count = save_factors_batch(filtered_factors)
-    logger.info(f"  保存完成: {count:,} 条记录, 耗时 {time()-t0:.1f}s")
+        # 过滤目标日期范围
+        filtered = {}
+        for code, fdf in all_factors.items():
+            mask = (fdf.index >= start_dt_filter) & (fdf.index <= end_dt_filter)
+            sub = fdf[mask]
+            if not sub.empty:
+                filtered[code] = sub
 
-    # 6. 验证
-    logger.info(f"\n[5] 验证数据...")
-    sql = "SELECT COUNT(*) as cnt FROM trade_stock_basic_factor"
-    result = execute_query(sql)
-    total = result[0]['cnt'] if result else 0
-    logger.info(f"  因子表总记录数: {total:,}")
+        # 保存
+        t0 = time()
+        saved = save_factors_batch(filtered)
+        total_saved += saved
+        logger.info(f"  保存: {saved} 条, {time()-t0:.1f}s  (累计 {total_saved:,})")
 
+        # 释放内存
+        del df_all, batch_data, all_factors, filtered
+
+    # 验证
+    logger.info(f"\n[验证] 查询因子表...")
     sql = """
         SELECT calc_date, COUNT(*) as cnt
         FROM trade_stock_basic_factor
@@ -408,12 +436,12 @@ def backfill_factors(start_date='2024-01-01', end_date=None):
         LIMIT 5
     """
     result = execute_query(sql)
-    logger.info(f"  最近5个交易日:")
+    logger.info("最近5个交易日:")
     for r in result:
-        logger.info(f"    {r['calc_date']}: {r['cnt']} 只股票")
+        logger.info(f"  {r['calc_date']}: {r['cnt']} 只股票")
 
     logger.info("\n" + "=" * 60)
-    logger.info("✅ 因子回填完成!")
+    logger.info(f"因子回填完成! 共写入 {total_saved:,} 条记录")
     logger.info("=" * 60)
 
 
