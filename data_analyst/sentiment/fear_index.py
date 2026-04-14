@@ -49,8 +49,21 @@ class FearIndexService:
         return None
 
     def fetch_vix(self) -> Optional[float]:
-        """获取 VIX 恐慌指数，失败返回 None 而非 0.0"""
-        return self._fetch_yf_ticker(self.config['vix_ticker'], 'VIX')
+        """获取 VIX 恐慌指数，yfinance 失败时用 QVIX 替代"""
+        result = self._fetch_yf_ticker(self.config['vix_ticker'], 'VIX')
+        if result is not None:
+            return result
+        # Fallback: QVIX (50ETF implied volatility, China market proxy)
+        try:
+            import akshare as ak
+            df = ak.index_option_50etf_qvix()
+            if df is not None and not df.empty:
+                qvix = float(df['close'].iloc[-1])
+                logger.info("VIX fallback to QVIX: %.2f", qvix)
+                return qvix
+        except Exception as e:
+            logger.error("QVIX fallback failed: %s", e)
+        return None
 
     def fetch_ovx(self) -> Optional[float]:
         """获取 OVX 原油波动率指数，失败返回 None 而非 0.0"""
@@ -61,8 +74,25 @@ class FearIndexService:
         return self._fetch_yf_ticker(self.config['gvz_ticker'], 'GVZ')
 
     def fetch_us10y(self) -> Optional[float]:
-        """获取美国10年期国债收益率，失败返回 None 而非 0.0"""
-        return self._fetch_yf_ticker(self.config['us10y_ticker'], 'US10Y')
+        """获取美国10年期国债收益率，yfinance 失败时用 AKShare bond_zh_us_rate 替代"""
+        result = self._fetch_yf_ticker(self.config['us10y_ticker'], 'US10Y')
+        if result is not None:
+            return result
+        # Fallback: AKShare bond_zh_us_rate (works on Aliyun servers)
+        try:
+            import akshare as ak
+            from datetime import date, timedelta
+            start = (date.today() - timedelta(days=30)).strftime('%Y%m%d')
+            df = ak.bond_zh_us_rate(start_date=start)
+            if df is not None and not df.empty:
+                col = '美国国债收益率10年'
+                if col in df.columns:
+                    val = df[col].dropna().iloc[-1]
+                    logger.info("US10Y fallback to AKShare bond_zh_us_rate: %.2f", val)
+                    return float(val)
+        except Exception as e:
+            logger.error("US10Y AKShare fallback failed: %s", e)
+        return None
 
     def calculate_fear_greed_score(self, vix: Optional[float], us10y: Optional[float]) -> int:
         """
