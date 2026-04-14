@@ -5,7 +5,7 @@ import AppShell from '@/components/layout/AppShell';
 import apiClient from '@/lib/api-client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
 // ---------------------------------------------------------------------------
 // Types

@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import AppShell from '@/components/layout/AppShell';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
 // ---------------------------------------------------------------------------
 // Types

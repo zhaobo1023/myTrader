@@ -27,7 +27,7 @@ export function useBacktestSSE(jobId: number | null) {
     if (!jobId) return;
 
     const token = localStorage.getItem('access_token');
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || '';
     const url = `${baseUrl}/api/strategy/backtest/${jobId}/sse?token=${token}`;
 
     const eventSource = new EventSource(url);

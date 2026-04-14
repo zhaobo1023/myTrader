@@ -98,7 +98,7 @@ const signalLevelStyle = (level: string): React.CSSProperties => {
 // Report detail panel
 // ---------------------------------------------------------------------------
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
 function ReportDetail({ report }: { report: TechReportCard }) {
   const indKeys = Object.keys(report.indicators || {}).slice(0, 20);

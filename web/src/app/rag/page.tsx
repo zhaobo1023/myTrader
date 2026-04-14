@@ -34,7 +34,7 @@ interface ReportListItem {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
 async function searchStocks(keyword: string): Promise<StockSearchItem[]> {
   if (!keyword.trim()) return [];

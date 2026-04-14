@@ -30,7 +30,7 @@ interface StockCard {
 // Constants
 // ---------------------------------------------------------------------------
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
 const TAB_CONFIG: { key: StockTab; label: string }[] = [
   { key: 'one-pager',     label: '一页纸研究' },
