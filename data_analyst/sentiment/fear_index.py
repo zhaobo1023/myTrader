@@ -26,86 +26,71 @@ class FearIndexService:
     def __init__(self):
         self.config = DATA_SOURCE_CONFIG['yfinance']
 
-    def fetch_vix(self) -> float:
-        """获取 VIX 恐慌指数"""
-        try:
-            ticker = yf.Ticker(self.config['vix_ticker'])
-            data = ticker.history(period='1d')
-            if not data.empty:
-                vix_value = float(data['Close'].iloc[-1])
-                if vix_value < 0:
-                    logger.warning(f"Invalid VIX value: {vix_value}, using 0.0")
-                    return 0.0
-                return vix_value
-            logger.warning("VIX data is empty")
-            return 0.0
-        except Exception as e:
-            logger.error(f"Failed to fetch VIX: {e}")
-            return 0.0
+    def _fetch_yf_ticker(self, ticker_symbol: str, name: str) -> Optional[float]:
+        """
+        Fetch latest close price from yfinance with retry.
+        Returns None on failure (not 0.0) to distinguish missing data from actual zero.
+        """
+        for attempt in range(3):
+            try:
+                ticker = yf.Ticker(ticker_symbol)
+                data = ticker.history(period='5d')
+                if not data.empty:
+                    value = float(data['Close'].dropna().iloc[-1])
+                    if value <= 0:
+                        logger.warning(f"Suspicious {name} value: {value} (attempt {attempt + 1})")
+                        if attempt < 2:
+                            continue
+                        return None
+                    return value
+                logger.warning(f"{name} data is empty (attempt {attempt + 1})")
+            except Exception as e:
+                logger.error(f"Failed to fetch {name} (attempt {attempt + 1}): {e}")
+        return None
 
-    def fetch_ovx(self) -> float:
-        """获取 OVX 原油波动率指数"""
-        try:
-            ticker = yf.Ticker(self.config['ovx_ticker'])
-            data = ticker.history(period='1d')
-            if not data.empty:
-                return float(data['Close'].iloc[-1])
-            logger.warning("OVX data is empty")
-            return 0.0
-        except Exception as e:
-            logger.error(f"Failed to fetch OVX: {e}")
-            return 0.0
+    def fetch_vix(self) -> Optional[float]:
+        """获取 VIX 恐慌指数，失败返回 None 而非 0.0"""
+        return self._fetch_yf_ticker(self.config['vix_ticker'], 'VIX')
 
-    def fetch_gvz(self) -> float:
-        """获取 GVZ 黄金波动率指数"""
-        try:
-            ticker = yf.Ticker(self.config['gvz_ticker'])
-            data = ticker.history(period='1d')
-            if not data.empty:
-                return float(data['Close'].iloc[-1])
-            logger.warning("GVZ data is empty")
-            return 0.0
-        except Exception as e:
-            logger.error(f"Failed to fetch GVZ: {e}")
-            return 0.0
+    def fetch_ovx(self) -> Optional[float]:
+        """获取 OVX 原油波动率指数，失败返回 None 而非 0.0"""
+        return self._fetch_yf_ticker(self.config['ovx_ticker'], 'OVX')
 
-    def fetch_us10y(self) -> float:
-        """获取美国10年期国债收益率"""
-        try:
-            ticker = yf.Ticker(self.config['us10y_ticker'])
-            data = ticker.history(period='1d')
-            if not data.empty:
-                return float(data['Close'].iloc[-1])
-            logger.warning("US10Y data is empty")
-            return 0.0
-        except Exception as e:
-            logger.error(f"Failed to fetch US10Y: {e}")
-            return 0.0
+    def fetch_gvz(self) -> Optional[float]:
+        """获取 GVZ 黄金波动率指数，失败返回 None 而非 0.0"""
+        return self._fetch_yf_ticker(self.config['gvz_ticker'], 'GVZ')
 
-    def calculate_fear_greed_score(self, vix: float, us10y: float) -> int:
+    def fetch_us10y(self) -> Optional[float]:
+        """获取美国10年期国债收益率，失败返回 None 而非 0.0"""
+        return self._fetch_yf_ticker(self.config['us10y_ticker'], 'US10Y')
+
+    def calculate_fear_greed_score(self, vix: Optional[float], us10y: Optional[float]) -> int:
         """
         计算综合恐慌/贪婪评分 (0-100)
         0 = 极度恐慌, 100 = 极度贪婪
+        None 值跳过对应维度的调整
         """
         score = 50  # 基准分
 
         # VIX 维度
-        if vix < VIX_THRESHOLDS['extreme_calm']:
-            score += 30      # 极度贪婪
-        elif vix < VIX_THRESHOLDS['normal']:
-            score += 15      # 偏贪婪
-        elif vix < VIX_THRESHOLDS['anxiety']:
-            score += 0       # 中性
-        elif vix < VIX_THRESHOLDS['fear']:
-            score -= 15      # 恐慌
-        else:
-            score -= 30      # 极度恐慌
+        if vix is not None:
+            if vix < VIX_THRESHOLDS['extreme_calm']:
+                score += 30      # 极度贪婪
+            elif vix < VIX_THRESHOLDS['normal']:
+                score += 15      # 偏贪婪
+            elif vix < VIX_THRESHOLDS['anxiety']:
+                score += 0       # 中性
+            elif vix < VIX_THRESHOLDS['fear']:
+                score -= 15      # 恐慌
+            else:
+                score -= 30      # 极度恐慌
 
         # 10年期国债维度
-        if us10y < US10Y_THRESHOLDS['low']:
-            score += 10      # 宽松利好
-        elif us10y > US10Y_THRESHOLDS['high'] + 0.4:  # > 4.8
-            score -= 10      # 紧缩利空
+        if us10y is not None:
+            if us10y < US10Y_THRESHOLDS['low']:
+                score += 10      # 宽松利好
+            elif us10y > US10Y_THRESHOLDS['high'] + 0.4:  # > 4.8
+                score -= 10      # 紧缩利空
 
         return max(0, min(100, score))
 
@@ -122,8 +107,10 @@ class FearIndexService:
         else:
             return 'extreme_greed'
 
-    def get_vix_level(self, vix: float) -> str:
+    def get_vix_level(self, vix: Optional[float]) -> str:
         """获取 VIX 级别描述"""
+        if vix is None:
+            return '数据获取失败'
         if vix < VIX_THRESHOLDS['extreme_calm']:
             return '极度平静(警惕自满)'
         elif vix < VIX_THRESHOLDS['normal']:
@@ -135,8 +122,10 @@ class FearIndexService:
         else:
             return '极度恐慌'
 
-    def get_us10y_strategy(self, us10y: float) -> str:
+    def get_us10y_strategy(self, us10y: Optional[float]) -> str:
         """获取 US10Y 策略建议"""
+        if us10y is None:
+            return '数据获取失败'
         if us10y > US10Y_THRESHOLDS['high']:
             return '利率偏高，看好价值股和防御板块'
         elif us10y > US10Y_THRESHOLDS['watershed']:
@@ -144,12 +133,14 @@ class FearIndexService:
         else:
             return '宽松预期，资金回流成长股'
 
-    def check_risk_contagion(self, vix: float, ovx: float) -> Optional[str]:
+    def check_risk_contagion(self, vix: Optional[float], ovx: Optional[float]) -> Optional[str]:
         """
         风险传导检测
         - OVX飙升但VIX滞后 -> 风险集中在能源端
         - OVX与VIX同步共振向上 -> 地缘风险已触发流动性危机
         """
+        if vix is None or ovx is None:
+            return None
         if ovx > 50 and vix > 25:
             return 'OVX与VIX同步共振向上: 地缘风险已触发流动性危机或全球经济衰退预期，需立即风控'
         elif ovx > 50 and vix < 20:

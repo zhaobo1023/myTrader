@@ -21,6 +21,20 @@ tasks:
       - fetch_macro_data
     params: {}
 
+  - id: fetch_dashboard_data
+    name: "Fetch market dashboard indicators"
+    module: data_analyst.market_dashboard.fetcher
+    func: fetch_all
+    tags: [macro, dashboard, daily]
+    schedule: "17:00"
+    depends_on: []
+    params:
+      env: online
+    retry:
+      max_attempts: 2
+      delay_seconds: 60
+    timeout_seconds: 300
+
   - id: calc_market_overview
     name: "Compute market overview signals"
     module: data_analyst.market_overview.calculator
@@ -29,4 +43,5 @@ tasks:
     schedule: "after_gate"
     depends_on:
       - fetch_macro_data
+      - fetch_dashboard_data
     params: {}

@@ -138,19 +138,45 @@ def fetch_market_volume(trade_date: str = None, env: str = 'online'):
 def fetch_advance_decline(trade_date: str = None, env: str = 'online'):
     """
     Fetch number of advancing and declining stocks.
-    Uses AKShare real-time snapshot and counts by change_pct.
+
+    Method 1: stock_market_activity_legu (乐股网) - returns aggregated counts directly
+    Method 2: stock_zh_a_spot_em (东财EM) - blocked on Aliyun cloud servers
     """
     import akshare as ak
     if trade_date is None:
         trade_date = date.today().strftime('%Y-%m-%d')
 
+    # --- Method 1: stock_market_activity_legu (works on cloud servers) ---
+    try:
+        df = ak.stock_market_activity_legu()
+        if df is not None and not df.empty:
+            # Returns rows like: 上涨, 下跌, 平盘, 涨停, 跌停 etc.
+            # Column names: '项目', '数量' or similar
+            name_col = df.columns[0]
+            val_col = df.columns[1]
+            row_map = dict(zip(df[name_col].astype(str), df[val_col]))
+
+            advance = int(float(row_map.get('上涨', 0)))
+            decline = int(float(row_map.get('下跌', 0)))
+            flat = int(float(row_map.get('平盘', 0)))
+
+            if advance > 0 or decline > 0:
+                _save(trade_date, 'advance_count', advance, env=env)
+                _save(trade_date, 'decline_count', decline, env=env)
+                _save(trade_date, 'flat_count', flat, env=env)
+                logger.info("[legu] Advance: %d, Decline: %d, Flat: %d", advance, decline, flat)
+                return
+            logger.warning("stock_market_activity_legu returned zero advance/decline, trying fallback")
+    except Exception as e:
+        logger.warning("stock_market_activity_legu failed, trying fallback: %s", e)
+
+    # --- Method 2: stock_zh_a_spot_em (may be blocked on cloud) ---
     try:
         df = ak.stock_zh_a_spot_em()
         if df is None or df.empty:
             logger.warning("stock_zh_a_spot_em returned empty")
             return
 
-        # Column name may vary - try common names
         pct_col = None
         for col_name in ['涨跌幅', '涨跌百分比', 'change_pct']:
             if col_name in df.columns:
@@ -158,7 +184,7 @@ def fetch_advance_decline(trade_date: str = None, env: str = 'online'):
                 break
 
         if pct_col is None:
-            logger.warning("Cannot find change percent column in spot data. Columns: %s", list(df.columns))
+            logger.warning("Cannot find change percent column. Columns: %s", list(df.columns))
             return
 
         changes = df[pct_col].astype(float)
@@ -169,8 +195,7 @@ def fetch_advance_decline(trade_date: str = None, env: str = 'online'):
         _save(trade_date, 'advance_count', advance, env=env)
         _save(trade_date, 'decline_count', decline, env=env)
         _save(trade_date, 'flat_count', flat, env=env)
-
-        logger.info("Advance: %d, Decline: %d, Flat: %d", advance, decline, flat)
+        logger.info("[spot_em] Advance: %d, Decline: %d, Flat: %d", advance, decline, flat)
     except Exception as e:
         logger.error("fetch_advance_decline failed: %s", e)
 

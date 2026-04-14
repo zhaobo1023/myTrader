@@ -17,10 +17,10 @@ from typing import Optional, List, Dict, Any
 @dataclass
 class FearIndexResult:
     """恐慌指数结果"""
-    vix: float
-    ovx: float
-    gvz: float
-    us10y: float
+    vix: Optional[float]
+    ovx: Optional[float]
+    gvz: Optional[float]
+    us10y: Optional[float]
     fear_greed_score: int  # 0-100
     market_regime: str     # extreme_fear/fear/neutral/greed/extreme_greed
     vix_level: str         # 极度平静/正常/焦虑/恐慌/极度恐慌
