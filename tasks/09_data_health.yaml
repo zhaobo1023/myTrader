@@ -1,0 +1,16 @@
+# 09_data_health.yaml - 数据健康检查任务
+# 每日检查各数据表的数据完备性，记录到 trade_data_health 表
+
+tasks:
+  - id: check_data_completeness
+    name: "Check data completeness (daily)"
+    module: scheduler.check_data_completeness
+    func: run_check
+    tags: [health, daily]
+    schedule: "0 8 * * *"  # 每天 08:00 执行
+    depends_on: []
+    params: {}
+    env:
+      prod:
+        enabled: true
+        timeout: 300

@@ -549,3 +549,42 @@ async def generate_one_pager(body: OnePagerRequest):
             'X-Accel-Buffering': 'no',
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Data Health Check endpoints
+# ---------------------------------------------------------------------------
+
+@router.get('/health-check/latest')
+async def get_latest_health_check():
+    """Get latest data health check results."""
+    try:
+        from scheduler.check_data_completeness import get_latest_health
+        results = get_latest_health()
+        return {'check_time': results[0]['check_time'] if results else None, 'results': results}
+    except Exception as exc:
+        logger.error('[health-check] get_latest failed: %s', exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get('/health-check/summary')
+async def get_health_summary():
+    """Get data health summary (counts by status)."""
+    try:
+        from scheduler.check_data_completeness import get_health_summary
+        return get_health_summary()
+    except Exception as exc:
+        logger.error('[health-check] summary failed: %s', exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post('/health-check/run')
+async def run_health_check():
+    """Manually trigger a health check."""
+    try:
+        from scheduler.check_data_completeness import run_check
+        result = run_check()
+        return result
+    except Exception as exc:
+        logger.error('[health-check] run failed: %s', exc)
+        raise HTTPException(status_code=500, detail=str(exc))
