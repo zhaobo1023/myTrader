@@ -123,5 +123,21 @@ celery_app.conf.beat_schedule = {
         'task': 'scheduler.adapters.run_log_bias_strategy',
         'schedule': crontab(hour=3, minute=0, day_of_week='1-5'),
     },
+
+    # ============================================================
+    # SimPool 模拟池任务
+    # ============================================================
+
+    # 09:35 - T+1 买入价格填充
+    'sim-pool-fill-entry-prices': {
+        'task': 'tasks.fill_entry_prices',
+        'schedule': crontab(hour=9, minute=35, day_of_week='1-5'),
+    },
+
+    # 16:30 - 每日更新（价格/止盈止损/NAV/报告）
+    'sim-pool-daily-update': {
+        'task': 'tasks.daily_sim_pool_update',
+        'schedule': crontab(hour=16, minute=30, day_of_week='1-5'),
+    },
 }
 celery_app.conf.timezone = 'Asia/Shanghai'

@@ -28,6 +28,7 @@ from api.routers.sw_rotation import router as sw_rotation_router
 from api.routers.portfolio_mgmt import router as portfolio_mgmt_router
 from api.routers.theme_pool import router as theme_pool_router
 from api.routers.candidate_pool import router as candidate_pool_router
+from api.routers.sim_pool import router as sim_pool_router
 
 logger = logging.getLogger('myTrader.api')
 
@@ -130,6 +131,7 @@ app.include_router(sw_rotation_router)
 app.include_router(portfolio_mgmt_router)
 app.include_router(theme_pool_router)
 app.include_router(candidate_pool_router)
+app.include_router(sim_pool_router)
 
 
 @app.get('/')
