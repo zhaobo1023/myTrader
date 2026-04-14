@@ -567,8 +567,8 @@ export default function ThemeDetailPage() {
     { key: 'tech', label: '技术面', width: '45px', tip: '技术面评分(0-100)：综合MA位置、MACD方向、RSI健康度、成交量变化计算。>70偏强，<40偏弱。' },
     { key: 'fund', label: '基本面', width: '45px', tip: '基本面评分(0-100)：综合ROE、PE估值、净利润增速计算。>70质地优良，<40需谨慎。' },
     { key: 'total', label: '综合', width: '45px', tip: '综合评分 = RPS×40% + 技术面×40% + 基本面×20%。用于主题内横向排名。' },
-    { key: 'return_5d', label: '5日%', width: '50px', tip: '近5个交易日涨跌幅：(今日收盘 - 5日前收盘) / 5日前收盘。反映短期动量，可横向比较主题内强弱。' },
-    { key: 'return_20d', label: '20日%', width: '50px', tip: '近20个交易日涨跌幅：(今日收盘 - 20日前收盘) / 20日前收盘。约1个月，反映中期趋势强度。' },
+    { key: 'return_5d', label: '5日%', width: '50px', tip: '近5个交易日（约1周）涨跌幅 = (今收 - 5日前收) / 5日前收。反映短期动量，股票和ETF均适用，可横向比较主题内强弱。' },
+    { key: 'return_20d', label: '20日%', width: '50px', tip: '近20个交易日（约1个月）涨跌幅 = (今收 - 20日前收) / 20日前收。反映中期趋势，5日%>20日%说明近期加速，反之可能在分化。' },
     { key: 'trend', label: '走势', width: '95px', tip: null },
     { key: 'votes', label: '投票', width: '65px', tip: null },
     { key: 'status', label: '标记', width: '85px', tip: null },
@@ -675,7 +675,8 @@ export default function ThemeDetailPage() {
         <span><b style={{ color: 'var(--text-secondary)' }}>技术面</b> MA+MACD+RSI+量能，满分100</span>
         <span><b style={{ color: 'var(--text-secondary)' }}>基本面</b> ROE+PE+增速，满分100</span>
         <span><b style={{ color: 'var(--text-secondary)' }}>综合</b> RPS×40%+技术×40%+基本面×20%</span>
-        <span><b style={{ color: 'var(--text-secondary)' }}>5日% / 20日%</b> 近5/20交易日市场涨跌幅（非持仓收益）</span>
+        <span><b style={{ color: 'var(--text-secondary)' }}>5日%</b> 近5个交易日（约1周）涨跌幅 = (今收 - 5日前收) / 5日前收，反映短期动量，ETF同样适用</span>
+        <span><b style={{ color: 'var(--text-secondary)' }}>20日%</b> 近20个交易日（约1个月）涨跌幅 = (今收 - 20日前收) / 20日前收，反映中期趋势，可横向比较主题内强弱</span>
       </div>
 
       {/* Filters */}
