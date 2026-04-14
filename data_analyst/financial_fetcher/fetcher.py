@@ -199,6 +199,54 @@ def fetch_bank_indicators(stock_code: str, stock_name: str) -> List[dict]:
     return records
 
 
+def fetch_cashflow(stock_code: str, stock_name: str) -> List[dict]:
+    """cash flow statement from akshare (THS annual reports)
+
+    Uses stock_financial_cash_ths with indicator='年报' to get annual data.
+    Key columns (core indicators row): '*经营活动产生的现金流量净额', '*投资活动产生的现金流量净额',
+    '*筹资活动产生的现金流量净额', '*现金及现金等价物净增加额'
+    """
+    records = []
+    try:
+        df = ak.stock_financial_cash_ths(symbol=stock_code, indicator="年报")
+        if df is None or df.empty:
+            return records
+
+        for _, row in df.iterrows():
+            raw_year = str(row.get("报告期", "")).strip()
+            if not raw_year or not raw_year.isdigit():
+                continue
+            try:
+                from datetime import date as _date
+                report_date = _date(int(raw_year), 12, 31)
+            except Exception:
+                continue
+
+            def _parse_yi(val):
+                """parse value like '90.55亿' -> float in yi yuan"""
+                if val is None or (isinstance(val, float) and pd.isna(val)):
+                    return None
+                s = str(val).replace("亿", "").replace(",", "").strip()
+                try:
+                    return round(float(s), 4)
+                except Exception:
+                    return None
+
+            records.append({
+                "stock_code": stock_code,
+                "stock_name": stock_name,
+                "report_date": report_date,
+                "operating_cashflow": _parse_yi(row.get("*经营活动产生的现金流量净额")),
+                "investing_cashflow": _parse_yi(row.get("*投资活动产生的现金流量净额")),
+                "financing_cashflow": _parse_yi(row.get("*筹资活动产生的现金流量净额")),
+                "net_cashflow": _parse_yi(row.get("*现金及现金等价物净增加额")),
+                "source": "akshare_ths",
+            })
+    except Exception as e:
+        logger.error(f"[{stock_code}] cashflow fetch failed: {e}")
+    return records
+
+
 def fetch_dividend(stock_code: str, stock_name: str) -> List[dict]:
     """dividend history from akshare
 
@@ -365,6 +413,13 @@ def run_fetch(config: FinancialFetcherConfig, stock_codes: Dict[str, str] = None
             storage.upsert("financial_dividend", div)
             total += len(div)
         logger.info(f"  dividend: {len(div)} rows")
+        time.sleep(config.request_interval)
+
+        cashflow = fetch_cashflow(code, name)
+        if cashflow:
+            storage.upsert("financial_cashflow", cashflow)
+            total += len(cashflow)
+        logger.info(f"  cashflow: {len(cashflow)} rows")
         time.sleep(config.request_interval)
 
         prov = compute_provision_adj(storage, code)
