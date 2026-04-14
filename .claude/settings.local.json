@@ -127,7 +127,8 @@
       "Bash(docker stop:*)",
       "Bash(mv /tmp/preset_strategy_new.py /root/app/api/services/preset_strategy_service.py)",
       "Bash(dmesg)",
-      "Bash(docker top:*)"
+      "Bash(docker top:*)",
+      "Bash(apt-get install:*)"
     ],
     "deny": [],
     "ask": []

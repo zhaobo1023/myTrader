@@ -44,7 +44,6 @@ docker run -d \
   -p 127.0.0.1:8000:8000 \
   -v /root/app:/app \
   -v /root/app/output:/app/output \
-  -v /root/app/.pip_cache:/root/.local \
   -e DB_ENV=online \
   -e ONLINE_DB_HOST=host.docker.internal \
   -e ONLINE_DB_PORT=3306 \
@@ -57,6 +56,7 @@ docker run -d \
   -e REDIS_PORT=6379 \
   -e REDIS_PASSWORD= \
   -e REDIS_DB=0 \
+  -e RAG_API_KEY=sk-3f8e35cd625c4709b6c81a5837a5a8df \
   --add-host=host.docker.internal:host-gateway \
   --restart unless-stopped \
   app-api:latest
