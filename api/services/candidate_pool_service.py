@@ -16,7 +16,7 @@ from typing import Optional
 
 import requests
 
-from config.db import execute_query, execute_many
+from config.db import execute_query, execute_update, execute_many
 
 logger = logging.getLogger('myTrader.candidate_pool')
 
@@ -159,7 +159,7 @@ def add_stock(
     )
     if existing:
         row = existing[0]
-        execute_query(
+        execute_update(
             '''UPDATE candidate_pool_stocks
                SET stock_name=%s, source_type=%s, source_detail=%s,
                    entry_snapshot=%s, add_date=%s, status='watching',
@@ -170,7 +170,7 @@ def add_stock(
         )
         return {'action': 'updated', 'stock_code': stock_code, 'id': row['id']}
 
-    execute_query(
+    execute_update(
         '''INSERT INTO candidate_pool_stocks
            (stock_code, stock_name, source_type, source_detail,
             entry_snapshot, add_date, status, memo, created_at, updated_at)
@@ -198,7 +198,7 @@ def update_stock(stock_code: str, status: Optional[str] = None, memo: Optional[s
         return False
     parts.append('updated_at=NOW()')
     params.append(stock_code)
-    execute_query(
+    execute_update(
         f'UPDATE candidate_pool_stocks SET {", ".join(parts)} WHERE stock_code=%s',
         tuple(params), env=_DB_ENV,
     )
@@ -206,7 +206,7 @@ def update_stock(stock_code: str, status: Optional[str] = None, memo: Optional[s
 
 
 def remove_stock(stock_code: str) -> bool:
-    execute_query(
+    execute_update(
         'DELETE FROM candidate_pool_stocks WHERE stock_code=%s',
         (stock_code,), env=_DB_ENV,
     )
