@@ -249,19 +249,34 @@ def get_stock_history(stock_code: str, days: int = 30) -> list:
 # Industry stock screening
 # ---------------------------------------------------------------------------
 
-def list_industries() -> list:
-    """Return distinct industry names from AKShare (via akshare)."""
+# SW L1 industry code mapping (name -> code)
+# Populated lazily on first call to list_industries()
+_SW_INDUSTRY_MAP: dict = {}  # {name: code}
+
+
+def _load_sw_industry_map() -> dict:
+    """Load SW L1 industry name->code map from AKShare. Cached in module."""
+    global _SW_INDUSTRY_MAP
+    if _SW_INDUSTRY_MAP:
+        return _SW_INDUSTRY_MAP
     try:
         import akshare as ak
-        df = ak.stock_board_industry_name_em()
-        if df is None or df.empty:
-            return []
-        # columns: 板块名称, 板块代码, ...
-        name_col = df.columns[0]
-        return sorted(df[name_col].dropna().tolist())
+        df = ak.sw_index_first_info()
+        # columns: ���业代码, 行业名称, ...
+        for _, row in df.iterrows():
+            code = str(row['行业代码']).replace('.SI', '').strip()
+            name = str(row['行业名称']).strip()
+            _SW_INDUSTRY_MAP[name] = code
+        logger.info('Loaded %d SW L1 industries', len(_SW_INDUSTRY_MAP))
     except Exception as e:
-        logger.warning('list_industries failed: %s', e)
-        return []
+        logger.warning('_load_sw_industry_map failed: %s', e)
+    return _SW_INDUSTRY_MAP
+
+
+def list_industries() -> list:
+    """Return SW L1 industry names."""
+    m = _load_sw_industry_map()
+    return sorted(m.keys())
 
 
 def get_industry_stocks(
@@ -271,23 +286,26 @@ def get_industry_stocks(
     limit: int = 100,
 ) -> list:
     """
-    Return stocks in a given industry with latest RPS + price data.
-    Data source: AKShare industry constituent list + trade_stock_rps + trade_stock_daily
+    Return stocks in a given SW L1 industry with latest RPS + price data.
+    Data source: AKShare index_component_sw + trade_stock_rps + trade_stock_daily
     """
-    # Step 1: get stock codes in this industry from AKShare
+    # Step 1: resolve industry code
+    ind_map = _load_sw_industry_map()
+    ind_code = ind_map.get(industry_name)
+    if not ind_code:
+        logger.warning('Unknown industry: %s', industry_name)
+        return []
+
+    # Step 2: get constituents from AKShare
     try:
         import akshare as ak
-        df = ak.stock_board_industry_cons_em(symbol=industry_name)
+        df = ak.index_component_sw(symbol=ind_code)
         if df is None or df.empty:
             return []
-        # columns: 代码, 名称, ...
-        code_col = df.columns[0]
-        name_col = df.columns[1]
         stocks = {}
         for _, row in df.iterrows():
-            code = str(row[code_col]).strip()
-            name = str(row[name_col]).strip()
-            # normalize to .SH/.SZ suffix
+            code = str(row['证券代码']).strip().zfill(6)
+            name = str(row['证券名称']).strip()
             if code.startswith('6'):
                 full_code = code + '.SH'
             elif code.startswith(('0', '3')):
