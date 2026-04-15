@@ -253,12 +253,38 @@ def _collect_dashboard_snapshot() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Persistence helpers
+# ---------------------------------------------------------------------------
+
+def _load_briefing(session: str, brief_date: str) -> Optional[str]:
+    """Load cached briefing content from DB for the given session + date."""
+    rows = execute_query(
+        "SELECT content FROM trade_briefing WHERE session = %s AND brief_date = %s",
+        (session, brief_date),
+    )
+    if rows:
+        return rows[0]['content']
+    return None
+
+
+def _save_briefing(session: str, brief_date: str, content: str) -> None:
+    """Persist generated briefing to DB (upsert by session + date)."""
+    execute_update(
+        """INSERT INTO trade_briefing (session, brief_date, content)
+           VALUES (%s, %s, %s)
+           ON DUPLICATE KEY UPDATE content = VALUES(content), created_at = NOW()""",
+        (session, brief_date, content),
+    )
+    logger.info('[briefing] Saved %s briefing for %s to DB', session, brief_date)
+
+
+# ---------------------------------------------------------------------------
 # Briefing generation
 # ---------------------------------------------------------------------------
 
 async def generate_briefing(session: str = 'morning') -> dict:
     """
-    Generate a market briefing using LLM.
+    Generate a market briefing using LLM and persist to DB.
 
     Args:
         session: 'morning' (08:30) or 'evening' (18:00)
@@ -289,6 +315,12 @@ async def generate_briefing(session: str = 'morning') -> dict:
 
     logger.info('[briefing] Generated %s briefing for %s (%d chars)', session, today_str, len(content))
 
+    # Persist to DB
+    try:
+        _save_briefing(session, today_str, content)
+    except Exception as e:
+        logger.warning('[briefing] Failed to save to DB: %s', e)
+
     return {
         'session': session,
         'date': today_str,
@@ -297,6 +329,23 @@ async def generate_briefing(session: str = 'morning') -> dict:
     }
 
 
-async def get_latest_briefing(session: str = 'morning') -> Optional[dict]:
-    """Get the latest briefing, generating if not available for today."""
+async def get_latest_briefing(session: str = 'morning', force: bool = False) -> Optional[dict]:
+    """Get the latest briefing. Returns cached version if available, generates otherwise."""
+    today_str = date.today().strftime('%Y-%m-%d')
+
+    # Try loading from DB unless force regenerate
+    if not force:
+        try:
+            cached = _load_briefing(session, today_str)
+            if cached:
+                logger.info('[briefing] Returning cached %s briefing for %s', session, today_str)
+                return {
+                    'session': session,
+                    'date': today_str,
+                    'content': cached,
+                    'cached': True,
+                }
+        except Exception as e:
+            logger.warning('[briefing] Failed to load cached briefing: %s', e)
+
     return await generate_briefing(session)

@@ -17,6 +17,7 @@ from api.middleware.access_log import AccessLogMiddleware
 from api.middleware.metrics import MetricsMiddleware, get_metrics
 from api.middleware.rate_limit import RateLimitMiddleware
 from api.routers import health, auth, market, analysis, strategy, rag, portfolio, admin, api_keys, subscription, research
+from api.routers.documents import router as documents_router
 from api.routers.watchlist import router as watchlist_router
 from api.routers.notification import router as notification_router
 from api.routers.scan_results import router as scan_results_router
@@ -132,6 +133,7 @@ app.include_router(portfolio_mgmt_router)
 app.include_router(theme_pool_router)
 app.include_router(candidate_pool_router)
 app.include_router(sim_pool_router)
+app.include_router(documents_router)
 
 
 @app.get('/')

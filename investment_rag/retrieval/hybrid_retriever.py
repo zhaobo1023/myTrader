@@ -86,6 +86,9 @@ class HybridRetriever:
     ) -> List[Dict[str, Any]]:
         """Retrieve documents using hybrid dense + BM25 + RRF.
 
+        When collection is 'reports', also searches 'research' collection
+        so user-uploaded documents are included in results.
+
         Args:
             query: Search query.
             collection: Collection name to search.
@@ -97,27 +100,43 @@ class HybridRetriever:
         """
         top_k = top_k or self.final_top_k
 
-        # 1. Dense retrieval
-        query_embedding = self.embed_client.embed_query(query)
-        dense_results = self.chroma_client.query(
-            collection_name=collection,
-            query_embedding=query_embedding,
-            top_k=self.dense_top_k,
-            where=where,
-        )
+        # Determine collections to search
+        collections = [collection]
+        if collection == "reports":
+            collections.append("research")
 
-        # 2. BM25 retrieval
-        bm25_results = []
-        if self.bm25_retriever.has_index(collection):
-            bm25_results = self.bm25_retriever.search(
-                collection_name=collection,
-                query=query,
-                top_k=self.bm25_top_k,
-            )
+        # 1. Dense retrieval across all target collections
+        query_embedding = self.embed_client.embed_query(query)
+        all_dense = []
+        for coll in collections:
+            try:
+                results = self.chroma_client.query(
+                    collection_name=coll,
+                    query_embedding=query_embedding,
+                    top_k=self.dense_top_k,
+                    where=where,
+                )
+                all_dense.extend(results)
+            except Exception as e:
+                logger.warning("Dense retrieval failed for '%s': %s", coll, e)
+
+        # 2. BM25 retrieval across all target collections
+        all_bm25 = []
+        for coll in collections:
+            if self.bm25_retriever.has_index(coll):
+                try:
+                    results = self.bm25_retriever.search(
+                        collection_name=coll,
+                        query=query,
+                        top_k=self.bm25_top_k,
+                    )
+                    all_bm25.extend(results)
+                except Exception as e:
+                    logger.warning("BM25 retrieval failed for '%s': %s", coll, e)
 
         # 3. RRF merge
         merged = rrf_merge(
-            dense_results, bm25_results,
+            all_dense, all_bm25,
             k=self.rrf_k,
             top_k=top_k,
         )

@@ -18,7 +18,7 @@ from investment_rag.config import RAGConfig, DEFAULT_CONFIG
 
 logger = logging.getLogger(__name__)
 
-COLLECTION_NAMES = ["reports", "announcements", "notes", "macro"]
+COLLECTION_NAMES = ["reports", "announcements", "notes", "macro", "research"]
 
 
 class ChromaClient:

@@ -102,7 +102,8 @@ async def get_global_assets(
 @router.get('/global-briefing')
 async def get_global_briefing(
     session: str = Query(default='morning', description="'morning' (08:30) or 'evening' (18:00)"),
+    force: bool = Query(default=False, description="Force regenerate even if cached"),
 ):
     """Get LLM-generated global asset briefing for today."""
     from api.services.global_asset_briefing import get_latest_briefing
-    return await get_latest_briefing(session)
+    return await get_latest_briefing(session, force=force)

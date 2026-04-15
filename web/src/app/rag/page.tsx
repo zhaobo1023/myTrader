@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect } from 'react';
 import AppShell from '@/components/layout/AppShell';
+import DocumentUploadDialog from './components/DocumentUploadDialog';
+import DocumentCard from './components/DocumentCard';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -168,7 +170,31 @@ function ReportViewer({ markdown }: { markdown: string }) {
 // ---------------------------------------------------------------------------
 
 export default function RAGPage() {
-  const [tab, setTab] = useState<'generate' | 'history'>('generate');
+  const [tab, setTab] = useState<'generate' | 'history' | 'knowledge'>('generate');
+
+  // Knowledge base state
+  const [kbDocuments, setKbDocuments] = useState<any[]>([]);
+  const [kbLoading, setKbLoading] = useState(false);
+  const [kbFilterTag, setKbFilterTag] = useState<string | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
+
+  async function loadKbDocuments() {
+    setKbLoading(true);
+    try {
+      const params = kbFilterTag ? `?tags=${encodeURIComponent(kbFilterTag)}` : '';
+      const res = await fetch(`${API_BASE}/api/rag/documents${params}`);
+      const data = await res.json();
+      setKbDocuments(data.documents || []);
+    } catch {
+      setKbDocuments([]);
+    } finally {
+      setKbLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (tab === 'knowledge') loadKbDocuments();
+  }, [tab, kbFilterTag]);
 
   // Generate form state
   const [selectedStock, setSelectedStock] = useState<StockSearchItem | null>(null);
@@ -304,18 +330,22 @@ export default function RAGPage() {
           智能研报
         </h1>
         <div style={{ display: 'flex', gap: '2px', background: 'var(--bg-card-hover)', borderRadius: '8px', padding: '3px' }}>
-          {(['generate', 'history'] as const).map((t) => (
+          {([
+            { key: 'generate', label: 'Generate Report' },
+            { key: 'history', label: 'History' },
+            { key: 'knowledge', label: 'Knowledge Base' },
+          ] as const).map((t) => (
             <button
-              key={t}
-              onClick={() => setTab(t)}
+              key={t.key}
+              onClick={() => setTab(t.key)}
               style={{
-                padding: '5px 14px', fontSize: '13px', fontWeight: tab === t ? 510 : 400,
-                color: tab === t ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                background: tab === t ? 'var(--bg-nav-active)' : 'none',
+                padding: '5px 14px', fontSize: '13px', fontWeight: tab === t.key ? 510 : 400,
+                color: tab === t.key ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                background: tab === t.key ? 'var(--bg-nav-active)' : 'none',
                 border: 'none', borderRadius: '6px', cursor: 'pointer',
               }}
             >
-              {t === 'generate' ? '生成研报' : '历史研报'}
+              {t.label}
             </button>
           ))}
         </div>
@@ -509,6 +539,86 @@ export default function RAGPage() {
           )}
         </div>
       )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Knowledge Base tab                                                  */}
+      {/* ------------------------------------------------------------------ */}
+      {tab === 'knowledge' && (
+        <div>
+          {/* Top bar: upload button + tag filter */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => setKbFilterTag(null)}
+                style={{
+                  padding: '3px 10px', fontSize: '11px', borderRadius: '10px',
+                  border: kbFilterTag === null ? '1px solid var(--accent)' : '1px solid var(--border-subtle)',
+                  background: kbFilterTag === null ? 'var(--accent)12' : 'transparent',
+                  color: kbFilterTag === null ? 'var(--accent)' : 'var(--text-muted)',
+                  cursor: 'pointer', fontWeight: 510,
+                }}
+              >
+                All
+              </button>
+              {Array.from(new Set(kbDocuments.flatMap((d: any) => (d.tags || '').split(',').map((t: string) => t.trim()).filter(Boolean)))).map((tag) => (
+                <button
+                  key={tag}
+                  onClick={() => setKbFilterTag(kbFilterTag === tag ? null : tag)}
+                  style={{
+                    padding: '3px 10px', fontSize: '11px', borderRadius: '10px',
+                    border: kbFilterTag === tag ? '1px solid var(--accent)' : '1px solid var(--border-subtle)',
+                    background: kbFilterTag === tag ? 'var(--accent)12' : 'transparent',
+                    color: kbFilterTag === tag ? 'var(--accent)' : 'var(--text-muted)',
+                    cursor: 'pointer', fontWeight: 510,
+                  }}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setUploadOpen(true)}
+              style={{
+                padding: '6px 14px', fontSize: '12px', fontWeight: 510,
+                background: 'var(--accent-bg)', color: '#fff',
+                border: 'none', borderRadius: '6px', cursor: 'pointer',
+              }}
+            >
+              + Upload
+            </button>
+          </div>
+
+          {/* Document list */}
+          {kbLoading && (
+            <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '40px 0', textAlign: 'center' }}>Loading...</div>
+          )}
+          {!kbLoading && kbDocuments.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '60px 0' }}>
+              <div style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '8px' }}>No documents yet</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>Upload research reports, notes, or analysis to build your knowledge base</div>
+            </div>
+          )}
+          {!kbLoading && kbDocuments.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {kbDocuments.map((doc: any) => (
+                <DocumentCard
+                  key={doc.id}
+                  doc={doc}
+                  onDeleted={loadKbDocuments}
+                  onUpdated={loadKbDocuments}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Upload dialog */}
+      <DocumentUploadDialog
+        open={uploadOpen}
+        onClose={() => setUploadOpen(false)}
+        onUploaded={loadKbDocuments}
+      />
     </AppShell>
   );
 }

@@ -32,6 +32,122 @@ const SENTIMENT_TABS: { key: SentimentTab; label: string }[] = [
 // AI Briefing Card (shown above tabs)
 // ---------------------------------------------------------------------------
 
+/** Render a single line of briefing markdown with keyword highlighting. */
+function renderBriefingLine(line: string, key: number) {
+  const trimmed = line.trim();
+
+  // Heading: ## or ###
+  if (/^#{1,3}\s/.test(trimmed)) {
+    const text = trimmed.replace(/^#+\s*/, '');
+    return (
+      <div key={key} style={{
+        fontWeight: 600, color: 'var(--text-primary)', margin: '14px 0 6px',
+        fontSize: '13px', letterSpacing: '0.2px',
+        paddingLeft: '8px', borderLeft: '3px solid var(--accent)',
+      }}>
+        {renderInline(text)}
+      </div>
+    );
+  }
+
+  // Horizontal rule
+  if (/^-{3,}$/.test(trimmed)) {
+    return <hr key={key} style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', margin: '10px 0' }} />;
+  }
+
+  // Blank line
+  if (!trimmed) return null;
+
+  // Bold-only line (section title like **1. A股市场状态**)
+  if (/^\*\*[^*]+\*\*$/.test(trimmed)) {
+    return (
+      <div key={key} style={{ fontWeight: 600, color: 'var(--text-primary)', margin: '10px 0 4px', fontSize: '13px' }}>
+        {trimmed.replace(/\*\*/g, '')}
+      </div>
+    );
+  }
+
+  // Numbered item: **1. xxx** or 1. **xxx**
+  const numMatch = trimmed.match(/^(\d+\.)\s*\*([^*]+)\*\*[:：]?\s*(.*)/);
+  if (numMatch) {
+    return (
+      <div key={key} style={{ margin: '8px 0 4px' }}>
+        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{numMatch[1]}</span>
+        {' '}
+        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{numMatch[2]}</span>
+        {numMatch[3] && <span>：{renderInline(numMatch[3])}</span>}
+      </div>
+    );
+  }
+
+  // Regular line with inline formatting
+  return (
+    <div key={key} style={{ margin: '3px 0', paddingLeft: '4px' }}>
+      {renderInline(trimmed)}
+    </div>
+  );
+}
+
+/** Render inline text with bold, and keyword tag highlighting. */
+function renderInline(text: string) {
+  // Split on **bold** segments
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+
+  return parts.map((seg, i) => {
+    if (seg.startsWith('**') && seg.endsWith('**')) {
+      const inner = seg.slice(2, -2);
+      return <strong key={i} style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{inner}</strong>;
+    }
+
+    // Highlight [风险], [机会], [关注], [警惕] tags
+    const tagParts = seg.split(/(\[风险\]|\[机会\]|\[关注\]|\[警惕\])/g);
+    return (
+      <span key={i}>
+        {tagParts.map((tp, j) => {
+          switch (tp) {
+            case '[风险]':
+            case '[警惕]':
+              return (
+                <span key={j} style={{
+                  display: 'inline-block', fontSize: '11px', fontWeight: 600,
+                  padding: '0 5px', borderRadius: '3px', marginRight: '4px',
+                  background: 'rgba(239, 68, 68, 0.12)', color: '#ef4444',
+                  lineHeight: '18px', verticalAlign: 'middle',
+                }}>
+                  {tp}
+                </span>
+              );
+            case '[机会]':
+              return (
+                <span key={j} style={{
+                  display: 'inline-block', fontSize: '11px', fontWeight: 600,
+                  padding: '0 5px', borderRadius: '3px', marginRight: '4px',
+                  background: 'rgba(34, 197, 94, 0.12)', color: '#22c55e',
+                  lineHeight: '18px', verticalAlign: 'middle',
+                }}>
+                  {tp}
+                </span>
+              );
+            case '[关注]':
+              return (
+                <span key={j} style={{
+                  display: 'inline-block', fontSize: '11px', fontWeight: 600,
+                  padding: '0 5px', borderRadius: '3px', marginRight: '4px',
+                  background: 'rgba(234, 179, 8, 0.12)', color: '#eab308',
+                  lineHeight: '18px', verticalAlign: 'middle',
+                }}>
+                  {tp}
+                </span>
+              );
+            default:
+              return <span key={j}>{tp}</span>;
+          }
+        })}
+      </span>
+    );
+  });
+}
+
 function AIBriefingCard() {
   const [session, setSession] = useState<'morning' | 'evening'>(() => {
     return new Date().getHours() < 15 ? 'morning' : 'evening';
@@ -53,15 +169,16 @@ function AIBriefingCard() {
     <div style={{
       background: 'linear-gradient(135deg, var(--bg-card), var(--bg-elevated))',
       border: '1px solid var(--border-subtle)',
-      borderRadius: '10px',
-      padding: '16px 20px',
+      borderRadius: '12px',
+      padding: '18px 22px',
       marginBottom: '20px',
+      boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
     }}>
       {/* Header row */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <span style={{
-            fontSize: '11px', fontWeight: 600, letterSpacing: '0.5px',
+            fontSize: '11px', fontWeight: 700, letterSpacing: '0.8px',
             color: 'var(--accent)', textTransform: 'uppercase',
           }}>
             AI {sessionLabel}
@@ -72,11 +189,11 @@ function AIBriefingCard() {
                 key={s}
                 onClick={() => setSession(s)}
                 style={{
-                  padding: '2px 8px', fontSize: '10px', borderRadius: '10px',
+                  padding: '3px 10px', fontSize: '10px', borderRadius: '10px',
                   border: session === s ? '1px solid var(--accent)' : '1px solid transparent',
-                  background: session === s ? 'var(--accent)10' : 'transparent',
+                  background: session === s ? 'var(--accent)12' : 'transparent',
                   color: session === s ? 'var(--accent)' : 'var(--text-muted)',
-                  cursor: 'pointer', fontWeight: 510,
+                  cursor: 'pointer', fontWeight: 520, transition: 'all 0.15s',
                 }}
               >
                 {s === 'morning' ? '08:30 盘前' : '18:00 盘后'}
@@ -86,16 +203,26 @@ function AIBriefingCard() {
           {briefing?.date && !isLoading && (
             <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{briefing.date}</span>
           )}
+          {briefing?.cached && hasContent && (
+            <span style={{
+              fontSize: '9px', fontWeight: 500, padding: '1px 6px',
+              borderRadius: '8px', background: 'rgba(34,197,94,0.1)',
+              color: '#22c55e',
+            }}>
+              cached
+            </span>
+          )}
         </div>
         <button
           onClick={() => refetch()}
           disabled={isLoading}
           style={{
-            fontSize: '11px', padding: '4px 12px', borderRadius: '6px',
+            fontSize: '11px', padding: '4px 14px', borderRadius: '6px',
             border: '1px solid var(--accent)40',
             background: isLoading ? 'var(--bg-card)' : 'var(--accent)10',
             color: 'var(--accent)', cursor: isLoading ? 'wait' : 'pointer',
-            fontWeight: 510, opacity: isLoading ? 0.6 : 1,
+            fontWeight: 520, opacity: isLoading ? 0.6 : 1,
+            transition: 'all 0.15s',
           }}
         >
           {isLoading ? 'AI 分析中...' : hasContent ? '重新生成' : '生成解读'}
@@ -104,8 +231,16 @@ function AIBriefingCard() {
 
       {/* Content */}
       {isLoading && (
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '12px 0 4px', fontStyle: 'italic' }}>
-          正在综合分析A股大盘信号 + 全球资产数据...
+        <div style={{
+          fontSize: '12px', color: 'var(--text-muted)', padding: '16px 0 4px',
+          fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '8px',
+        }}>
+          <span style={{
+            display: 'inline-block', width: '12px', height: '12px',
+            border: '2px solid var(--border-subtle)', borderTopColor: 'var(--accent)',
+            borderRadius: '50%', animation: 'spin 0.8s linear infinite',
+          }} />
+          正在综合分析 A 股大盘信号 + 全球资产数据...
         </div>
       )}
       {error && !isLoading && !hasContent && (
@@ -114,40 +249,21 @@ function AIBriefingCard() {
         </div>
       )}
       {hasContent && (
-        <div style={{ marginTop: '12px' }}>
+        <div style={{ marginTop: '14px' }}>
           <div
             style={{
-              fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.8,
-              maxHeight: expanded ? 'none' : '120px',
+              fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.85,
+              maxHeight: expanded ? 'none' : '160px',
               overflow: 'hidden',
               position: 'relative',
             }}
           >
-            {briefing.content.split('\n').map((line: string, i: number) => {
-              if (line.startsWith('###') || line.startsWith('##')) {
-                return <div key={i} style={{ fontWeight: 590, color: 'var(--text-primary)', margin: '10px 0 4px', fontSize: '13px' }}>{line.replace(/^#+\s*/, '')}</div>;
-              }
-              if (line.startsWith('**') && line.endsWith('**')) {
-                return <div key={i} style={{ fontWeight: 510, color: 'var(--text-primary)', margin: '8px 0 2px' }}>{line.replace(/\*\*/g, '')}</div>;
-              }
-              if (line.startsWith('---')) return <hr key={i} style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', margin: '8px 0' }} />;
-              if (!line.trim()) return null;
-              // Inline bold
-              const parts = line.split(/(\*\*[^*]+\*\*)/g);
-              return (
-                <div key={i} style={{ margin: '2px 0' }}>
-                  {parts.map((p, j) =>
-                    p.startsWith('**') && p.endsWith('**')
-                      ? <strong key={j} style={{ color: 'var(--text-primary)', fontWeight: 510 }}>{p.replace(/\*\*/g, '')}</strong>
-                      : <span key={j}>{p}</span>
-                  )}
-                </div>
-              );
-            })}
+            {briefing.content.split('\n').map((line: string, i: number) => renderBriefingLine(line, i))}
             {!expanded && (
               <div style={{
-                position: 'absolute', bottom: 0, left: 0, right: 0, height: '40px',
-                background: 'linear-gradient(transparent, var(--bg-card))',
+                position: 'absolute', bottom: 0, left: 0, right: 0, height: '50px',
+                background: 'linear-gradient(transparent, var(--bg-card) 70%)',
+                pointerEvents: 'none',
               }} />
             )}
           </div>
@@ -156,6 +272,7 @@ function AIBriefingCard() {
             style={{
               marginTop: '4px', fontSize: '11px', color: 'var(--accent)',
               background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0',
+              fontWeight: 520,
             }}
           >
             {expanded ? '收起' : '展开全文'}
