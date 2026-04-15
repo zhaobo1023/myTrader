@@ -161,7 +161,8 @@ def _run_momentum_reversal(run_id: int, env: str) -> dict:
 
 def _get_recent_occurrence_counts(stock_codes: list, days: int = 5, env: str = 'online') -> dict:
     """
-    统计每只股票在最近N日的出现次数
+    统计每只股票在最近N日(不含当日)的出现次数。
+    stock codes are stored inside signals_json, so we use JSON_TABLE to extract them.
 
     Args:
         stock_codes: 股票代码列表
@@ -174,15 +175,24 @@ def _get_recent_occurrence_counts(stock_codes: list, days: int = 5, env: str = '
     if not stock_codes:
         return {}
 
+    from config.db import execute_query
+
     placeholders = ','.join(['%s'] * len(stock_codes))
     sql = f"""
-        SELECT stock_code, COUNT(*) as count
-        FROM trade_preset_strategy_run
-        WHERE strategy_key = 'momentum_reversal'
-          AND status = 'done'
-          AND run_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
-          AND stock_code IN ({placeholders})
-        GROUP BY stock_code
+        SELECT sig.stock_code, COUNT(DISTINCT r.run_date) AS count
+        FROM trade_preset_strategy_run r
+        CROSS JOIN JSON_TABLE(
+            r.signals_json,
+            '$[*]' COLUMNS(
+                stock_code VARCHAR(20) PATH '$.stock_code'
+            )
+        ) AS sig
+        WHERE r.strategy_key = 'momentum_reversal'
+          AND r.status = 'done'
+          AND r.run_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+          AND r.run_date < CURDATE()
+          AND sig.stock_code IN ({placeholders})
+        GROUP BY sig.stock_code
     """
     try:
         rows = execute_query(sql, (days,) + tuple(stock_codes), env=env)

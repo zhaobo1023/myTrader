@@ -56,6 +56,6 @@ def run_tech_scan(self):
 
 @celery_app.task(name='scheduler.adapters.run_log_bias_strategy', bind=True, max_retries=0)
 def run_log_bias_strategy(self):
-    from scheduler.adapters import run_log_bias_strategy as _fn
+    from scheduler.adapters import run_log_bias as _fn
     logger.info('[CELERY] run_log_bias_strategy start')
     return _fn()
