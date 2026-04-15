@@ -73,18 +73,51 @@ def ensure_tables():
 
 def _fetch_news_from_eastmoney(bare_code: str) -> list[dict]:
     """
-    Directly call East Money stock news API (same source as ak.stock_news_em
-    but avoids the pyarrow regex bug in current akshare).
+    Fetch stock news from East Money via two sources:
+    1. Company announcements API (np-anotice-stock) — official filings
+    2. Search API (search-api-web) — news articles
+
     Returns list of dicts with keys: title, content, source, url, publish_time.
     """
     import requests
 
-    url = 'https://search-api-web.eastmoney.com/search/jsonp'
+    headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://so.eastmoney.com/'}
     results = []
+    seen_titles = set()
 
-    for page in range(1, 4):  # 3 pages, ~30 articles
+    # Source 1: Company announcements (reliable, structured)
+    ann_url = (
+        'https://np-anotice-stock.eastmoney.com/api/security/ann'
+        '?stock_list={code}&page_size=20&page_index=1&ann_type=A&client_source=web'
+    ).format(code=bare_code)
+    try:
+        resp = requests.get(ann_url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            items = resp.json().get('data', {}).get('list', [])
+            for item in items:
+                title = item.get('title', '').strip()
+                if not title or title in seen_titles:
+                    continue
+                seen_titles.add(title)
+                # Build PDF url from art_code
+                art_code = item.get('art_code', '')
+                ann_url_detail = 'https://data.eastmoney.com/notices/detail/{code}/{art}.html'.format(
+                    code=bare_code, art=art_code) if art_code else ''
+                results.append({
+                    'title': title,
+                    'content': item.get('title_ch', '') or '',
+                    'source': '公司公告',
+                    'url': ann_url_detail,
+                    'publish_time': item.get('notice_date', ''),
+                })
+    except Exception as e:
+        logger.warning('East Money announcement fetch failed: %s', e)
+
+    # Source 2: Search news articles
+    search_url = 'https://search-api-web.eastmoney.com/search/jsonp'
+    for page in range(1, 3):
         params = {
-            'cb': 'jQuery_callback',
+            'cb': 'jQuery_cb',
             'param': json.dumps({
                 'uid': '',
                 'keyword': bare_code,
@@ -105,9 +138,10 @@ def _fetch_news_from_eastmoney(bare_code: str) -> list[dict]:
             }),
         }
         try:
-            resp = requests.get(url, params=params, timeout=10)
+            resp = requests.get(search_url, params=params, headers=headers, timeout=10)
             text = resp.text
-            # Strip JSONP wrapper: jQuery_callback({...})
+            if '(' not in text:
+                continue
             start = text.index('(') + 1
             end = text.rindex(')')
             data = json.loads(text[start:end])
@@ -117,15 +151,19 @@ def _fetch_news_from_eastmoney(bare_code: str) -> list[dict]:
                            .get('list', []))
 
             for art in articles:
+                title = art.get('title', '').replace('<em>', '').replace('</em>', '').strip()
+                if not title or title in seen_titles:
+                    continue
+                seen_titles.add(title)
                 results.append({
-                    'title': art.get('title', '').replace('<em>', '').replace('</em>', ''),
+                    'title': title,
                     'content': art.get('content', '').replace('<em>', '').replace('</em>', ''),
-                    'source': art.get('mediaName', ''),
+                    'source': art.get('mediaName', '') or '东方财富',
                     'url': art.get('url', ''),
                     'publish_time': art.get('date', ''),
                 })
         except Exception as e:
-            logger.warning('East Money news fetch page %d failed: %s', page, e)
+            logger.warning('East Money search page %d failed: %s', page, e)
             break
 
     return results
