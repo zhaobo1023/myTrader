@@ -8,6 +8,7 @@ import {
   themePoolApi, marketApi,
   ThemePoolItem, ThemeStockItem, StockSearchResult,
 } from '@/lib/api-client';
+import { ThemeReviewDialog } from '@/components/theme-pool/ThemeReviewDialog';
 import MiniSparkline from '@/components/market/MiniSparkline';
 
 // ---------------------------------------------------------------------------
@@ -471,6 +472,7 @@ export default function ThemeDetailPage() {
   const [editReason, setEditReason] = useState<{ id: number; reason: string } | null>(null);
   const [expandedStock, setExpandedStock] = useState<number | null>(null);
   const [showComparison, setShowComparison] = useState(false);
+  const [showReview, setShowReview] = useState(false);
 
   // Fetch theme detail
   const { data: theme } = useQuery({
@@ -599,6 +601,16 @@ export default function ThemeDetailPage() {
           <div style={{ flex: 1 }} />
           {theme && (
             <>
+              <button
+                onClick={() => setShowReview(true)}
+                style={{
+                  padding: '5px 12px', borderRadius: '6px', fontSize: '11px',
+                  border: '1px solid var(--accent)', background: 'transparent',
+                  color: 'var(--accent)', cursor: 'pointer',
+                }}
+              >
+                AI 复评
+              </button>
               <button
                 onClick={() => scoreMut.mutate()}
                 disabled={scoreMut.isPending}
@@ -985,6 +997,14 @@ export default function ThemeDetailPage() {
           </div>
         </div>
       )}
+
+      {/* AI Review Dialog */}
+      <ThemeReviewDialog
+        open={showReview}
+        themeId={themeId}
+        themeName={theme?.name ?? ''}
+        onClose={() => setShowReview(false)}
+      />
     </AppShell>
   );
 }

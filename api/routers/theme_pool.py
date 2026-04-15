@@ -466,18 +466,23 @@ async def llm_create_theme(req: LLMThemeCreateRequest):
       reason       str          LLM-generated one-line rationale
     """
     from api.services.theme_llm_service import ThemeCreateSkill
+    from api.services.llm_usage_logger import LLMUsageLogger, LLMCallRecord
     from api.dependencies import get_redis
 
     redis = await get_redis()
     skill = ThemeCreateSkill(redis=redis)
+    usage_logger = LLMUsageLogger(db_session_factory=None)  # no-op until DB session wired
 
     async def event_gen():
-        async for event in skill.stream(
-            theme_name=req.theme_name,
-            description=req.description,
-            max_candidates=req.max_candidates,
-        ):
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        rec = LLMCallRecord(skill_id='theme-create', model=skill._llm_factory.model, latency_ms=0)
+        async with usage_logger.timed(rec):
+            async for event in skill.stream(
+                theme_name=req.theme_name,
+                description=req.description,
+                max_candidates=req.max_candidates,
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        await usage_logger.log(rec)
 
     return StreamingResponse(
         event_gen(),
@@ -524,9 +529,16 @@ async def llm_skill_stream(req: LLMStreamRequest):
             headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
         )
 
+    from api.services.llm_usage_logger import LLMUsageLogger, LLMCallRecord
+    usage_logger = LLMUsageLogger(db_session_factory=None)
+
     async def event_gen():
-        async for event in skill.stream(**req.params):
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        model = getattr(getattr(skill, '_llm_factory', None), 'model', req.skill_id)
+        rec = LLMCallRecord(skill_id=req.skill_id, model=model, latency_ms=0)
+        async with usage_logger.timed(rec):
+            async for event in skill.stream(**req.params):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        await usage_logger.log(rec)
 
     return StreamingResponse(
         event_gen(),
