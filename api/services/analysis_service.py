@@ -718,16 +718,28 @@ async def list_analyzed_stocks() -> dict:
     cap_rows = list(execute_query(cap_sql, tuple(codes), env='online'))
     cap_map = {r['stock_code']: r for r in cap_rows}
 
-    # Industry from trade_stock_basic (strip .SH/.SZ suffix for lookup)
-    bare_codes = [c.split('.')[0] if '.' in c else c for c in codes]
-    bare_placeholders = ','.join(['%s'] * len(bare_codes))
+    # Industry from trade_stock_basic — stock_code may or may not have suffix
+    # Try with original codes first; fallback to bare codes for compatibility
+    ind_placeholders = ','.join(['%s'] * len(codes))
     ind_sql = f"""
         SELECT stock_code, industry, sw_level1, sw_level2
         FROM trade_stock_basic
-        WHERE stock_code IN ({bare_placeholders})
+        WHERE stock_code IN ({ind_placeholders})
     """
-    ind_rows = list(execute_query(ind_sql, tuple(bare_codes), env='online'))
-    ind_map = {r['stock_code']: r for r in ind_rows}
+    ind_rows = list(execute_query(ind_sql, tuple(codes), env='online'))
+    ind_map: dict = {r['stock_code']: r for r in ind_rows}
+
+    # If nothing found, try bare codes (strip .SH/.SZ) for older DB schemas
+    if not ind_map:
+        bare_codes = [c.split('.')[0] if '.' in c else c for c in codes]
+        bare_placeholders = ','.join(['%s'] * len(bare_codes))
+        ind_sql2 = f"""
+            SELECT stock_code, industry, sw_level1, sw_level2
+            FROM trade_stock_basic
+            WHERE stock_code IN ({bare_placeholders})
+        """
+        ind_rows = list(execute_query(ind_sql2, tuple(bare_codes), env='online'))
+        ind_map = {r['stock_code']: r for r in ind_rows}
 
     def _fmt_date(v):
         if v is None:
@@ -744,8 +756,9 @@ async def list_analyzed_stocks() -> dict:
         cmc_raw = cap.get('circ_market_cap')
         mc  = round(float(mc_raw)  / 1e8, 1) if mc_raw  else None
         cmc = round(float(cmc_raw) / 1e8, 1) if cmc_raw else None
+        # ind_map may be keyed by full code or bare code depending on DB schema
         bare = r['stock_code'].split('.')[0] if '.' in r['stock_code'] else r['stock_code']
-        ind_row = ind_map.get(bare, {})
+        ind_row = ind_map.get(r['stock_code']) or ind_map.get(bare) or {}
         data.append({
             'stock_code':     r['stock_code'],
             'stock_name':     r['stock_name'],
