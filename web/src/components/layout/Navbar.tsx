@@ -9,7 +9,6 @@ const navItems = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/market', label: 'Market' },
   { href: '/analysis', label: 'Analysis' },
-  { href: '/rag', label: 'RAG' },
   { href: '/strategy', label: 'Strategy' },
 ];
 
