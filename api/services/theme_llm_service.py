@@ -282,13 +282,16 @@ class ThemeCreateSkill:
 
     def _sync_query_concept_db(self, concepts: list[str]) -> tuple[list[dict], list[str]]:
         """
-        Query stock_concept_map by concept keywords (substring match on concept_name).
+        Query stock_concept_map by concept keywords.
+        Uses bidirectional matching: both "concept_name LIKE %keyword%"
+        and "keyword LIKE %concept_name%" to handle naming differences
+        between LLM-generated concepts and actual DB concept names.
         Returns (stock_list, matched_board_names).
         """
         if not concepts:
             return [], []
         try:
-            # Build OR conditions for concept name matching
+            # First try direct substring match: concept_name LIKE %keyword%
             placeholders = ' OR '.join(['concept_name LIKE %s'] * len(concepts))
             params = tuple(f'%{c}%' for c in concepts)
             rows = execute_query(
@@ -301,6 +304,34 @@ class ThemeCreateSkill:
                 params,
                 env='online',
             )
+
+            # If no results, try reverse match: fetch all distinct concept names
+            # and match by checking if any keyword is a substring of the concept name
+            if not rows:
+                all_concepts = execute_query(
+                    "SELECT DISTINCT concept_name FROM stock_concept_map",
+                    env='online',
+                )
+                matched_names = []
+                for ac in all_concepts:
+                    db_name = ac['concept_name']
+                    for kw in concepts:
+                        # keyword contains concept_name OR concept_name contains keyword
+                        if kw in db_name or db_name in kw:
+                            matched_names.append(db_name)
+                            break
+                if matched_names:
+                    ph2 = ' OR '.join(['concept_name = %s'] * len(matched_names))
+                    rows = execute_query(
+                        f"""
+                        SELECT DISTINCT m.stock_code, m.stock_name, m.concept_name
+                        FROM stock_concept_map m
+                        WHERE {ph2}
+                        ORDER BY m.stock_code
+                        """,
+                        tuple(matched_names),
+                        env='online',
+                    )
             if not rows:
                 return [], []
 
