@@ -4,8 +4,11 @@ Theme Pool Router - thematic stock selection endpoints
 
 Prefix: /api/theme-pool
 """
+import json
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_db
@@ -421,3 +424,64 @@ async def remove_vote(
         raise HTTPException(status_code=404, detail='Stock not found')
     result = await svc.remove_vote(db, stock_id, current_user.id)
     return VoteResponse(**result)
+
+
+# ---------------------------------------------------------------------------
+# LLM-driven theme creation (SSE streaming)
+# ---------------------------------------------------------------------------
+
+class LLMThemeCreateRequest(BaseModel):
+    theme_name: str
+    description: str = ''
+    max_candidates: int = 40
+
+
+@router.post('/llm/create')
+async def llm_create_theme(req: LLMThemeCreateRequest):
+    """
+    SSE streaming endpoint: LLM-driven theme stock selection.
+
+    The client should read this as a Server-Sent Events stream using fetch +
+    ReadableStream (not EventSource, since we use POST).
+
+    Event types (in order):
+      start            - processing started
+      phase            - phase transition message
+      concept_mapping  - LLM-generated concept keywords
+      boards_matched   - concept boards found in Eastmoney
+      fetching         - per-board fetch progress (status: fetching | done)
+      raw_pool         - summary after code validation
+      filtering_start  - LLM filtering begins
+      filter_done      - LLM filtering complete
+      candidate_list   - final candidate stock list (main payload)
+      done             - stream complete
+      error            - fatal error
+
+    candidate_list.stocks item:
+      stock_code   str          "000001.SZ"
+      stock_name   str          "平安银行"
+      source       str          "akshare" | "llm"
+      boards       list[str]    concept boards (akshare only)
+      relevance    str          "high" | "medium"
+      reason       str          LLM-generated one-line rationale
+    """
+    from api.services.theme_llm_service import ThemeCreateSkill
+
+    skill = ThemeCreateSkill()
+
+    async def event_gen():
+        async for event in skill.stream(
+            theme_name=req.theme_name,
+            description=req.description,
+            max_candidates=req.max_candidates,
+        ):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )

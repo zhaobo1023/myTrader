@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import AppShell from '@/components/layout/AppShell';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { themePoolApi, ThemePoolItem } from '@/lib/api-client';
+import { LLMCreateDialog, CandidateStock } from '@/components/theme-pool/LLMCreateDialog';
 
 // ---------------------------------------------------------------------------
 // Status helpers
@@ -128,6 +129,7 @@ export default function ThemePoolPage() {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [showCreate, setShowCreate] = useState(false);
+  const [showLLMCreate, setShowLLMCreate] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['theme-pools', statusFilter],
@@ -157,15 +159,26 @@ export default function ThemePoolPage() {
             多人协同主题选股，量化打分增强
           </p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          style={{
-            padding: '7px 16px', borderRadius: '6px', fontSize: '12px', fontWeight: 500,
-            border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer',
-          }}
-        >
-          + 新建主题
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            onClick={() => setShowLLMCreate(true)}
+            style={{
+              padding: '7px 16px', borderRadius: '6px', fontSize: '12px', fontWeight: 500,
+              border: '1px solid var(--accent)', background: 'transparent', color: 'var(--accent)', cursor: 'pointer',
+            }}
+          >
+            AI 创建
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            style={{
+              padding: '7px 16px', borderRadius: '6px', fontSize: '12px', fontWeight: 500,
+              border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer',
+            }}
+          >
+            + 新建主题
+          </button>
+        </div>
       </div>
 
       {/* Status tabs */}
@@ -241,6 +254,26 @@ export default function ThemePoolPage() {
         open={showCreate}
         onClose={() => setShowCreate(false)}
         onCreate={(name, desc) => createMut.mutate({ name, desc })}
+      />
+
+      {/* LLM AI create dialog */}
+      <LLMCreateDialog
+        open={showLLMCreate}
+        onClose={() => setShowLLMCreate(false)}
+        onCreated={async (themeName, stocks) => {
+          // 1. create theme
+          const res = await themePoolApi.createTheme(themeName);
+          const themeId: number = res.data.id;
+          // 2. batch add selected stocks
+          await themePoolApi.batchAddStocks(themeId, stocks.map(s => ({
+            stock_code: s.stock_code,
+            stock_name: s.stock_name,
+            reason: s.reason,
+          })));
+          queryClient.invalidateQueries({ queryKey: ['theme-pools'] });
+          setShowLLMCreate(false);
+          router.push(`/theme-pool/${themeId}`);
+        }}
       />
     </AppShell>
   );
