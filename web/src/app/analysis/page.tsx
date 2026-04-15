@@ -553,6 +553,7 @@ function ComprehensiveReportPanel({ stock }: { stock: StockOption }) {
         </div>
         {!streaming && (
           <button
+            data-track="generate_briefing"
             onClick={startGeneratePost}
             style={{
               padding: '5px 14px', fontSize: '12px', fontWeight: 510,
@@ -774,6 +775,7 @@ function TechReportTabContent({ stock }: { stock: StockOption }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
         {showGenerateBtn && (
           <button
+            data-track="generate_comprehensive_report"
             onClick={() => { setGenerateError(''); generateMutation.mutate(); }}
             disabled={generateMutation.isPending}
             style={{
@@ -1032,6 +1034,7 @@ function OnePagerPanel({ stock }: { stock: StockOption }) {
         </div>
         {!streaming && (
           <button
+            data-track="generate_tech_report"
             onClick={startGenerate}
             style={{
               padding: '5px 14px', fontSize: '12px', fontWeight: 510,
@@ -1179,10 +1182,10 @@ function StockReportPanel({ stock }: { stock: StockOption }) {
           <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: '8px', fontFamily: 'var(--font-geist-mono)', fontWeight: 400 }}>{stock.code}</span>
         </h2>
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', gap: '4px' }}>
-          <button style={tabStyle('one-pager')} onClick={() => setActiveTab('one-pager')}>一页纸研究</button>
-          <button style={tabStyle('tech')} onClick={() => setActiveTab('tech')}>技术分析</button>
-          <button style={tabStyle('comprehensive')} onClick={() => setActiveTab('comprehensive')}>综合研报</button>
-          <button style={tabStyle('valuation')} onClick={() => setActiveTab('valuation')}>估值分析</button>
+          <button data-track="tab_switch" data-track-tab="one-pager" style={tabStyle('one-pager')} onClick={() => setActiveTab('one-pager')}>一页纸研究</button>
+          <button data-track="tab_switch" data-track-tab="tech" style={tabStyle('tech')} onClick={() => setActiveTab('tech')}>技术分析</button>
+          <button data-track="tab_switch" data-track-tab="comprehensive" style={tabStyle('comprehensive')} onClick={() => setActiveTab('comprehensive')}>综合研报</button>
+          <button data-track="tab_switch" data-track-tab="valuation" style={tabStyle('valuation')} onClick={() => setActiveTab('valuation')}>估值分析</button>
         </div>
       </div>
 

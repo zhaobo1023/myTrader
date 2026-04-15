@@ -260,10 +260,61 @@ docker compose restart nginx
 
 ### 待完成
 
-- [ ] PostHog 服务器端部署（执行 migrate + 获取 API Key）
+- [ ] PostHog 获取 Project API Key，填入 GitHub Secrets（POSTHOG_KEY / POSTHOG_HOST）
+- [ ] push 触发前端重建，激活埋点
 - [ ] `portfolio-doctor` skill 补充 user_id 权限校验
 - [ ] `document_service.delete_document` 三步删除改软删除
 - [ ] 概念板块 `concept_board_fetcher` 分页加 max_pages 保护
+
+---
+
+## 2026-04-15（补充 2）PostHog 服务器端部署 + 磁盘清理
+
+### 问题排查与修复
+
+#### 1. PostHog 镜像下载失败：磁盘满
+
+- **根因：** `/dev/vda1` (40G 系统盘) 被 Docker build cache 占满（22GB），无空间下载 posthog/posthog (~1.5GB）
+- **修复：** `docker builder prune -af` 清理全部 build cache，释放 22GB，磁盘占用从 100% 降至 40%
+- **根因 2：** 今日频繁构建 `mytrader-web` 镜像（10+ 次），每次都留下悬空层
+- **预防：** 服务器已有 crontab 每日凌晨 3 点自动 prune（`docker image prune -af --filter "until=24h"` + `docker builder prune -af --keep-storage=2g`），今后不会再积累
+
+#### 2. Docker build cache 清理策略升级
+
+- crontab 由每日 3 点清理改为**每 8 小时清理一次**（00:00 / 08:00 / 16:00）
+- `--filter "until=8h"` 只清超过 8 小时的旧层，不影响近期构建
+- `--keep-storage=2g` 保留 2GB build cache，加速增量构建
+
+#### 3. PostHog 启动成功
+
+```bash
+# 磁盘清理后重新拉取镜像
+docker pull posthog/posthog:latest  # ~1.5GB，约 5 分钟
+
+# 启动主容器（PostgreSQL + Redis 已提前启动）
+docker run -d \
+  --name mytrader-posthog \
+  --network app_mytrader-network \
+  -p 127.0.0.1:8080:8000 \
+  -e DATABASE_URL=postgres://posthog:posthog_secret@mytrader-posthog-db:5432/posthog \
+  -e REDIS_URL=redis://mytrader-posthog-redis:6379/ \
+  -e SECRET_KEY=<secret> \
+  -e SITE_URL=http://123.56.3.1/analytics \
+  -e DISABLE_SECURE_SSL_REDIRECT=true \
+  -e IS_BEHIND_PROXY=true \
+  --restart unless-stopped \
+  posthog/posthog:latest
+
+# 数据库迁移（首次）
+docker exec mytrader-posthog python manage.py migrate
+```
+
+### 下一步
+
+1. 访问 `http://123.56.3.1/analytics`，注册账号
+2. Settings -> Project Settings -> Project API Key，复制 `phc_` 开头的 key
+3. 在 GitHub 添加 Secret：`POSTHOG_KEY=phc_xxx`，`POSTHOG_HOST=http://123.56.3.1/analytics`
+4. push 任意 `web/` 改动，触发前端镜像重建，埋点自动生效
 
 ---
 

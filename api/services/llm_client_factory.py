@@ -11,6 +11,9 @@ import json
 import logging
 import os
 
+# HTTP timeout for LLM calls in seconds. Override with LLM_HTTP_TIMEOUT env var.
+_LLM_HTTP_TIMEOUT = float(os.getenv('LLM_HTTP_TIMEOUT', '90'))
+
 logger = logging.getLogger('myTrader.llm_factory')
 
 # ---------------------------------------------------------------------------
@@ -105,7 +108,7 @@ class LLMClientFactory:
         client = OpenAI(
             api_key=key,
             base_url=self.base_url,
-            http_client=httpx.Client(timeout=60.0),
+            http_client=httpx.Client(timeout=_LLM_HTTP_TIMEOUT),
         )
         messages = []
         if system_prompt:
@@ -162,8 +165,8 @@ async def llm_call_with_retry(
     async def _run_with_retry() -> str:
         try:
             return await _attempt()
-        except (json.JSONDecodeError, ValueError) as first_err:
-            logger.warning('[llm_call_with_retry] first attempt bad JSON: %s — retrying', first_err)
+        except (json.JSONDecodeError, ValueError, OSError, ConnectionError) as first_err:
+            logger.warning('[llm_call_with_retry] first attempt failed: %s — retrying', first_err)
             return await _attempt()  # second attempt; let exception propagate
 
     return await asyncio.wait_for(_run_with_retry(), timeout=timeout_sec)

@@ -161,6 +161,7 @@ export default function ThemePoolPage() {
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
+            data-track="theme_llm_create_open"
             onClick={() => setShowLLMCreate(true)}
             style={{
               padding: '7px 16px', borderRadius: '6px', fontSize: '12px', fontWeight: 500,
@@ -170,6 +171,7 @@ export default function ThemePoolPage() {
             AI 创建
           </button>
           <button
+            data-track="theme_create_open"
             onClick={() => setShowCreate(true)}
             style={{
               padding: '7px 16px', borderRadius: '6px', fontSize: '12px', fontWeight: 500,

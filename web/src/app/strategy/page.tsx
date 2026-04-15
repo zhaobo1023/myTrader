@@ -267,7 +267,7 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
 
     if (!todayRun) {
       return (
-        <button onClick={() => triggerMutation.mutate(false)} style={btnStyle('accent')}>
+        <button data-track="strategy_trigger" onClick={() => triggerMutation.mutate(false)} style={btnStyle('accent')}>
           触发执行
         </button>
       );
@@ -282,6 +282,7 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
             今日已完成
           </button>
           <button
+            data-track="strategy_force_trigger"
             onClick={() => triggerMutation.mutate(true)}
             style={{
               ...btnStyle('gray'),

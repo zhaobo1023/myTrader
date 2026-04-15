@@ -6,6 +6,7 @@ Prefix: /api/theme-pool
 """
 import json
 import logging
+import os
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -13,6 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_db
 from api.middleware.auth import get_current_user, get_optional_user
+
+# Skills are registered at import time; do it once at module load.
+import api.services.llm_skills.theme_review        # noqa: F401
+import api.services.llm_skills.portfolio_doctor    # noqa: F401
+import api.services.llm_skills.signal_interpreter  # noqa: F401
+
+_DEV_MODE = os.getenv('APP_ENV', 'production').lower() in ('dev', 'local', 'development')
 from api.models.user import User
 from api.models.theme_pool import ThemePool, ThemePoolStock
 from api.schemas.theme_pool import (
@@ -32,9 +40,16 @@ async def _get_user_or_dev(
     user: User = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Return authenticated user, or find/create a dev user when no token."""
+    """Return authenticated user.
+
+    In dev/local environments (APP_ENV=dev|local|development) a missing token
+    falls back to the first DB user so manual testing remains frictionless.
+    In production a missing token is a hard 401.
+    """
     if user is not None:
         return user
+    if not _DEV_MODE:
+        raise HTTPException(status_code=401, detail='Not authenticated')
     from sqlalchemy import select as sa_select
     result = await db.execute(sa_select(User).order_by(User.id).limit(1))
     dev_user = result.scalar_one_or_none()
@@ -401,13 +416,16 @@ async def trigger_score(
     import threading
     from api.tasks.theme_pool_score import run_theme_pool_score_for_theme
 
+    _score_errors: dict = {}  # module-level would be cleaner, but keep it local for now
+
     def _run():
         try:
             run_theme_pool_score_for_theme(theme_id, env='online')
+            logger.info('[THEME_POOL] manual score finished theme=%d', theme_id)
         except Exception as e:
-            logger.error('[THEME_POOL] manual score failed theme=%d: %s', theme_id, str(e))
+            logger.error('[THEME_POOL] manual score failed theme=%d: %s', theme_id, str(e), exc_info=True)
 
-    t = threading.Thread(target=_run, daemon=True)
+    t = threading.Thread(target=_run, daemon=True, name=f'theme-score-{theme_id}')
     t.start()
     return {'message': f'Scoring started for theme {theme_id}', 'theme_id': theme_id}
 
@@ -516,10 +534,6 @@ async def llm_skill_stream(req: LLMStreamRequest):
     Last event has type "done" (success) or "error" (failure).
     """
     from api.services.llm_skills.registry import get_skill
-    # ensure skills are registered
-    import api.services.llm_skills.theme_review        # noqa: F401
-    import api.services.llm_skills.portfolio_doctor    # noqa: F401
-    import api.services.llm_skills.signal_interpreter  # noqa: F401
 
     skill = get_skill(req.skill_id)
     if skill is None:
@@ -556,9 +570,6 @@ async def llm_skill_stream(req: LLMStreamRequest):
 async def list_llm_skills():
     """List all registered LLM skills."""
     from api.services.llm_skills.registry import list_skills
-    import api.services.llm_skills.theme_review        # noqa: F401
-    import api.services.llm_skills.portfolio_doctor    # noqa: F401
-    import api.services.llm_skills.signal_interpreter  # noqa: F401
     return {'skills': list_skills()}
 
 

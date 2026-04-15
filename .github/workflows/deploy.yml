@@ -33,7 +33,7 @@ jobs:
           username: ${{ secrets.ECS_USER }}
           key: ${{ secrets.ECS_SSH_KEY }}
           command_timeout: 10m
-          envs: WEB_CHANGED
+          envs: WEB_CHANGED,POSTHOG_KEY,POSTHOG_HOST
           script: |
             set -e
             cd /root/app
@@ -64,13 +64,19 @@ jobs:
             echo "[3/4] Checking frontend changes (WEB_CHANGED=$WEB_CHANGED)..."
             if [ "$WEB_CHANGED" = "true" ]; then
               echo "  web/ changed — rebuilding image..."
-              docker build --no-cache -t mytrader-web:latest ./web
+              # Pass PostHog key as build arg so Next.js bakes it into the static bundle
+              docker build --no-cache \
+                --build-arg NEXT_PUBLIC_POSTHOG_KEY="$POSTHOG_KEY" \
+                --build-arg NEXT_PUBLIC_POSTHOG_HOST="$POSTHOG_HOST" \
+                -t mytrader-web:latest ./web
               docker stop mytrader-web && docker rm mytrader-web
               docker run -d \
                 --name mytrader-web \
                 --network app_mytrader-network \
                 -p 127.0.0.1:3000:3000 \
                 -e NEXT_PUBLIC_API_BASE_URL=http://123.56.3.1:8000 \
+                -e NEXT_PUBLIC_POSTHOG_KEY="$POSTHOG_KEY" \
+                -e NEXT_PUBLIC_POSTHOG_HOST="$POSTHOG_HOST" \
                 --restart unless-stopped \
                 mytrader-web:latest
               echo "  Web container restarted with new image."
@@ -85,3 +91,5 @@ jobs:
             echo "[SUCCESS] Deploy completed."
         env:
           WEB_CHANGED: ${{ steps.changes.outputs.web }}
+          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+          POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}

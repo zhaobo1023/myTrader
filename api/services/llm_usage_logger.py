@@ -100,7 +100,7 @@ class LLMUsageLogger:
                 resource_id=rec.resource_id,
                 prompt_tokens=rec.prompt_tokens,
                 completion_tokens=rec.completion_tokens,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(),
             )
             session = await self._db_factory()
             async with session:

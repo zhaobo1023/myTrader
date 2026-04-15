@@ -47,35 +47,84 @@
 
 位置：`github.com/zhaobo1023/myTrader/settings/secrets/actions`
 
-| Secret | 值 |
-|--------|-----|
-| `ECS_HOST` | `123.56.3.1` |
-| `ECS_USER` | `root` |
-| `ECS_SSH_KEY` | GitHub Actions 专用 ed25519 私钥（已配置）|
+| Secret | 值 | 说明 |
+|--------|-----|------|
+| `ECS_HOST` | `123.56.3.1` | 已配置 |
+| `ECS_USER` | `root` | 已配置 |
+| `ECS_SSH_KEY` | ed25519 私钥 | 已配置 |
+| `POSTHOG_KEY` | `phc_xxx...` | PostHog Project API Key，见下方获取步骤 |
+| `POSTHOG_HOST` | `http://123.56.3.1/analytics` | PostHog 自托管地址 |
 
 对应公钥已添加到服务器 `~/.ssh/authorized_keys`。
+
+## PostHog 埋点系统（一次性初始化）
+
+PostHog 是自托管的产品分析服务，需要在首次部署时手动初始化一次，之后全自动。
+
+### 第一步：启动 PostHog 容器
+
+```bash
+ssh aliyun-ecs
+cd /root/app
+
+# 启动 PostHog 三个容器（PostgreSQL + Redis + PostHog 主服务）
+docker compose up -d posthog-db posthog-redis posthog
+
+# 等待约 30 秒后初始化数据库（只需执行一次）
+docker compose exec posthog python manage.py migrate
+```
+
+### 第二步：获取 Project API Key
+
+1. 浏览器访问 `http://123.56.3.1/analytics`
+2. 完成注册（填邮箱 + 密码，自托管无需验证）
+3. 进入控制台后：**Settings（左下角齿轮）→ Project Settings → Project API Key**
+4. 复制 `phc_` 开头的字符串
+
+### 第三步：配置 GitHub Secrets
+
+在 `github.com/zhaobo1023/myTrader/settings/secrets/actions` 添加两个 Secret：
+
+```
+POSTHOG_KEY  =  phc_你复制的key
+POSTHOG_HOST =  http://123.56.3.1/analytics
+```
+
+**完成后 push 任意代码触发一次部署**，前端镜像会带上这两个变量重建，埋点自动生效。
+
+### 前端重建说明
+
+`NEXT_PUBLIC_*` 变量在 Next.js 构建时被内联进 JS bundle，因此：
+- **修改了 PostHog Key** → 需要触发前端重建（改动 `web/` 任意文件 push 即可）
+- **正常业务改动** → deploy.yml 自动判断 `web/` 是否有变更，有则重建（约 4 分钟），无则跳过（约 20 秒）
 
 ## 手动部署（紧急时）
 
 ```bash
-# SSH 进服务器
 ssh aliyun-ecs
-
-# 进入代码目录（注意：是 /root/app，不是别的路径）
 cd /root/app
 git pull origin main
 
 # API 只需重启（卷挂载，代码即时生效）
 docker restart mytrader-api
 
-# 前端需要重建镜像
-docker build --no-cache -t mytrader-web:latest ./web
+# 前端需要重建镜像（带上 PostHog 变量）
+POSTHOG_KEY="phc_你的key"
+POSTHOG_HOST="http://123.56.3.1/analytics"
+
+docker build --no-cache \
+  --build-arg NEXT_PUBLIC_POSTHOG_KEY="$POSTHOG_KEY" \
+  --build-arg NEXT_PUBLIC_POSTHOG_HOST="$POSTHOG_HOST" \
+  -t mytrader-web:latest ./web
+
 docker stop mytrader-web && docker rm mytrader-web
 docker run -d \
   --name mytrader-web \
   --network app_mytrader-network \
   -p 127.0.0.1:3000:3000 \
   -e NEXT_PUBLIC_API_BASE_URL=http://123.56.3.1:8000 \
+  -e NEXT_PUBLIC_POSTHOG_KEY="$POSTHOG_KEY" \
+  -e NEXT_PUBLIC_POSTHOG_HOST="$POSTHOG_HOST" \
   --restart unless-stopped \
   mytrader-web:latest
 ```

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuthStore } from '@/lib/store';
 import { useEffect, useState, useCallback } from 'react';
+import { useTrack } from '@/hooks/useTrack';
 
 // ----------------------------------------------------------------
 // Nav structure
@@ -160,6 +161,7 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
   const [mounted, setMounted] = useState(false);
+  const { track } = useTrack();
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     return { '/strategy': true };
@@ -169,6 +171,16 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
 
   function toggleExpand(href: string) {
     setExpanded((prev) => ({ ...prev, [href]: !prev[href] }));
+  }
+
+  function handleNavClick(item: NavItem) {
+    track('nav_click', { nav_label: item.labelEn, nav_href: item.href });
+    onNavigate?.();
+  }
+
+  function handleChildNavClick(child: NavChild, parentLabel: string) {
+    track('nav_click', { nav_label: child.label, nav_href: child.href, parent: parentLabel });
+    onNavigate?.();
   }
 
   function isParentActive(item: NavItem): boolean {
@@ -215,7 +227,7 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
                   href={hasChildren ? '#' : item.href}
                   onClick={hasChildren
                     ? (e) => { e.preventDefault(); toggleExpand(item.href); }
-                    : onNavigate
+                    : () => handleNavClick(item)
                   }
                   style={{
                     flex: 1, display: 'flex', alignItems: 'center', gap: '9px',
@@ -246,7 +258,7 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
                       <Link
                         key={child.href}
                         href={child.href}
-                        onClick={onNavigate}
+                        onClick={() => handleChildNavClick(child, item.labelEn)}
                         style={{
                           display: 'flex', alignItems: 'center', gap: '8px',
                           padding: '6px 10px 6px 34px',
@@ -298,7 +310,7 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>{user.tier}</div>
               </div>
               <button
-                onClick={logout}
+                onClick={() => { track('logout_click'); logout(); }}
                 style={{ fontSize: '11px', color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '3px 6px', borderRadius: '4px', flexShrink: 0 }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)'; }}

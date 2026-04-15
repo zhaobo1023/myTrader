@@ -256,6 +256,7 @@ function ReportStatusBanner({
     <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
       {!isPending && (
         <button
+          data-track="stock_search_submit"
           onClick={onSubmit}
           disabled={submitting}
           style={{
@@ -786,6 +787,7 @@ function NewsTab({ stock }: { stock: StockOption }) {
                 {analysis.news_count} 条新闻 | 利好{analysis.bullish_count} 利空{analysis.bearish_count} 中性{analysis.neutral_count}
               </span>
               <button
+                data-track="reanalyze_stock_news"
                 onClick={handleReanalyze}
                 disabled={analyzing}
                 style={{
@@ -959,6 +961,7 @@ function StockSearchBox({ onSelect, compact }: { onSelect: (s: StockOption) => v
                   <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{item.stock_code}</span>
                 </div>
                 <button
+                  data-track="add_to_watchlist"
                   onClick={(e) => handleAdd(e, item)}
                   title={isAdded ? '已关注' : '加入关注'}
                   style={{
@@ -1323,6 +1326,8 @@ function StockDetail({
         {TAB_CONFIG.map((t) => (
           <button
             key={t.key}
+            data-track="tab_switch"
+            data-track-tab={t.key}
             onClick={() => onTabChange(t.key)}
             style={{
               padding: '6px 14px', fontSize: '13px', borderRadius: '6px', border: 'none',
