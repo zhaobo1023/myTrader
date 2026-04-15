@@ -97,3 +97,12 @@ async def get_global_assets(
 ):
     """Get global macro asset overview: latest values, changes, and trend sparklines."""
     return await market_service.get_global_assets(days)
+
+
+@router.get('/global-briefing')
+async def get_global_briefing(
+    session: str = Query(default='morning', description="'morning' (08:30) or 'evening' (18:00)"),
+):
+    """Get LLM-generated global asset briefing for today."""
+    from api.services.global_asset_briefing import get_latest_briefing
+    return await get_latest_briefing(session)

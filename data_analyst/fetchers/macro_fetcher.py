@@ -791,68 +791,74 @@ def fetch_pmi_mfg(start_date: str) -> pd.DataFrame:
 
 
 # ============================================================
-# yfinance 通用拉取函数
+# AKShare 外盘数据拉取 (primary) + yfinance fallback
 # ============================================================
 
-# yfinance batch download cache: filled once, shared by all yf fetchers
-_YF_BATCH_CACHE: dict = {}  # ticker -> DataFrame(date, value)
-
-
-def _ensure_yf_batch_loaded(start_date: str):
-    """Batch-download all yfinance tickers in one call (1 HTTP request)."""
-    global _YF_BATCH_CACHE
-    if _YF_BATCH_CACHE:
-        return
-
-    if not HAS_YFINANCE:
-        return
-
-    tickers = ['^VIX', '^GVZ', 'BTC-USD', 'DX-Y.NYB', 'BZ=F', 'SPY', 'QQQ', 'DIA']
-    start_dt = pd.to_datetime(start_date.replace('-', ''), format='%Y%m%d')
-
+def _fetch_akshare_futures(symbol: str, start_date: str) -> pd.DataFrame:
+    """AKShare futures_foreign_hist wrapper."""
+    if not HAS_AKSHARE:
+        return pd.DataFrame()
     try:
-        df = yf.download(tickers, start=start_dt.strftime('%Y-%m-%d'),
-                         auto_adjust=True, threads=False, progress=False)
-    except Exception as e:
-        # Log and return empty — individual fetchers will report "无新数据"
-        import logging
-        logging.getLogger('myTrader.macro_fetcher').warning('yfinance batch download failed: %s', e)
-        _YF_BATCH_CACHE = {t: pd.DataFrame() for t in tickers}
-        return
-
-    if df is None or df.empty:
-        _YF_BATCH_CACHE = {t: pd.DataFrame() for t in tickers}
-        return
-
-    for ticker in tickers:
-        try:
-            if len(tickers) > 1 and 'Close' in df.columns.names:
-                col = df['Close'][ticker] if ticker in df['Close'].columns else pd.Series()
-            elif 'Close' in df.columns:
-                col = df['Close']
-            else:
-                col = pd.Series()
-
-            if col.empty:
-                _YF_BATCH_CACHE[ticker] = pd.DataFrame()
-                continue
-
-            sub = col.dropna().reset_index()
-            sub.columns = ['date', 'value']
-            sub['date'] = pd.to_datetime(sub['date']).dt.tz_localize(None)
-            _YF_BATCH_CACHE[ticker] = sub
-        except Exception:
-            _YF_BATCH_CACHE[ticker] = pd.DataFrame()
+        df = ak.futures_foreign_hist(symbol=symbol)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df['date'] = pd.to_datetime(df['date'])
+        df = df[['date', 'close']].rename(columns={'close': 'value'})
+        start_dt = pd.to_datetime(start_date.replace('-', ''), format='%Y%m%d')
+        return df[df['date'] >= start_dt]
+    except Exception:
+        return pd.DataFrame()
 
 
-def _make_yfinance_fetcher(ticker: str):
-    """工厂函数: 返回一个 yfinance 拉取函数 (uses batch cache)"""
+def _fetch_akshare_us_index(symbol: str, start_date: str) -> pd.DataFrame:
+    """AKShare index_us_stock_sina wrapper for US market indices/ETFs."""
+    if not HAS_AKSHARE:
+        return pd.DataFrame()
+    try:
+        df = ak.index_us_stock_sina(symbol=symbol)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df['date'] = pd.to_datetime(df['date'])
+        df = df[['date', 'close']].rename(columns={'close': 'value'})
+        start_dt = pd.to_datetime(start_date.replace('-', ''), format='%Y%m%d')
+        return df[df['date'] >= start_dt]
+    except Exception:
+        return pd.DataFrame()
+
+
+def _yfinance_fallback(ticker: str, start_date: str) -> pd.DataFrame:
+    """yfinance single-ticker fallback (used when AKShare fails)."""
+    if not HAS_YFINANCE:
+        return pd.DataFrame()
+    try:
+        start_dt = pd.to_datetime(start_date.replace('-', ''), format='%Y%m%d')
+        t = yf.Ticker(ticker)
+        df = t.history(start=start_dt.strftime('%Y-%m-%d'), auto_adjust=True)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.reset_index()
+        df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
+        df = df[['Date', 'Close']].rename(columns={'Date': 'date', 'Close': 'value'})
+        return df.dropna(subset=['value'])
+    except Exception:
+        return pd.DataFrame()
+
+
+def _make_global_asset_fetcher(ak_source: str, ak_symbol: str, yf_ticker: str):
+    """
+    Factory: AKShare primary -> yfinance fallback.
+    ak_source: 'futures' | 'us_index' | None
+    """
     def fetcher(start_date: str) -> pd.DataFrame:
-        if not HAS_YFINANCE:
-            raise RuntimeError("yfinance 未安装，请运行 pip install yfinance")
-        _ensure_yf_batch_loaded(start_date)
-        return _YF_BATCH_CACHE.get(ticker, pd.DataFrame()).copy()
-    fetcher.__name__ = 'fetch_yf_{}'.format(ticker.replace('^', '').replace('=', '_'))
+        df = pd.DataFrame()
+        if ak_source == 'futures':
+            df = _fetch_akshare_futures(ak_symbol, start_date)
+        elif ak_source == 'us_index':
+            df = _fetch_akshare_us_index(ak_symbol, start_date)
+        if df.empty and yf_ticker:
+            df = _yfinance_fallback(yf_ticker, start_date)
+        return df
+    fetcher.__name__ = 'fetch_global_{}'.format(ak_symbol or yf_ticker).replace('^', '').replace('.', '_')
     return fetcher
 
 
@@ -874,9 +880,7 @@ def fetch_usdcny(start_date: str) -> pd.DataFrame:
         )
     except Exception:
         # Fallback to yfinance
-        if HAS_YFINANCE:
-            return _make_yfinance_fetcher('CNY=X')(start_date)
-        return pd.DataFrame()
+        return _yfinance_fallback('CNY=X', start_date)
 
     if df is None or df.empty:
         return pd.DataFrame()
@@ -930,18 +934,19 @@ FETCH_FUNCTIONS['pmi_mfg'] = fetch_pmi_mfg
 FETCH_FUNCTIONS['cpi_yoy'] = fetch_cpi_yoy
 FETCH_FUNCTIONS['ppi_yoy'] = fetch_ppi_yoy
 
-# 注册 yfinance 全球资产拉取函数
-for _yf_key, _yf_ticker in [
-    ('vix', '^VIX'),
-    ('gvz', '^GVZ'),
-    ('btc', 'BTC-USD'),
-    ('dxy', 'DX-Y.NYB'),
-    ('brent_oil', 'BZ=F'),
-    ('spy', 'SPY'),
-    ('qqq', 'QQQ'),
-    ('dia', 'DIA'),
+# 注册全球资产拉取函数: AKShare primary -> yfinance fallback
+# (ak_source, ak_symbol, yf_fallback_ticker)
+for _key, _ak_src, _ak_sym, _yf in [
+    ('btc',       'futures',  'BTC',  'BTC-USD'),
+    ('brent_oil', 'futures',  'BZ',   'BZ=F'),         # AKShare BZ only has 13 rows, yfinance better
+    ('spy',       'us_index', '.INX', 'SPY'),           # S&P 500 index
+    ('qqq',       'us_index', '.IXIC','QQQ'),           # Nasdaq Composite
+    ('dia',       'us_index', '.DJI', 'DIA'),           # Dow Jones
+    ('vix',       None,       '',     '^VIX'),           # No AKShare source
+    ('gvz',       None,       '',     '^GVZ'),           # No AKShare source
+    ('dxy',       None,       '',     'DX-Y.NYB'),       # No AKShare source
 ]:
-    FETCH_FUNCTIONS[_yf_key] = _make_yfinance_fetcher(_yf_ticker)
+    FETCH_FUNCTIONS[_key] = _make_global_asset_fetcher(_ak_src, _ak_sym, _yf)
 
 # 注册 USD/CNY 拉取函数
 FETCH_FUNCTIONS['usdcny'] = fetch_usdcny
@@ -1109,8 +1114,12 @@ def fetch_bond_yield_indicators() -> dict:
     }
 
     try:
-        latest_date = get_latest_date('cn_10y_bond')
-        if latest_date:
+        # Use the earliest latest_date among all bond keys so new indicators get backfilled
+        dates = [get_latest_date(k) for k in bond_keys]
+        non_null = [d for d in dates if d]
+        if non_null and all(d is not None for d in dates):
+            # All keys have data — use the latest among them
+            latest_date = min(non_null)
             today = date.today().strftime('%Y-%m-%d')
             if latest_date >= today:
                 for k in bond_keys:
@@ -1119,6 +1128,7 @@ def fetch_bond_yield_indicators() -> dict:
             start_dt = pd.to_datetime(latest_date) + timedelta(days=1)
             start_date = start_dt.strftime('%Y%m%d')
         else:
+            # Some keys have no data at all — pull from start
             start_date = MACRO_DATA_START
 
         df = fetch_bond_yields(start_date)

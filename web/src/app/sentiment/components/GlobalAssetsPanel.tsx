@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import apiClient from '@/lib/api-client';
 
@@ -84,6 +85,87 @@ function AssetCard({ item }: { item: AssetItem }) {
   );
 }
 
+function BriefingCard() {
+  const [session, setSession] = useState<'morning' | 'evening'>(() => {
+    const hour = new Date().getHours();
+    return hour < 15 ? 'morning' : 'evening';
+  });
+
+  const { data: briefing, isLoading: briefingLoading, error: briefingError, refetch } = useQuery({
+    queryKey: ['globalBriefing', session],
+    queryFn: () => apiClient.get('/api/market/global-briefing', { params: { session } }).then((r) => r.data),
+    staleTime: 10 * 60 * 1000,
+    retry: 1,
+  });
+
+  return (
+    <div style={{
+      background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+      borderRadius: '8px', padding: '16px 20px', marginBottom: '20px',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span style={{ fontSize: '14px', fontWeight: 590, color: 'var(--text-primary)' }}>
+            {session === 'morning' ? '盘前速递' : '收盘复盘'}
+          </span>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            {(['morning', 'evening'] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setSession(s)}
+                style={{
+                  padding: '2px 10px', fontSize: '11px', borderRadius: '4px',
+                  border: '1px solid ' + (session === s ? 'var(--accent)' : 'var(--border-subtle)'),
+                  background: session === s ? 'var(--accent)15' : 'transparent',
+                  color: session === s ? 'var(--accent)' : 'var(--text-muted)',
+                  cursor: 'pointer',
+                }}
+              >
+                {s === 'morning' ? '08:30' : '18:00'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <button
+          onClick={() => refetch()}
+          style={{
+            fontSize: '11px', padding: '3px 10px', borderRadius: '4px',
+            border: '1px solid var(--border-subtle)', background: 'var(--bg-card)',
+            color: 'var(--text-muted)', cursor: 'pointer',
+          }}
+        >
+          {briefingLoading ? '...' : '生成'}
+        </button>
+      </div>
+      {briefingLoading && (
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '16px 0' }}>
+          AI 正在分析全球资产数据...
+        </div>
+      )}
+      {briefingError && (
+        <div style={{ fontSize: '12px', color: '#e5534b' }}>
+          生成失败，请确认LLM服务可用
+        </div>
+      )}
+      {briefing?.content && !briefingLoading && (
+        <div
+          style={{
+            fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.7,
+            whiteSpace: 'pre-wrap',
+          }}
+        >
+          {briefing.content}
+        </div>
+      )}
+      {briefing?.date && !briefingLoading && (
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '12px' }}>
+          {briefing.date} {session === 'morning' ? '盘前' : '盘后'}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function GlobalAssetsPanel() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['globalAssets'],
@@ -99,6 +181,7 @@ export default function GlobalAssetsPanel() {
 
   return (
     <div>
+      <BriefingCard />
       {groups.map((group) => (
         <div key={group.name}>
           <h2 style={{ fontSize: '11px', fontWeight: 510, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', margin: '24px 0 10px' }}>
