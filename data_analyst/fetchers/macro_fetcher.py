@@ -794,32 +794,64 @@ def fetch_pmi_mfg(start_date: str) -> pd.DataFrame:
 # yfinance 通用拉取函数
 # ============================================================
 
+# yfinance batch download cache: filled once, shared by all yf fetchers
+_YF_BATCH_CACHE: dict = {}  # ticker -> DataFrame(date, value)
+
+
+def _ensure_yf_batch_loaded(start_date: str):
+    """Batch-download all yfinance tickers in one call (1 HTTP request)."""
+    global _YF_BATCH_CACHE
+    if _YF_BATCH_CACHE:
+        return
+
+    if not HAS_YFINANCE:
+        return
+
+    tickers = ['^VIX', '^GVZ', 'BTC-USD', 'DX-Y.NYB', 'BZ=F', 'SPY', 'QQQ', 'DIA']
+    start_dt = pd.to_datetime(start_date.replace('-', ''), format='%Y%m%d')
+
+    try:
+        df = yf.download(tickers, start=start_dt.strftime('%Y-%m-%d'),
+                         auto_adjust=True, threads=False, progress=False)
+    except Exception as e:
+        # Log and return empty — individual fetchers will report "无新数据"
+        import logging
+        logging.getLogger('myTrader.macro_fetcher').warning('yfinance batch download failed: %s', e)
+        _YF_BATCH_CACHE = {t: pd.DataFrame() for t in tickers}
+        return
+
+    if df is None or df.empty:
+        _YF_BATCH_CACHE = {t: pd.DataFrame() for t in tickers}
+        return
+
+    for ticker in tickers:
+        try:
+            if len(tickers) > 1 and 'Close' in df.columns.names:
+                col = df['Close'][ticker] if ticker in df['Close'].columns else pd.Series()
+            elif 'Close' in df.columns:
+                col = df['Close']
+            else:
+                col = pd.Series()
+
+            if col.empty:
+                _YF_BATCH_CACHE[ticker] = pd.DataFrame()
+                continue
+
+            sub = col.dropna().reset_index()
+            sub.columns = ['date', 'value']
+            sub['date'] = pd.to_datetime(sub['date']).dt.tz_localize(None)
+            _YF_BATCH_CACHE[ticker] = sub
+        except Exception:
+            _YF_BATCH_CACHE[ticker] = pd.DataFrame()
+
+
 def _make_yfinance_fetcher(ticker: str):
-    """工厂函数: 返回一个 yfinance 拉取函数 (带重试)"""
+    """工厂函数: 返回一个 yfinance 拉取函数 (uses batch cache)"""
     def fetcher(start_date: str) -> pd.DataFrame:
         if not HAS_YFINANCE:
             raise RuntimeError("yfinance 未安装，请运行 pip install yfinance")
-        start_dt = pd.to_datetime(start_date.replace('-', ''), format='%Y%m%d')
-
-        # Retry with backoff for rate limiting
-        for attempt in range(3):
-            try:
-                t = yf.Ticker(ticker)
-                df = t.history(start=start_dt.strftime('%Y-%m-%d'), auto_adjust=True)
-                if df is not None and not df.empty:
-                    df = df.reset_index()
-                    df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
-                    df = df[['Date', 'Close']].rename(columns={'Date': 'date', 'Close': 'value'})
-                    df = df.dropna(subset=['value'])
-                    return df
-                return pd.DataFrame()
-            except Exception as e:
-                if 'Rate' in str(e) or 'Too Many' in str(e):
-                    wait = 5 * (attempt + 1)
-                    time.sleep(wait)
-                    continue
-                raise
-        return pd.DataFrame()
+        _ensure_yf_batch_loaded(start_date)
+        return _YF_BATCH_CACHE.get(ticker, pd.DataFrame()).copy()
     fetcher.__name__ = 'fetch_yf_{}'.format(ticker.replace('^', '').replace('=', '_'))
     return fetcher
 
