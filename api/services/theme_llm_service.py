@@ -117,11 +117,12 @@ class StockCodeValidator:
 class ThemeCreateSkill:
     """
     P0 LLM skill: given a theme name, produce a candidate stock list via:
-      1. LLM -> Eastmoney concept keywords
-      2. AKShare -> concept board members
+      1. LLM -> Eastmoney concept keywords + SW industry keywords
+      2. DB query -> stock_concept_map (primary) + trade_stock_basic SW industry (fallback)
+         If DB is empty, fall back to live AKShare fetch
       3. DB code validation
       4. LLM filter + score
-      5. LLM supplement (stocks not in AKShare)
+      5. LLM supplement (subcategory-aware, finds unlisted niche leaders)
     """
 
     def __init__(self, model_alias: str | None = None, redis=None):
@@ -148,50 +149,42 @@ class ThemeCreateSkill:
         concepts = await self._map_concepts(theme_name)
         yield {'type': 'concept_mapping', 'concepts': concepts}
 
-        # --- Phase 2: AKShare board fetch ---
-        yield {'type': 'phase', 'phase': 'fetching', 'message': '正在从东方财富拉取概念成分股...'}
-        all_boards = await self._fetcher.get_all_boards()
-        matched_boards = self._fuzzy_match_boards(concepts, all_boards)
-        yield {'type': 'boards_matched', 'boards': matched_boards, 'total': len(matched_boards)}
+        # --- Phase 2: Query DB concept map (primary) + SW industry (fallback) ---
+        yield {'type': 'phase', 'phase': 'fetching', 'message': '正在从数据库拉取概念成分股...'}
+        db_stocks, matched_boards, used_akshare = await self._fetch_candidates_from_db(
+            theme_name, concepts
+        )
 
-        # raw_stocks: {6-digit-code: {name, boards}}
-        raw_stocks: dict[str, dict] = {}
-        for board in matched_boards:
-            yield {'type': 'fetching', 'board': board, 'status': 'fetching'}
-            stocks = await self._fetcher.get_board_stocks(board)
-            for s in stocks:
-                code = s['code']
-                if code not in raw_stocks:
-                    raw_stocks[code] = {'name': s['name'], 'boards': []}
-                if board not in raw_stocks[code]['boards']:
-                    raw_stocks[code]['boards'].append(board)
-            yield {'type': 'fetching', 'board': board, 'status': 'done', 'count': len(stocks)}
+        if used_akshare:
+            yield {
+                'type': 'boards_matched',
+                'boards': matched_boards,
+                'total': len(matched_boards),
+                'source': 'akshare_live',
+                'note': 'DB concept map empty, fell back to live AKShare fetch',
+            }
+        else:
+            yield {
+                'type': 'boards_matched',
+                'boards': matched_boards,
+                'total': len(matched_boards),
+                'source': 'db',
+            }
 
-        # --- Phase 3: Code validation ---
-        valid_map = self._validator.validate_batch(list(raw_stocks.keys()))
-        valid_stocks = []
-        for raw_code, info in raw_stocks.items():
-            norm = StockCodeValidator._normalize(raw_code)
-            if norm in valid_map:
-                valid_stocks.append({
-                    'stock_code': norm,
-                    'stock_name': valid_map[norm],
-                    'boards': info['boards'],
-                    'source': 'akshare',
-                })
+        valid_stocks = db_stocks
         yield {
             'type': 'raw_pool',
-            'total': len(raw_stocks),
+            'total': len(valid_stocks),
             'valid': len(valid_stocks),
             'boards_hit': len(matched_boards),
         }
 
-        # --- Phase 4: LLM filter ---
+        # --- Phase 3: LLM filter ---
         yield {'type': 'filtering_start', 'total_candidates': len(valid_stocks)}
         filtered = await self._filter_stocks(theme_name, valid_stocks)
         yield {'type': 'filter_done', 'selected': len(filtered)}
 
-        # --- Phase 5: LLM supplement ---
+        # --- Phase 4: LLM supplement (subcategory-aware) ---
         existing_codes = [s['stock_code'] for s in filtered]
         supplements_raw = await self._supplement_stocks(theme_name, existing_codes)
         supp_valid_map = self._validator.validate_batch(
@@ -206,11 +199,12 @@ class ThemeCreateSkill:
                     'stock_name': supp_valid_map[norm],
                     'source': 'llm',
                     'boards': [],
+                    'subcategory': s.get('subcategory', ''),
                     'relevance': 'medium',
                     'reason': s.get('reason', ''),
                 })
 
-        # --- Phase 6: Final candidate list ---
+        # --- Phase 5: Final candidate list ---
         final_stocks = (filtered + supplements)[:max_candidates]
         yield {
             'type': 'candidate_list',
@@ -221,8 +215,151 @@ class ThemeCreateSkill:
         }
         yield {
             'type': 'done',
-            'summary': f'共找到 {len(final_stocks)} 只候选股票（AKShare {len(filtered)} 只，AI 补充 {len(supplements)} 只）',
+            'summary': f'共找到 {len(final_stocks)} 只候选股票（概念库 {len(filtered)} 只，AI 补充 {len(supplements)} 只）',
         }
+
+    async def _fetch_candidates_from_db(
+        self, theme_name: str, concepts: list[str]
+    ) -> tuple[list[dict], list[str], bool]:
+        """
+        Primary: query stock_concept_map by concept keywords.
+        Fallback A: query trade_stock_basic by SW industry keywords if DB has too few results.
+        Fallback B: live AKShare if DB concept map is completely empty.
+
+        Returns (valid_stocks, matched_boards, used_akshare_flag).
+        """
+        loop = asyncio.get_event_loop()
+
+        # Try DB concept map
+        db_result = await loop.run_in_executor(
+            None, self._sync_query_concept_db, concepts
+        )
+        raw_stocks, matched_boards = db_result
+
+        if raw_stocks:
+            # Also supplement with SW industry match from trade_stock_basic
+            industry_stocks = await loop.run_in_executor(
+                None, self._sync_query_sw_industry, concepts
+            )
+            # Merge: add industry stocks not already in raw_stocks
+            existing_codes = {s['stock_code'] for s in raw_stocks}
+            for s in industry_stocks:
+                if s['stock_code'] not in existing_codes:
+                    raw_stocks.append(s)
+                    existing_codes.add(s['stock_code'])
+
+            return raw_stocks, matched_boards, False
+
+        # DB concept map is empty -> fall back to live AKShare
+        logger.warning(
+            '[ThemeCreateSkill] stock_concept_map has no data for theme=%s, falling back to AKShare',
+            theme_name,
+        )
+        all_boards = await self._fetcher.get_all_boards()
+        matched_boards = self._fuzzy_match_boards(concepts, all_boards)
+        raw_stocks_dict: dict[str, dict] = {}
+        for board in matched_boards:
+            stocks = await self._fetcher.get_board_stocks(board)
+            for s in stocks:
+                code = s['code']
+                if code not in raw_stocks_dict:
+                    raw_stocks_dict[code] = {'name': s['name'], 'boards': []}
+                if board not in raw_stocks_dict[code]['boards']:
+                    raw_stocks_dict[code]['boards'].append(board)
+
+        valid_map = self._validator.validate_batch(list(raw_stocks_dict.keys()))
+        valid_stocks = []
+        for raw_code, info in raw_stocks_dict.items():
+            norm = StockCodeValidator._normalize(raw_code)
+            if norm in valid_map:
+                valid_stocks.append({
+                    'stock_code': norm,
+                    'stock_name': valid_map[norm],
+                    'boards': info['boards'],
+                    'source': 'akshare',
+                })
+        return valid_stocks, matched_boards, True
+
+    def _sync_query_concept_db(self, concepts: list[str]) -> tuple[list[dict], list[str]]:
+        """
+        Query stock_concept_map by concept keywords (substring match on concept_name).
+        Returns (stock_list, matched_board_names).
+        """
+        if not concepts:
+            return [], []
+        try:
+            # Build OR conditions for concept name matching
+            placeholders = ' OR '.join(['concept_name LIKE %s'] * len(concepts))
+            params = tuple(f'%{c}%' for c in concepts)
+            rows = execute_query(
+                f"""
+                SELECT DISTINCT m.stock_code, m.stock_name, m.concept_name
+                FROM stock_concept_map m
+                WHERE {placeholders}
+                ORDER BY m.stock_code
+                """,
+                params,
+                env='online',
+            )
+            if not rows:
+                return [], []
+
+            # Group by stock_code
+            stock_map: dict[str, dict] = {}
+            board_set: set[str] = set()
+            for r in rows:
+                code = r['stock_code']
+                board = r['concept_name']
+                board_set.add(board)
+                if code not in stock_map:
+                    stock_map[code] = {
+                        'stock_code': code,
+                        'stock_name': r['stock_name'],
+                        'boards': [],
+                        'source': 'db',
+                    }
+                if board not in stock_map[code]['boards']:
+                    stock_map[code]['boards'].append(board)
+
+            return list(stock_map.values()), sorted(board_set)
+        except Exception as e:
+            logger.warning('[ThemeCreateSkill] concept DB query failed: %s', e)
+            return [], []
+
+    def _sync_query_sw_industry(self, concepts: list[str]) -> list[dict]:
+        """
+        Supplement from trade_stock_basic by SW industry name keyword match.
+        Returns list of {stock_code, stock_name, boards, source}.
+        """
+        if not concepts:
+            return []
+        try:
+            placeholders = ' OR '.join(['industry LIKE %s'] * len(concepts))
+            params = tuple(f'%{c}%' for c in concepts)
+            rows = execute_query(
+                f"""
+                SELECT stock_code, stock_name, industry
+                FROM trade_stock_basic
+                WHERE {placeholders}
+                  AND stock_code IS NOT NULL
+                LIMIT 500
+                """,
+                params,
+                env='online',
+            )
+            return [
+                {
+                    'stock_code': r['stock_code'],
+                    'stock_name': r['stock_name'],
+                    'boards': [r['industry']],
+                    'source': 'sw_industry',
+                }
+                for r in rows
+                if r.get('stock_code')
+            ]
+        except Exception as e:
+            logger.warning('[ThemeCreateSkill] SW industry query failed: %s', e)
+            return []
 
     # -------------------------------------------------------------------------
     # Internal helpers

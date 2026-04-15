@@ -10,8 +10,9 @@ import { useSSEFetch } from '@/hooks/useSSEFetch';
 export interface CandidateStock {
   stock_code: string;
   stock_name: string;
-  source: 'akshare' | 'llm';
+  source: 'akshare' | 'llm' | 'db' | 'sw_industry';
   boards: string[];
+  subcategory?: string;
   relevance: 'high' | 'medium';
   reason: string;
   selected: boolean;
@@ -44,7 +45,7 @@ interface Props {
 
 const phaseLabel: Record<string, string> = {
   concept_mapping: 'AI 扩展概念关键词...',
-  fetching: '从东方财富拉取成分股...',
+  fetching: '从概念库拉取成分股...',
   filtering: 'AI 过滤精选候选股...',
 };
 
@@ -57,6 +58,92 @@ function relevanceBg(r: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Concept Board Selector
+// ---------------------------------------------------------------------------
+
+interface BoardSelectorProps {
+  boards: string[];
+  enabledBoards: Set<string>;
+  candidates: CandidateStock[];
+  onToggleBoard: (board: string) => void;
+}
+
+function ConceptBoardSelector({ boards, enabledBoards, candidates, onToggleBoard }: BoardSelectorProps) {
+  const [expandedBoard, setExpandedBoard] = useState<string | null>(null);
+
+  if (boards.length === 0) return null;
+
+  return (
+    <div style={{ padding: '10px 24px', borderBottom: '1px solid var(--border-subtle)' }}>
+      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px', fontWeight: 500 }}>
+        匹配概念板块 — 点击展开查看成分股，勾选控制是否纳入:
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+        {boards.map(board => {
+          const enabled = enabledBoards.has(board);
+          const boardStocks = candidates.filter(s => s.boards.includes(board));
+          const isExpanded = expandedBoard === board;
+
+          return (
+            <div key={board} style={{ position: 'relative' }}>
+              {/* Board chip */}
+              <div style={{ display: 'flex', alignItems: 'center', borderRadius: '6px', border: `1px solid ${enabled ? 'var(--accent)' : 'var(--border-subtle)'}`, overflow: 'hidden', background: enabled ? 'rgba(var(--accent-rgb),0.06)' : 'var(--bg-elevated)' }}>
+                {/* Toggle checkbox area */}
+                <label style={{ display: 'flex', alignItems: 'center', padding: '3px 6px', cursor: 'pointer', gap: '4px' }}>
+                  <input
+                    type="checkbox"
+                    checked={enabled}
+                    onChange={() => onToggleBoard(board)}
+                    style={{ cursor: 'pointer', accentColor: 'var(--accent)' }}
+                  />
+                  <span style={{ fontSize: '11px', color: enabled ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: enabled ? 500 : 400 }}>
+                    {board}
+                  </span>
+                  {boardStocks.length > 0 && (
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>({boardStocks.length})</span>
+                  )}
+                </label>
+                {/* Expand toggle */}
+                {boardStocks.length > 0 && (
+                  <button
+                    onClick={() => setExpandedBoard(isExpanded ? null : board)}
+                    style={{ padding: '3px 6px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '10px', borderLeft: '1px solid var(--border-subtle)' }}
+                    title={isExpanded ? '收起' : '展开查看成分股'}
+                  >
+                    {isExpanded ? 'v' : '>'}
+                  </button>
+                )}
+              </div>
+
+              {/* Expanded stock list (dropdown-style, absolute) */}
+              {isExpanded && boardStocks.length > 0 && (
+                <div style={{
+                  position: 'absolute', top: '100%', left: 0, zIndex: 10,
+                  background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)',
+                  borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                  minWidth: '200px', maxWidth: '280px', maxHeight: '200px',
+                  overflowY: 'auto', padding: '6px 0',
+                }}>
+                  <div style={{ padding: '4px 10px 6px', fontSize: '10px', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-subtle)', fontWeight: 500 }}>
+                    {board} ({boardStocks.length} 只)
+                  </div>
+                  {boardStocks.map(s => (
+                    <div key={s.stock_code} style={{ padding: '4px 10px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 500 }}>{s.stock_name}</span>
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-geist-mono)' }}>{s.stock_code}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -65,7 +152,13 @@ export function LLMCreateDialog({ open, onClose, onCreated }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [logs, setLogs] = useState<string[]>([]);
   const [concepts, setConcepts] = useState<string[]>([]);
+  // All candidates returned by LLM (unfiltered by board toggle)
+  const [allCandidates, setAllCandidates] = useState<CandidateStock[]>([]);
+  // Which candidates are selected (checkbox)
   const [candidates, setCandidates] = useState<CandidateStock[]>([]);
+  // Matched boards for the concept board selector
+  const [matchedBoards, setMatchedBoards] = useState<string[]>([]);
+  const [enabledBoards, setEnabledBoards] = useState<Set<string>>(new Set());
   const [summary, setSummary] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [creating, setCreating] = useState(false);
@@ -83,7 +176,10 @@ export function LLMCreateDialog({ open, onClose, onCreated }: Props) {
     setPhase('concept_mapping');
     setLogs([]);
     setConcepts([]);
+    setAllCandidates([]);
     setCandidates([]);
+    setMatchedBoards([]);
+    setEnabledBoards(new Set());
     setSummary('');
     setErrorMsg('');
 
@@ -111,9 +207,15 @@ export function LLMCreateDialog({ open, onClose, onCreated }: Props) {
               break;
             }
 
-            case 'boards_matched':
-              addLog(`匹配到 ${event.total} 个东财概念板块`);
+            case 'boards_matched': {
+              const boards = (event.boards as string[]) ?? [];
+              const source = (event.source as string) ?? 'db';
+              setMatchedBoards(boards);
+              setEnabledBoards(new Set(boards));
+              const sourceLabel = source === 'db' ? '概念库' : '东财(实时)';
+              addLog(`从${sourceLabel}匹配到 ${event.total} 个概念板块`);
               break;
+            }
 
             case 'fetching':
               if (event.status === 'done') {
@@ -139,6 +241,7 @@ export function LLMCreateDialog({ open, onClose, onCreated }: Props) {
                 ...s,
                 selected: true,
               }));
+              setAllCandidates(stocks);
               setCandidates(stocks);
               setPhase('review');
               break;
@@ -168,6 +271,28 @@ export function LLMCreateDialog({ open, onClose, onCreated }: Props) {
     abortRef.current?.abort();
     setPhase('idle');
   };
+
+  // Toggle a concept board: when disabled, unselect all stocks from that board
+  // (but only if those stocks have no other enabled board)
+  const toggleBoard = useCallback((board: string) => {
+    setEnabledBoards(prev => {
+      const next = new Set(prev);
+      if (next.has(board)) {
+        next.delete(board);
+      } else {
+        next.add(board);
+      }
+      // Recompute candidate selection based on new board set
+      setCandidates(prevCandidates =>
+        prevCandidates.map(s => {
+          if (s.source === 'llm' || s.boards.length === 0) return s; // AI-supplement always kept
+          const hasEnabledBoard = s.boards.some(b => b === board ? next.has(board) : next.has(b));
+          return { ...s, selected: hasEnabledBoard };
+        })
+      );
+      return next;
+    });
+  }, []);
 
   const toggleStock = (code: string) => {
     setCandidates(prev =>
@@ -218,7 +343,10 @@ export function LLMCreateDialog({ open, onClose, onCreated }: Props) {
     setPhase('idle');
     setThemeName('');
     setLogs([]);
+    setAllCandidates([]);
     setCandidates([]);
+    setMatchedBoards([]);
+    setEnabledBoards(new Set());
     setSummary('');
     setErrorMsg('');
     onClose();
@@ -235,14 +363,14 @@ export function LLMCreateDialog({ open, onClose, onCreated }: Props) {
       onClick={handleClose}
     >
       <div
-        style={{ background: 'var(--bg-panel)', borderRadius: '12px', width: '780px', maxWidth: '95vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        style={{ background: 'var(--bg-panel)', borderRadius: '12px', width: '820px', maxWidth: '95vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
         <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>AI 创建主题票池</div>
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>输入主题名，AI 自动匹配东财概念板块并精选候选股</div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>输入主题名，AI 自动匹配概念板块并精选候选股</div>
           </div>
           <button onClick={handleClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '18px' }}>×</button>
         </div>
@@ -311,6 +439,17 @@ export function LLMCreateDialog({ open, onClose, onCreated }: Props) {
           {/* Candidate list (review phase) */}
           {(phase === 'review' || phase === 'done') && (
             <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+
+              {/* Concept board selector */}
+              {matchedBoards.length > 0 && (
+                <ConceptBoardSelector
+                  boards={matchedBoards}
+                  enabledBoards={enabledBoards}
+                  candidates={candidates}
+                  onToggleBoard={toggleBoard}
+                />
+              )}
+
               {/* Summary bar */}
               <div style={{ padding: '10px 24px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                 {summary && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{summary}</span>}
@@ -324,13 +463,13 @@ export function LLMCreateDialog({ open, onClose, onCreated }: Props) {
 
               {/* Stock list */}
               <div style={{ flex: 1, overflowY: 'auto', padding: '8px 24px' }}>
-                {/* AKShare group */}
-                {candidates.filter(s => s.source === 'akshare').length > 0 && (
+                {/* Concept board stocks group */}
+                {candidates.filter(s => s.source !== 'llm').length > 0 && (
                   <div style={{ marginBottom: '8px' }}>
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0 4px', fontWeight: 500 }}>
-                      东财概念板块 ({candidates.filter(s => s.source === 'akshare').length} 只)
+                      概念库精选 ({candidates.filter(s => s.source !== 'llm').length} 只)
                     </div>
-                    {candidates.filter(s => s.source === 'akshare').map(s => (
+                    {candidates.filter(s => s.source !== 'llm').map(s => (
                       <StockRow key={s.stock_code} stock={s} onToggle={() => toggleStock(s.stock_code)} />
                     ))}
                   </div>
@@ -412,6 +551,9 @@ function StockRow({ stock, onToggle }: { stock: CandidateStock; onToggle: () => 
           </span>
           {stock.source === 'llm' && (
             <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '8px', background: 'rgba(94,106,210,0.1)', color: 'var(--accent)' }}>AI 推荐</span>
+          )}
+          {stock.subcategory && (
+            <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '8px', background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>{stock.subcategory}</span>
           )}
           {stock.boards.length > 0 && (
             <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{stock.boards.slice(0, 2).join(' · ')}</span>

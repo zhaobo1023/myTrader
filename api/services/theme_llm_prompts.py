@@ -59,9 +59,11 @@ STOCK_FILTER_USER = """主题：{theme_name}
 # Phase 5: LLM supplement stocks not in AKShare
 # ---------------------------------------------------------------------------
 
-LLM_SUPPLEMENT_SYSTEM = """你是 A 股投资专家。
+LLM_SUPPLEMENT_SYSTEM = """你是 A 股投资专家，专门负责找出主题"{theme_name}"的核心受益股。
 
-任务：对于主题"{theme_name}"，补充 5-10 只重要的相关个股，这些股票未出现在已有候选列表中。
+任务：根据主题的子赛道/产业链细分，补充 5-15 只重要的相关个股，这些股票未出现在已有候选列表中。
+特别注意：细分赛道龙头（如变压器、继电保护、GIS开关柜、电机、EPC总包等）往往不在概念板块内，
+需要你从产业链知识库中主动补充。
 
 输出格式（严格 JSON，不加任何额外文字）：
 {{
@@ -69,6 +71,7 @@ LLM_SUPPLEMENT_SYSTEM = """你是 A 股投资专家。
     {{
       "stock_code": "600905.SH",
       "stock_name": "三峡能源",
+      "subcategory": "子赛道（如：变压器/继电保护/GIS/电机/EPC/其他）",
       "reason": "一句话理由，限50字"
     }}
   ]
@@ -77,11 +80,12 @@ LLM_SUPPLEMENT_SYSTEM = """你是 A 股投资专家。
 重要约束：
 1. stock_code 必须是真实存在的 A 股代码，格式为 XXXXXX.SH 或 XXXXXX.SZ
 2. 不确定代码的个股宁可不写，不要猜测
-3. 已在候选列表中的股票不要重复"""
+3. 已在候选列表中的股票不要重复
+4. 优先补充市值较大、主业集中的细分龙头"""
 
 LLM_SUPPLEMENT_USER = """主题：{theme_name}
 
 已有候选股票（勿重复）：
 {existing_codes}
 
-请补充该主题其他重要标的（JSON格式）："""
+请按子赛道结构，主动补充该主题其他重要标的（JSON格式）："""

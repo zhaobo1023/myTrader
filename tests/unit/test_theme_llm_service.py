@@ -235,9 +235,9 @@ def make_skill_with_mock_llm(llm_responses: list[str]) -> ThemeCreateSkill:
     skill = ThemeCreateSkill.__new__(ThemeCreateSkill)
     skill._fetcher = AKShareConceptFetcher()
     skill._validator = StockCodeValidator()
-    mock_llm = MagicMock()
-    mock_llm.generate.side_effect = llm_responses
-    skill._llm = mock_llm
+    mock_factory = MagicMock()
+    mock_factory.call = AsyncMock(side_effect=llm_responses)
+    skill._llm_factory = mock_factory
     return skill
 
 
@@ -370,7 +370,7 @@ class TestThemeCreateSkillStream:
         """Create skill with all external calls mocked."""
         skill = ThemeCreateSkill.__new__(ThemeCreateSkill)
 
-        # Mock fetcher
+        # Mock fetcher (used only in AKShare fallback path)
         mock_fetcher = MagicMock()
         mock_fetcher.get_all_boards = AsyncMock(return_value=['特高压', '智能电网', '光伏发电'])
         mock_fetcher.get_board_stocks = AsyncMock(return_value=[
@@ -378,6 +378,16 @@ class TestThemeCreateSkillStream:
             {'code': '600905', 'name': '三峡能源'},
         ])
         skill._fetcher = mock_fetcher
+
+        # Mock _fetch_candidates_from_db: return DB stocks directly (primary path)
+        skill._fetch_candidates_from_db = AsyncMock(return_value=(
+            [
+                {'stock_code': '000001.SZ', 'stock_name': '平安银行', 'boards': ['特高压'], 'source': 'db'},
+                {'stock_code': '600905.SH', 'stock_name': '三峡能源', 'boards': ['智能电网'], 'source': 'db'},
+            ],
+            ['特高压', '智能电网'],
+            False,  # used_akshare = False
+        ))
 
         # Mock validator
         mock_validator = MagicMock()
@@ -399,13 +409,13 @@ class TestThemeCreateSkillStream:
                 {'stock_code': '600905.SH', 'stock_name': '三峡能源', 'reason': 'AI补充'},
             ]
         })
-        mock_llm = MagicMock()
-        mock_llm.generate.side_effect = [
+        mock_factory = MagicMock()
+        mock_factory.call = AsyncMock(side_effect=[
             '["特高压", "智能电网"]',  # phase 1: concept mapping
             filter_resp,               # phase 4: filter
             supplement_resp,           # phase 5: supplement
-        ]
-        skill._llm = mock_llm
+        ])
+        skill._llm_factory = mock_factory
 
         return skill
 
@@ -458,11 +468,12 @@ class TestThemeCreateSkillStream:
         """If an unexpected error occurs, stream should yield an error event, not raise."""
         skill = ThemeCreateSkill.__new__(ThemeCreateSkill)
         skill._fetcher = MagicMock()
-        skill._fetcher.get_all_boards = AsyncMock(side_effect=RuntimeError('network failure'))
         skill._validator = StockCodeValidator()
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = '["特高压"]'
-        skill._llm = mock_llm
+        mock_factory = MagicMock()
+        mock_factory.call = AsyncMock(return_value='["特高压"]')
+        skill._llm_factory = mock_factory
+        # Make _fetch_candidates_from_db raise to trigger error event
+        skill._fetch_candidates_from_db = AsyncMock(side_effect=RuntimeError('db failure'))
 
         events = self._collect_events(skill, '电网设备')
         types = [e['type'] for e in events]
@@ -471,24 +482,29 @@ class TestThemeCreateSkillStream:
     def test_stream_respects_max_candidates(self):
         """Candidate list should be capped at max_candidates."""
         skill = self._make_full_mock_skill()
-        # Make fetcher return many stocks
-        skill._fetcher.get_board_stocks = AsyncMock(return_value=[
-            {'code': str(i).zfill(6), 'name': f'股票{i}'} for i in range(1, 100)
-        ])
+        # Override _fetch_candidates_from_db to return many stocks
+        many_stocks = [
+            {'stock_code': f'{str(i).zfill(6)}.SZ', 'stock_name': f'股票{i}',
+             'boards': ['测试板块'], 'source': 'db'}
+            for i in range(1, 100)
+        ]
+        skill._fetch_candidates_from_db = AsyncMock(return_value=(
+            many_stocks, ['测试板块'], False
+        ))
         skill._validator.validate_batch.return_value = {
             f'{str(i).zfill(6)}.SZ': f'股票{i}' for i in range(1, 100)
         }
-        # LLM filter returns all of them
+        # LLM filter returns first 50
         many_selected = [
             {'stock_code': f'{str(i).zfill(6)}.SZ', 'stock_name': f'股票{i}',
              'relevance': 'high', 'reason': ''}
             for i in range(1, 51)
         ]
-        skill._llm.generate.side_effect = [
+        skill._llm_factory.call = AsyncMock(side_effect=[
             '["特高压"]',
             json.dumps({'selected': many_selected, 'excluded_count': 0, 'exclusion_summary': ''}),
             json.dumps({'supplements': []}),
-        ]
+        ])
 
         events = []
 

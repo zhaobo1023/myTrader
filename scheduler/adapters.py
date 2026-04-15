@@ -275,6 +275,24 @@ def run_sentiment_polymarket(dry_run: bool = False, env: str = "online",
 # Theme Pool scoring adapter
 # ---------------------------------------------------------------------------
 
+def sync_concept_board(dry_run: bool = False, limit: int = 0, sleep: float = 0.5):
+    """
+    Daily sync of Eastmoney concept board memberships into stock_concept_map.
+    Full sync: fetches all boards and their members, upserts into DB.
+    """
+    if dry_run:
+        logger.info("[DRY-RUN] sync_concept_board: would sync all Eastmoney concept boards -> stock_concept_map")
+        return
+
+    _clear_proxy()
+    from data_analyst.fetchers.concept_board_fetcher import run_sync
+    result = run_sync(limit=limit or None, sleep_between=sleep)
+    logger.info("[OK] concept board sync done: boards=%d stocks=%d errors=%d",
+                result['board_count'], result['stock_count'], result['error_count'])
+    if result['error_count'] > result['board_count'] * 0.2:
+        raise RuntimeError(f"concept board sync error rate too high: {result['error_count']}/{result['board_count']}")
+
+
 def run_theme_pool_score(dry_run: bool = False, env: str = "online"):
     """Daily scoring for all stocks in active theme pools."""
     if dry_run:

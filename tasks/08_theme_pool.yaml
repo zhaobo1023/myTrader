@@ -1,6 +1,17 @@
 # 08_theme_pool.yaml - Theme pool daily scoring
 
 tasks:
+  - id: sync_concept_board
+    name: "Sync Eastmoney concept board memberships"
+    module: scheduler.adapters
+    func: sync_concept_board
+    tags: [theme_pool, daily]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+    params:
+      sleep: 0.5
+
   - id: theme_pool_score
     name: "Theme pool daily scoring"
     module: scheduler.adapters
@@ -8,6 +19,7 @@ tasks:
     tags: [theme_pool, daily]
     schedule: "after_gate"
     depends_on:
+      - sync_concept_board
       - _gate_daily_price
     params:
       env: "online"
