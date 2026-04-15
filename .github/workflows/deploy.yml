@@ -11,10 +11,11 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # needed for git diff HEAD~1
 
       - name: Deploy to ECS via SSH
         uses: appleboy/ssh-action@v1
@@ -22,38 +23,53 @@ jobs:
           host: ${{ secrets.ECS_HOST }}
           username: ${{ secrets.ECS_USER }}
           key: ${{ secrets.ECS_SSH_KEY }}
+          command_timeout: 10m
           script: |
             set -e
-            echo "[INFO] Starting deployment..."
+            cd /root/app
 
-            cd /opt/myTrader
-
-            # 1. Git pull
-            echo "[INFO] Pulling latest code..."
+            # ── 1. Pull latest code ──────────────────────────────────────
+            echo "[1/4] Pulling latest code..."
             git pull origin main
 
-            # 2. Install Python dependencies
-            echo "[INFO] Installing dependencies..."
-            pip install -q -r requirements.txt
+            # ── 2. Restart API (volume-mounted, no rebuild needed) ───────
+            echo "[2/4] Restarting API container..."
+            docker restart mytrader-api
+            # Wait for healthy
+            for i in $(seq 1 20); do
+              sleep 2
+              STATUS=$(docker inspect --format='{{.State.Health.Status}}' mytrader-api 2>/dev/null || echo "none")
+              if [ "$STATUS" = "healthy" ]; then
+                echo "  API healthy after ${i}x2s"
+                break
+              fi
+              if [ "$i" = "20" ]; then
+                echo "[ERROR] API did not become healthy in 40s"
+                docker logs --tail 30 mytrader-api
+                exit 1
+              fi
+            done
 
-            # 3. Build frontend (if changed)
-            echo "[INFO] Building frontend..."
-            cd web && npm ci && npm run build && cd ..
+            # ── 3. Rebuild & restart Web only when web/ files changed ────
+            echo "[3/4] Checking frontend changes..."
+            if git diff --name-only HEAD~1 HEAD | grep -q '^web/'; then
+              echo "  web/ changed — rebuilding image..."
+              docker build --no-cache -t mytrader-web:latest ./web
+              docker stop mytrader-web && docker rm mytrader-web
+              docker run -d \
+                --name mytrader-web \
+                --network app_mytrader-network \
+                -p 127.0.0.1:3000:3000 \
+                -e NEXT_PUBLIC_API_BASE_URL=http://123.56.3.1:8000 \
+                --restart unless-stopped \
+                mytrader-web:latest
+              echo "  Web container restarted with new image."
+            else
+              echo "  No web/ changes — skipping frontend rebuild."
+            fi
 
-            # 4. Database migration
-            echo "[INFO] Running migrations..."
-            alembic upgrade head
-
-            # 5. Restart services via systemd
-            echo "[INFO] Restarting services..."
-            sudo systemctl restart mytrader-api
-            sudo systemctl restart mytrader-web
-
-            # 6. Wait and health check
-            echo "[INFO] Waiting for services..."
-            sleep 3
-
-            echo "[INFO] Checking API health..."
-            curl -sf http://localhost:8000/health || { echo "API health check failed"; exit 1; }
-
-            echo "[SUCCESS] Deploy completed"
+            # ── 4. Health check ──────────────────────────────────────────
+            echo "[4/4] Final health check..."
+            curl -sf http://localhost:8000/health \
+              || { echo "[ERROR] API health check failed"; exit 1; }
+            echo "[SUCCESS] Deploy completed."
