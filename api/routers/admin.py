@@ -393,6 +393,122 @@ async def get_data_health(
 
 
 # ============================================================
+# Task run log endpoint
+# ============================================================
+
+# Friendly labels for task_name values
+_TASK_LABELS = {
+    'fetch_daily_price': 'A股日线拉取',
+    'fetch_etf_daily': 'ETF日线拉取',
+    'fetch_macro_data': '宏观指标拉取',
+    'fetch_global_assets': '全球资产拉取',
+    'fetch_dashboard': '市场看板指标',
+    'calc_basic_factor': '基础量价因子',
+    'calc_extended_factor': '扩展因子',
+    'calc_rps': 'RPS相对强度',
+    'calc_technical': '技术指标',
+    'calc_log_bias': '对数偏差',
+    'calc_svd_monitor': 'SVD市场状态',
+    'run_universe_scan': '全市场扫描',
+    'run_theme_score': '主题池评分',
+    'monitor_candidate': '候选池监控',
+    'briefing_morning': '早报',
+    'briefing_evening': '晚报',
+    'calc_dashboard_signal': '看板信号计算',
+    'calc_fear_index': '恐慌指数',
+}
+
+
+@router.get('/task-runs')
+async def get_task_runs(
+    run_date: str = Query(default=None, description='YYYY-MM-DD, default today'),
+    task_group: str = Query(default=None, description='filter by group'),
+    days: int = Query(default=7, ge=1, le=30, description='recent N days'),
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return task run logs for a date-range, grouped by task_name."""
+    from datetime import date as _date, timedelta as _td
+
+    end_date = _date.today()
+    if run_date:
+        try:
+            from datetime import datetime as _dt
+            end_date = _dt.strptime(run_date, '%Y-%m-%d').date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail='run_date must be YYYY-MM-DD')
+
+    start_date = end_date - _td(days=days - 1)
+
+    # Build date list
+    dates = []
+    d = end_date
+    while d >= start_date:
+        dates.append(d.isoformat())
+        d -= _td(days=1)
+
+    # Query logs
+    where_clauses = ["run_date >= :start_date AND run_date <= :end_date"]
+    params = {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()}
+    if task_group:
+        where_clauses.append("task_group = :task_group")
+        params["task_group"] = task_group
+
+    where_sql = " AND ".join(where_clauses)
+    sql = text(
+        f"SELECT run_date, task_name, task_group, status, "
+        f"duration_ms, record_count, error_msg "
+        f"FROM trade_task_run_log WHERE {where_sql} "
+        f"ORDER BY task_group, task_name, run_date DESC"
+    )
+
+    try:
+        result = await db.execute(sql, params)
+        rows = [dict(r) for r in result.mappings()]
+    except Exception as e:
+        logger.error('[ADMIN] task-runs query failed: %s', e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Group by task_name
+    task_map = {}  # task_name -> {task_group, runs: {date: row}}
+    for row in rows:
+        tn = row['task_name']
+        rd = row['run_date']
+        rd_str = rd.isoformat() if hasattr(rd, 'isoformat') else str(rd)[:10]
+        if tn not in task_map:
+            task_map[tn] = {
+                'task_name': tn,
+                'task_group': row['task_group'],
+                'label': _TASK_LABELS.get(tn, tn),
+                'runs': {},
+            }
+        task_map[tn]['runs'][rd_str] = {
+            'status': row['status'],
+            'duration_ms': row['duration_ms'],
+            'record_count': row['record_count'],
+            'error_msg': row.get('error_msg'),
+        }
+
+    # Build summary per date
+    summary = {}
+    for dt in dates:
+        counts = {'success': 0, 'failed': 0, 'running': 0, 'skipped': 0, 'total': 0}
+        for t in task_map.values():
+            run = t['runs'].get(dt)
+            if run:
+                s = run['status']
+                counts[s] = counts.get(s, 0) + 1
+                counts['total'] += 1
+        summary[dt] = counts
+
+    return {
+        'dates': dates,
+        'tasks': list(task_map.values()),
+        'summary': summary,
+    }
+
+
+# ============================================================
 # Log tail endpoints
 # ============================================================
 import os as _os

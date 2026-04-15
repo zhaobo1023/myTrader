@@ -10,29 +10,36 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def run_log_bias(dry_run: bool = False):
+def run_log_bias(dry_run: bool = False, env: str = 'online'):
     """Adapter for strategist.log_bias.run_daily.run_daily."""
     if dry_run:
         logger.info("[DRY-RUN] run_log_bias: would run LogBias daily signal detection")
         return
 
+    from scheduler.freshness_guard import ensure_factors_fresh
+    ensure_factors_fresh('log_bias', env=env)
+
+    from scheduler.task_logger import TaskLogger
     from strategist.log_bias.config import LogBiasConfig
     from strategist.log_bias.run_daily import run_daily
 
-    config = LogBiasConfig()
-    run_daily(config)
+    with TaskLogger('calc_log_bias', 'indicator', env=env):
+        config = LogBiasConfig()
+        run_daily(config)
 
 
-def run_technical_indicator_scan(dry_run: bool = False):
+def run_technical_indicator_scan(dry_run: bool = False, env: str = 'online'):
     """Adapter for data_analyst.indicators.technical.TechnicalIndicatorCalculator."""
     if dry_run:
         logger.info("[DRY-RUN] run_technical_indicator_scan: would calculate technical indicators for all stocks")
         return
 
+    from scheduler.task_logger import TaskLogger
     from data_analyst.indicators.technical import TechnicalIndicatorCalculator
 
-    calculator = TechnicalIndicatorCalculator()
-    calculator.calculate_for_all_stocks()
+    with TaskLogger('calc_technical', 'indicator', env=env):
+        calculator = TechnicalIndicatorCalculator()
+        calculator.calculate_for_all_stocks()
 
 
 def run_paper_trading_settle(dry_run: bool = False):
@@ -189,16 +196,21 @@ def run_sentiment_fear_index(dry_run: bool = False, env: str = "online"):
     if dry_run:
         logger.info("[DRY-RUN] run_sentiment_fear_index: would fetch VIX/OVX/GVZ/US10Y -> trade_fear_index (env=%s)", env)
         return
+
+    from scheduler.task_logger import TaskLogger
     from data_analyst.sentiment.fear_index import FearIndexService
     from data_analyst.sentiment.storage import SentimentStorage
-    result = FearIndexService().get_fear_index()
-    logger.info("Fear index: VIX=%.2f score=%d regime=%s", result.vix, result.fear_greed_score, result.market_regime)
-    if result.risk_alert:
-        logger.warning("[WARN] %s", result.risk_alert)
-    ok = SentimentStorage(env=env).save_fear_index(result)
-    if not ok:
-        raise RuntimeError("save_fear_index returned False")
-    logger.info("[OK] fear index saved (env=%s)", env)
+
+    with TaskLogger('calc_fear_index', 'sentiment', env=env) as tl:
+        result = FearIndexService().get_fear_index()
+        logger.info("Fear index: VIX=%.2f score=%d regime=%s", result.vix, result.fear_greed_score, result.market_regime)
+        if result.risk_alert:
+            logger.warning("[WARN] %s", result.risk_alert)
+        ok = SentimentStorage(env=env).save_fear_index(result)
+        if not ok:
+            raise RuntimeError("save_fear_index returned False")
+        tl.set_record_count(1)
+        logger.info("[OK] fear index saved (env=%s)", env)
 
 
 def run_sentiment_news(dry_run: bool = False, env: str = "online", stock_codes: str = "", days: int = 1):
@@ -299,8 +311,14 @@ def run_theme_pool_score(dry_run: bool = False, env: str = "online"):
         logger.info("[DRY-RUN] run_theme_pool_score: would score all active theme pool stocks (env=%s)", env)
         return
 
+    from scheduler.freshness_guard import ensure_factors_fresh
+    ensure_factors_fresh('theme_score', env=env)
+
+    from scheduler.task_logger import TaskLogger
     from api.tasks.theme_pool_score import run_theme_pool_score as _score
-    _score(dry_run=False, env=env)
+
+    with TaskLogger('run_theme_score', 'strategy', env=env):
+        _score(dry_run=False, env=env)
 
 
 # ---------------------------------------------------------------------------
@@ -314,8 +332,11 @@ def run_dashboard_fetch(dry_run: bool = False, env: str = "online", trade_date: 
         return
 
     _clear_proxy()
+    from scheduler.task_logger import TaskLogger
     from data_analyst.market_dashboard.fetcher import fetch_all
-    fetch_all(trade_date=trade_date or None, env=env)
+
+    with TaskLogger('fetch_dashboard', 'data_fetch', env=env):
+        fetch_all(trade_date=trade_date or None, env=env)
 
 
 def monitor_candidate_pool(dry_run: bool = False, env: str = "online"):
@@ -323,41 +344,50 @@ def monitor_candidate_pool(dry_run: bool = False, env: str = "online"):
     if dry_run:
         logger.info("[DRY-RUN] monitor_candidate_pool: would monitor all candidate pool stocks (env=%s)", env)
         return
+
+    from scheduler.freshness_guard import ensure_factors_fresh
+    ensure_factors_fresh('candidate_monitor', env=env)
+
+    from scheduler.task_logger import TaskLogger
     from api.services.candidate_pool_service import run_daily_monitor, push_feishu_daily_report
-    summary = run_daily_monitor(env=env)
-    logger.info("[OK] candidate pool monitor done: %s", summary)
-    pushed = push_feishu_daily_report(env=env)
-    if pushed:
-        logger.info("[OK] candidate pool Feishu report pushed")
-    else:
-        logger.info("[WARN] Feishu push skipped (no webhook or empty pool)")
+
+    with TaskLogger('monitor_candidate', 'strategy', env=env):
+        summary = run_daily_monitor(env=env)
+        logger.info("[OK] candidate pool monitor done: %s", summary)
+        pushed = push_feishu_daily_report(env=env)
+        if pushed:
+            logger.info("[OK] candidate pool Feishu report pushed")
+        else:
+            logger.info("[WARN] Feishu push skipped (no webhook or empty pool)")
 
 
-def run_dashboard_compute(dry_run: bool = False):
+def run_dashboard_compute(dry_run: bool = False, env: str = 'online'):
     """Compute the 6-section dashboard and warm Redis cache."""
     if dry_run:
         logger.info("[DRY-RUN] run_dashboard_compute: would compute dashboard signals")
         return
 
+    from scheduler.task_logger import TaskLogger
     from data_analyst.market_dashboard.calculator import compute_dashboard
     import json
 
-    result = compute_dashboard()
-    logger.info("Dashboard computed: temperature=%s trend=%s sentiment=%s",
-                result.get('temperature', {}).get('level', '?'),
-                result.get('trend', {}).get('level', '?'),
-                result.get('sentiment', {}).get('level', '?'))
+    with TaskLogger('calc_dashboard_signal', 'report', env=env):
+        result = compute_dashboard()
+        logger.info("Dashboard computed: temperature=%s trend=%s sentiment=%s",
+                    result.get('temperature', {}).get('level', '?'),
+                    result.get('trend', {}).get('level', '?'),
+                    result.get('sentiment', {}).get('level', '?'))
 
-    # Try to warm Redis cache
-    try:
-        import redis
-        import os
-        r = redis.Redis(
-            host=os.getenv('REDIS_HOST', 'localhost'),
-            port=int(os.getenv('REDIS_PORT', '6379')),
-            db=0,
-        )
-        r.setex('market_overview:dashboard', 6 * 3600, json.dumps(result, default=str))
-        logger.info("[OK] Dashboard cache warmed in Redis")
-    except Exception as e:
-        logger.warning("[WARN] Failed to warm Redis cache: %s", e)
+        # Try to warm Redis cache
+        try:
+            import redis
+            import os
+            r = redis.Redis(
+                host=os.getenv('REDIS_HOST', 'localhost'),
+                port=int(os.getenv('REDIS_PORT', '6379')),
+                db=0,
+            )
+            r.setex('market_overview:dashboard', 6 * 3600, json.dumps(result, default=str))
+            logger.info("[OK] Dashboard cache warmed in Redis")
+        except Exception as e:
+            logger.warning("[WARN] Failed to warm Redis cache: %s", e)
