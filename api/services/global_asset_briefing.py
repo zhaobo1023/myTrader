@@ -32,7 +32,14 @@ SYSTEM_PROMPT = """你是一位专业的A股市场分析师。
 - 标注关键风险信号和机会信号
 - 不使用任何emoji字符
 - 用纯文本标记如[风险]、[机会]、[关注]等
-- 输出格式为Markdown，控制在800字以内"""
+- 输出格式为Markdown，控制在800字以内
+
+## 规则（强制，不得违反）
+1. 对于标记为 [MISSING] 或 [STALE] 的指标，你必须声明"数据不可用"或"数据滞后（截至XX日）"，绝不可编造数值
+2. 绝不可编造具体数字（成交量、涨跌家数、指数涨跌幅、资金流向）——如果数据中没有提供，就不要写
+3. 如果某个维度的所有核心指标均缺失，该维度输出"[数据不足]"
+4. 如果涨跌家数或涨停跌停数据缺失，不要用"个股分化"等模糊措辞替代，直接说明数据缺失
+5. AH溢价指数基准值为100（>100表示A股溢价），不要将其误读为百分比"""
 
 MORNING_PROMPT = """## 盘前速递（{date}）
 
@@ -102,18 +109,47 @@ INDICATOR_NAMES = {
     'idx_all_a': '中证全A', 'idx_dividend': '中证红利',
     'north_flow': '北向资金(亿)', 'qvix': 'QVIX(中国波指)',
     'cn_10y_bond': '中国10Y国债(%)', 'pe_csi300': '沪深300 PE',
+    'ah_premium': 'AH溢价指数(base=100, >100 means A premium)',
 }
 
 
-def _collect_data_snapshot(indicators: list[str], lookback_days: int = 5) -> str:
+def _calc_staleness_tag(latest_date_str: str, target_date: date) -> str:
+    """Return a freshness tag based on how stale the data is."""
+    try:
+        from datetime import datetime as _dt
+        latest_dt = _dt.strptime(latest_date_str, '%Y-%m-%d').date()
+        gap = (target_date - latest_dt).days
+        if gap <= 1:
+            return '[OK]'
+        elif gap <= 3:
+            return '[WARN: data as of {}]'.format(latest_date_str)
+        else:
+            return '[STALE: data as of {}, {} days old]'.format(latest_date_str, gap)
+    except Exception:
+        return '[MISSING]'
+
+
+def _collect_data_snapshot(
+    indicators: list[str],
+    lookback_days: int = 5,
+    target_date: date = None,
+) -> tuple:
     """
     Collect recent data for given indicators and format as text table.
-    Returns a formatted string for the LLM prompt.
-    """
-    if not indicators:
-        return '(无数据)'
 
-    cutoff = (date.today() - timedelta(days=lookback_days + 5)).strftime('%Y-%m-%d')
+    Returns:
+        (snapshot_text, freshness_stats) where freshness_stats =
+        {'total': int, 'ok': int, 'stale': int, 'missing': int}
+    """
+    if target_date is None:
+        target_date = date.today()
+
+    freshness_stats = {'total': len(indicators), 'ok': 0, 'stale': 0, 'missing': 0}
+
+    if not indicators:
+        return '(无数据)', freshness_stats
+
+    cutoff = (target_date - timedelta(days=lookback_days + 5)).strftime('%Y-%m-%d')
     placeholders = ','.join(['%s'] * len(indicators))
 
     sql = f"""
@@ -137,18 +173,28 @@ def _collect_data_snapshot(indicators: list[str], lookback_days: int = 5) -> str
             ))
 
     lines = []
-    lines.append('| 指标 | 最新值 | 日期 | 前日 | 变动 | 变动% |')
-    lines.append('|------|--------|------|------|------|-------|')
+    lines.append('| 指标 | 最新值 | 日期 | 前日 | 变动 | 变动% | status |')
+    lines.append('|------|--------|------|------|------|-------|--------|')
 
     for ind in indicators:
         name = INDICATOR_NAMES.get(ind, ind)
         pts = grouped.get(ind, [])
         if not pts:
-            lines.append('| {} | -- | -- | -- | -- | -- |'.format(name))
+            lines.append('| {} | -- | -- | -- | -- | -- | [MISSING] |'.format(name))
+            freshness_stats['missing'] += 1
             continue
 
         latest_date, latest_val = pts[0]
         prev_val = pts[1][1] if len(pts) >= 2 else None
+
+        # Compute staleness tag
+        tag = _calc_staleness_tag(latest_date, target_date)
+        if tag == '[OK]':
+            freshness_stats['ok'] += 1
+        elif tag == '[MISSING]':
+            freshness_stats['missing'] += 1
+        else:
+            freshness_stats['stale'] += 1
 
         val_str = '{:.4g}'.format(latest_val) if latest_val is not None else '--'
         prev_str = '{:.4g}'.format(prev_val) if prev_val is not None else '--'
@@ -162,10 +208,10 @@ def _collect_data_snapshot(indicators: list[str], lookback_days: int = 5) -> str
             chg_str = '--'
             pct_str = '--'
 
-        lines.append('| {} | {} | {} | {} | {} | {} |'.format(
-            name, val_str, latest_date, prev_str, chg_str, pct_str))
+        lines.append('| {} | {} | {} | {} | {} | {} | {} |'.format(
+            name, val_str, latest_date, prev_str, chg_str, pct_str, tag))
 
-    return '\n'.join(lines)
+    return '\n'.join(lines), freshness_stats
 
 
 def _collect_dashboard_snapshot() -> str:
@@ -184,6 +230,27 @@ def _collect_dashboard_snapshot() -> str:
         return '(大盘信号数据不可用)'
 
     lines = []
+
+    # Check overall freshness
+    if not data.get('is_fresh', True):
+        data_date = data.get('data_date', '?')
+        target_date = data.get('target_date', '?')
+        lines.append('[WARN: A-share data is from {}, target is {}]'.format(
+            data_date, target_date))
+
+    # Mark unavailable sections
+    section_names = {
+        'temperature': '市场温度',
+        'trend': '趋势方向',
+        'sentiment': '情绪',
+        'style': '风格轮动',
+        'stock_bond': '股债性价比',
+        'macro': '宏观背景',
+    }
+    for key, label in section_names.items():
+        section = data.get(key, {})
+        if not section.get('available', False):
+            lines.append('[MISSING: {} 数据不可用]'.format(label))
 
     # Temperature
     temp = data.get('temperature', {})
@@ -244,7 +311,7 @@ def _collect_dashboard_snapshot() -> str:
     if macro.get('available'):
         inds = macro.get('indicators', {})
         lines.append('**宏观背景** ({})'.format(macro.get('level_label', '-')))
-        lines.append('  PMI: {} ({}) | M2: {}% | AH溢价: {} ({})'.format(
+        lines.append('  PMI: {} ({}) | M2: {}% | AH溢价指数(基准100): {} ({})'.format(
             inds.get('pmi_mfg', {}).get('value', '-'), inds.get('pmi_mfg', {}).get('signal', '-'),
             inds.get('m2_yoy', {}).get('value', '-'),
             inds.get('ah_premium', {}).get('value', '-'), inds.get('ah_premium', {}).get('signal', '-')))
@@ -282,6 +349,31 @@ def _save_briefing(session: str, brief_date: str, content: str) -> None:
 # Briefing generation
 # ---------------------------------------------------------------------------
 
+def _check_overall_freshness(freshness_stats: dict) -> tuple:
+    """
+    Check if data quality is sufficient to generate a briefing.
+
+    Returns:
+        (ok: bool, message: str)
+    """
+    total = freshness_stats.get('total', 0)
+    if total == 0:
+        return False, 'no indicators configured'
+
+    bad = freshness_stats.get('missing', 0) + freshness_stats.get('stale', 0)
+    if bad > total * 0.5:
+        return False, (
+            'data insufficient: {} of {} indicators stale/missing '
+            '(ok={}, stale={}, missing={})'.format(
+                bad, total,
+                freshness_stats.get('ok', 0),
+                freshness_stats.get('stale', 0),
+                freshness_stats.get('missing', 0),
+            )
+        )
+    return True, 'ok'
+
+
 async def generate_briefing(session: str = 'morning') -> dict:
     """
     Generate a market briefing using LLM and persist to DB.
@@ -290,14 +382,34 @@ async def generate_briefing(session: str = 'morning') -> dict:
         session: 'morning' (08:30) or 'evening' (18:00)
 
     Returns:
-        {'session': str, 'date': str, 'content': str, 'cached': bool}
+        {'session': str, 'date': str, 'content': str, 'cached': bool,
+         'data_quality': dict}
     """
     today_str = date.today().strftime('%Y-%m-%d')
 
     # Collect data
     indicators = MORNING_INDICATORS if session == 'morning' else EVENING_INDICATORS
-    snapshot = _collect_data_snapshot(indicators)
+    snapshot, freshness_stats = _collect_data_snapshot(indicators)
     dashboard_snapshot = _collect_dashboard_snapshot()
+
+    # Build data_quality info
+    quality_ok, quality_msg = _check_overall_freshness(freshness_stats)
+    data_quality = {
+        **freshness_stats,
+        'sufficient': quality_ok,
+        'message': quality_msg,
+    }
+
+    # Abort if data quality is too poor
+    if not quality_ok:
+        logger.warning('[briefing] Aborting %s briefing: %s', session, quality_msg)
+        return {
+            'session': session,
+            'date': today_str,
+            'content': '[briefing aborted] {}'.format(quality_msg),
+            'cached': False,
+            'data_quality': data_quality,
+        }
 
     if session == 'morning':
         prompt = MORNING_PROMPT.format(date=today_str, data_snapshot=snapshot, dashboard_snapshot=dashboard_snapshot)
@@ -326,6 +438,7 @@ async def generate_briefing(session: str = 'morning') -> dict:
         'date': today_str,
         'content': content,
         'cached': False,
+        'data_quality': data_quality,
     }
 
 

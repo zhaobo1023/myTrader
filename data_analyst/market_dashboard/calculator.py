@@ -987,8 +987,23 @@ def compute_dashboard() -> dict:
     Returns a JSON-serializable dict.
     """
     logger.info("Computing market dashboard...")
+    latest_td = _get_latest_trade_date()
+    today_str = date.today().strftime('%Y-%m-%d')
+
+    # Determine freshness: data is fresh if latest trade date is today or
+    # at most 1 calendar day old (e.g. weekend query on Saturday for Friday data)
+    try:
+        from datetime import datetime as _dt
+        latest_dt = _dt.strptime(latest_td, '%Y-%m-%d').date()
+        is_fresh = (date.today() - latest_dt).days <= 1
+    except Exception:
+        is_fresh = False
+
     result = {
-        'updated_at': _get_latest_trade_date(),
+        'updated_at': latest_td,
+        'data_date': latest_td,
+        'target_date': today_str,
+        'is_fresh': is_fresh,
         'temperature': calc_temperature(),
         'trend': calc_trend(),
         'sentiment': calc_sentiment(),
