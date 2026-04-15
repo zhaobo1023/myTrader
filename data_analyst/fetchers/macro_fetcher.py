@@ -28,6 +28,7 @@
 import re
 import sys
 import os
+import time
 from datetime import date, timedelta
 from typing import Optional, Tuple
 
@@ -794,20 +795,31 @@ def fetch_pmi_mfg(start_date: str) -> pd.DataFrame:
 # ============================================================
 
 def _make_yfinance_fetcher(ticker: str):
-    """工厂函数: 返回一个 yfinance 拉取函数"""
+    """工厂函数: 返回一个 yfinance 拉取函数 (带重试)"""
     def fetcher(start_date: str) -> pd.DataFrame:
         if not HAS_YFINANCE:
             raise RuntimeError("yfinance 未安装，请运行 pip install yfinance")
         start_dt = pd.to_datetime(start_date.replace('-', ''), format='%Y%m%d')
-        t = yf.Ticker(ticker)
-        df = t.history(start=start_dt.strftime('%Y-%m-%d'), auto_adjust=True)
-        if df is None or df.empty:
-            return pd.DataFrame()
-        df = df.reset_index()
-        df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
-        df = df[['Date', 'Close']].rename(columns={'Date': 'date', 'Close': 'value'})
-        df = df.dropna(subset=['value'])
-        return df
+
+        # Retry with backoff for rate limiting
+        for attempt in range(3):
+            try:
+                t = yf.Ticker(ticker)
+                df = t.history(start=start_dt.strftime('%Y-%m-%d'), auto_adjust=True)
+                if df is not None and not df.empty:
+                    df = df.reset_index()
+                    df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
+                    df = df[['Date', 'Close']].rename(columns={'Date': 'date', 'Close': 'value'})
+                    df = df.dropna(subset=['value'])
+                    return df
+                return pd.DataFrame()
+            except Exception as e:
+                if 'Rate' in str(e) or 'Too Many' in str(e):
+                    wait = 5 * (attempt + 1)
+                    time.sleep(wait)
+                    continue
+                raise
+        return pd.DataFrame()
     fetcher.__name__ = 'fetch_yf_{}'.format(ticker.replace('^', '').replace('=', '_'))
     return fetcher
 
@@ -1117,9 +1129,14 @@ def fetch_all_indicators() -> dict:
                 'cn_10y_bond', 'us_2y_bond', 'us_10y_bond', 'us_30y_bond', 'us_10y_2y_spread',
                 'm0_yoy', 'm1_yoy', 'm2_supply_yoy'}
 
+    yf_keys = {'vix', 'gvz', 'btc', 'dxy', 'brent_oil', 'spy', 'qqq', 'dia'}
+
     for indicator in FETCH_FUNCTIONS.keys():
         if indicator in skip_set:
             continue
+        # Throttle yfinance requests to avoid rate limiting
+        if indicator in yf_keys:
+            time.sleep(2)
         success, count, error = fetch_indicator(indicator)
         results[indicator] = {
             'success': success,
