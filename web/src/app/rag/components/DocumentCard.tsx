@@ -55,7 +55,7 @@ export default function DocumentCard({ doc, onDeleted, onUpdated }: DocumentCard
   }
 
   async function handleDelete() {
-    if (!confirm(`Delete "${doc.title}"? This will also remove it from the RAG knowledge base.`)) return;
+    if (!confirm(`确定删除「${doc.title}」？将从知识库中移除所有相关内容。`)) return;
     setDeleting(true);
     try {
       const res = await fetch(`${API_BASE}/api/rag/documents/${doc.id}`, { method: 'DELETE' });
@@ -107,14 +107,14 @@ export default function DocumentCard({ doc, onDeleted, onUpdated }: DocumentCard
             onClick={() => { if (!editing) { setEditTags(doc.tags || ''); setEditMemo(doc.memo || ''); } setEditing(!editing); }}
             style={{ fontSize: '11px', padding: '3px 8px', background: 'none', border: '1px solid var(--border-subtle)', borderRadius: '4px', color: 'var(--text-muted)', cursor: 'pointer' }}
           >
-            {editing ? 'Cancel' : 'Edit'}
+            {editing ? '取消' : '编辑'}
           </button>
           <button
             onClick={handleDelete}
             disabled={deleting}
             style={{ fontSize: '11px', padding: '3px 8px', background: 'none', border: '1px solid rgba(229,83,75,0.3)', borderRadius: '4px', color: '#e5534b', cursor: deleting ? 'wait' : 'pointer', opacity: deleting ? 0.6 : 1 }}
           >
-            {deleting ? '...' : 'Delete'}
+            {deleting ? '...' : '删除'}
           </button>
         </div>
       </div>
@@ -146,7 +146,7 @@ export default function DocumentCard({ doc, onDeleted, onUpdated }: DocumentCard
           <input
             value={editTags}
             onChange={(e) => setEditTags(e.target.value)}
-            placeholder="tags, separated, by, commas"
+            placeholder="标签，用逗号分隔"
             style={{
               width: '100%', boxSizing: 'border-box', padding: '6px 8px',
               background: 'var(--bg-input)', border: '1px solid var(--border-subtle)',
@@ -156,7 +156,7 @@ export default function DocumentCard({ doc, onDeleted, onUpdated }: DocumentCard
           <textarea
             value={editMemo}
             onChange={(e) => setEditMemo(e.target.value)}
-            placeholder="Notes about this document..."
+            placeholder="关于这篇文档的备注..."
             rows={2}
             style={{
               width: '100%', boxSizing: 'border-box', padding: '6px 8px', resize: 'vertical',
@@ -175,7 +175,7 @@ export default function DocumentCard({ doc, onDeleted, onUpdated }: DocumentCard
               border: 'none', borderRadius: '5px', cursor: saving ? 'wait' : 'pointer',
             }}
           >
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? '保存中...' : '保存'}
           </button>
         </div>
       )}
@@ -183,7 +183,7 @@ export default function DocumentCard({ doc, onDeleted, onUpdated }: DocumentCard
       {/* Meta row */}
       <div style={{ display: 'flex', gap: '16px', fontSize: '11px', color: 'var(--text-muted)' }}>
         <span>{sizeStr}</span>
-        <span>{doc.chunk_count} chunks</span>
+        <span>{doc.chunk_count} 分块</span>
         <span>{dateStr}</span>
       </div>
     </div>

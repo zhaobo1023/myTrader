@@ -47,7 +47,7 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
   function handleFileSelect(f: File) {
     const ext = '.' + f.name.split('.').pop()?.toLowerCase();
     if (!ACCEPTED.split(',').includes(ext)) {
-      setError('Unsupported file type. Allowed: PDF, Markdown, Word, TXT');
+      setError('不支持的文件类型，仅支持 PDF / Markdown / Word / TXT');
       return;
     }
     setFile(f);
@@ -79,7 +79,7 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.detail || 'Upload failed');
+        setError(data.detail || '上传失败');
       } else {
         handleClose();
         onUploaded();
@@ -112,7 +112,7 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
       >
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <div style={{ fontSize: '15px', fontWeight: 590, color: 'var(--text-primary)' }}>Upload Document</div>
+          <div style={{ fontSize: '15px', fontWeight: 590, color: 'var(--text-primary)' }}>上传文档</div>
           <button onClick={handleClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer', lineHeight: 1 }}>&times;</button>
         </div>
 
@@ -147,7 +147,7 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
           ) : (
             <div>
               <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
-                Drag & drop or click to upload
+                拖拽或点击上传文件
               </div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                 PDF / Markdown / Word / TXT
@@ -158,11 +158,11 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
 
         {/* Title */}
         <div style={{ marginBottom: '14px' }}>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '5px' }}>Title</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '5px' }}>标题</div>
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="Document title"
+            placeholder="文档标题"
             style={{
               width: '100%', boxSizing: 'border-box', padding: '7px 10px',
               background: 'var(--bg-input)', border: '1px solid var(--border-subtle)',
@@ -173,7 +173,7 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
 
         {/* Tags */}
         <div style={{ marginBottom: '14px' }}>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '5px' }}>Tags (press Enter to add)</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '5px' }}>标签（回车添加）</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '5px' }}>
             {tags.map((t, i) => (
               <span key={i} style={{
@@ -193,7 +193,7 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
             value={tagInput}
             onChange={(e) => setTagInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTag(tagInput); } }}
-            placeholder="e.g. sentiment, monthly, fund-manager"
+            placeholder="例如：情绪, 月度, 基金经理"
             style={{
               width: '100%', boxSizing: 'border-box', padding: '7px 10px',
               background: 'var(--bg-input)', border: '1px solid var(--border-subtle)',
@@ -204,11 +204,11 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
 
         {/* Memo */}
         <div style={{ marginBottom: '18px' }}>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '5px' }}>Notes</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '5px' }}>备注</div>
           <textarea
             value={memo}
             onChange={(e) => setMemo(e.target.value)}
-            placeholder="Why is this document valuable? How do you plan to use it?"
+            placeholder="这篇文档的价值？计划如何使用？"
             rows={3}
             style={{
               width: '100%', boxSizing: 'border-box', padding: '7px 10px', resize: 'vertical',
@@ -237,7 +237,7 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
               borderRadius: '6px', color: 'var(--text-secondary)', cursor: uploading ? 'wait' : 'pointer',
             }}
           >
-            Cancel
+            取消
           </button>
           <button
             onClick={handleUpload}
@@ -249,7 +249,7 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
               border: 'none', borderRadius: '6px', cursor: !file || uploading ? 'not-allowed' : 'pointer',
             }}
           >
-            {uploading ? 'Parsing & Embedding...' : 'Upload'}
+            {uploading ? '解析向量化中...' : '上传'}
           </button>
         </div>
       </div>
