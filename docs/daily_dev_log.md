@@ -2,6 +2,271 @@
 
 ---
 
+## 2026-04-15（补充）RAG 知识库 Bug 修复 + 文档异步向量化
+
+### 今日工作内容（补充）
+
+#### 9. RAG 知识库页面汉化 + 部署修复
+
+- `web/src/app/rag/page.tsx` — 全页面汉化（Knowledge Base -> 知识库，+ Upload -> + 上传等）
+- 根因：本地改动未 commit 就 push，服务器拿不到更新；加之旧镜像未重建
+- 修复流程：commit -> push -> 服务器 `git pull` -> `docker build --no-cache` -> 重启容器
+
+---
+
+#### 10. 收盘复盘 Markdown 渲染优化
+
+- `web/src/app/sentiment/page.tsx` — 引入 `react-markdown`，替换手写 mini-renderer
+- 自定义 `mdComponents` 适配深色主题变量（h1/h2/h3/p/ul/ol/li/hr/blockquote/code）
+- 安装依赖：`react-markdown`（79 个包）
+
+---
+
+#### 11. RAG 错误处理 Code Review + 修复
+
+**问题根因：** 后端超时或异常时返回 HTML，前端直接 `res.json()` 导致 `SyntaxError: Unexpected token '<'`
+
+| 文件 | 问题 | 修复 |
+|------|------|------|
+| `DocumentUploadDialog.tsx` | `res.json()` 在 `res.ok` 检查之前 | 先检查 `res.ok`，再解析 JSON |
+| `DocumentUploadDialog.tsx` | 无文件大小前端校验 | 加 100 MB 上限，本地报错不走网络 |
+| `DocumentCard.tsx` | 保存/删除失败静默无提示 | 展示错误信息，删除失败用 `alert` |
+| `rag/page.tsx` | `loadDocuments`/`handleSearch` 直接 `.json()` | 先检查 `res.ok` |
+| `api/main.py` | 未捕获异常返回 Uvicorn HTML | 加全局 `@app.exception_handler(Exception)` 返回 JSON |
+
+---
+
+#### 12. 文档向量化改为 Celery 异步处理
+
+**问题根因：** 向量化（解析 + Embedding API + ChromaDB 写入）耗时长，Nginx 300s 超时后返回 504 HTML，前端再次触发 `SyntaxError`。
+
+**方案：上传接口立即返回，向量化交给 Celery worker 后台处理，前端轮询状态。**
+
+| 文件 | 改动 |
+|------|------|
+| `api/services/document_service.py` | `upload_document()` 拆为两步：存文件+建DB记录（同步）；`process_document()` 做解析+向量化（供 Celery 调用）|
+| `api/tasks/document_tasks.py` | 新增 `ingest_document_task` Celery task，`time_limit=600` |
+| `api/routers/documents.py` | 上传后 `.delay(doc_id)` 触发异步任务；新增 `GET /{doc_id}/status` 状态轮询接口 |
+| `DocumentUploadDialog.tsx` | 上传成功后每 3s 轮询一次状态，展示"上传中..."/"向量化中..."两阶段进度，最长等待 5 分钟 |
+
+**效果：** 上传接口 < 1s 返回，不再受 Nginx 超时影响；用户可见实时进度。
+
+---
+
+## 2026-04-15 LLM Agent 体系 + 埋点系统 + Code Review 修复
+
+### 今日工作内容
+
+#### 1. LLM Agent 体系（M1–M3）
+
+**M1：AI 驱动的主题创建 (theme-create)**
+
+新增 `ThemeCreateSkill`，SSE 流式输出，流程：
+1. LLM 将主题名映射为概念板块关键词
+2. 从东方财富批量拉取概念板块成分股
+3. LLM 二次过滤，输出带 relevance/reason 的候选股列表
+
+**M2：多模型工厂 + Redis 缓存 + 统一流路由**
+
+| 文件 | 说明 |
+|------|------|
+| `api/services/llm_client_factory.py` | 多模型别名路由（qwen/deepseek/doubao），async + thread executor |
+| `api/services/akshare_cache.py` | Redis 缓存 AKShare 数据，TTL 可配置 |
+| `api/routers/theme_pool.py` `POST /llm/stream` | 统一 SSE 路由，按 skill_id 分发 |
+| `api/services/llm_usage_logger.py` | 异步 fire-and-forget 用量记录 |
+| `api/services/llm_feedback.py` | helpful/unhelpful 反馈收集 |
+| `alembic/versions/j1k2l3m4n5o6` | `llm_usage_logs` 表迁移 |
+| `alembic/versions/k1l2m3n4o5p6` | `llm_feedback` 表迁移 |
+
+**M3：Skill 体系（portfolio-doctor / signal-interpreter / theme-review）**
+
+新增 `api/services/llm_skills/` 包：
+
+| Skill | skill_id | 功能 |
+|-------|----------|------|
+| PortfolioDoctorSkill | `portfolio-doctor` | 持仓集中度/行业分布/调仓建议 |
+| SignalInterpreterSkill | `signal-interpreter` | 策略信号列表解读 |
+| ThemeReviewSkill | `theme-review` | 主题池内股票评分解读 |
+
+前端新增：
+- `LLMCreateDialog.tsx` — AI 创建主题 SSE 流展示
+- `ThemeReviewDialog.tsx` — 主题评审 SSE 流展示
+- `useSSEFetch.ts` — POST SSE 通用 hook
+
+---
+
+#### 2. 股票新闻动态 + 舆情增强
+
+**后端：**
+- `api/services/stock_news_service.py` — 东方财富新闻抓取（绕过 pyarrow bug）、LLM 情感分析、事件检测、存储
+- `api/tasks/stock_news.py` — Celery 定时任务，每日 18:30 批量拉取所有已分析股票的新闻
+- `alembic/versions/` — `stock_news` 表迁移
+
+**前端：**
+- `web/src/app/stock/page.tsx` — 新增"个股动态" tab，展示新闻列表 + LLM 情感分析结果
+
+---
+
+#### 3. 全球资产大盘 + 宏观 LLM 简报
+
+**新增 `api/services/global_asset_briefing.py`：**
+- 从 `macro_data` 表读取商品/利率/汇率/加密/美股 8 个标的
+- 用 `yfinance` 批量下载（单次 HTTP 请求，添加指数退避重试）
+- LLM 生成中文大盘简报
+
+**前端：**
+- `web/src/app/sentiment/page.tsx` — 新增"全球资产"tab（GlobalAssetsPanel）、DataHealthPanel 迁移进来
+- 大盘总览 tab 顶部显示 LLM 市场简报
+
+**Celery：**
+- `api/tasks/macro_fetch.py` — 每小时 :15 分增量拉取（替代之前每日 17:30）
+
+---
+
+#### 4. 概念板块每日同步
+
+- `data_analyst/fetchers/concept_board_fetcher.py` — 多数据源（Tushare > 东财 > 同花顺）拉取概念成分股，写入 `stock_concept_map` 表
+- `alembic/versions/l1m2n3o4p5q6` — `stock_concept_map` 表迁移
+- `tasks/08_theme_pool.yaml` — 每日同步任务
+
+---
+
+#### 5. 文档上传 + RAG 知识库 UI 重构
+
+- `api/routers/documents.py` + `api/services/document_service.py` — PDF/MD/DOCX 上传、解析、向量写入 ChromaDB
+- `alembic/versions/n1o2p3q4r5s6` — `research_document` 表迁移
+- `investment_rag/ingest/parsers/docx_parser.py` — 新增 Word 解析器
+- 前端 RAG 页面重构为"知识库"模式，新增 `DocumentCard.tsx`、`DocumentUploadDialog.tsx`
+
+---
+
+#### 6. 估值数据增强 M3（前端）
+
+- `web/src/app/industry/page.tsx` — 新增行业估值热力图，从 `/analysis` 迁移过来
+- `web/src/app/analysis/page.tsx` — 新增"估值分析" tab，行业 PE/PB 历史走势 + 分位带
+
+---
+
+#### 7. Code Review 修复（P0/P1）
+
+| 文件 | 问题 | 修复 |
+|------|------|------|
+| `api/routers/documents.py` | 文件上传无大小限制 | 加 100 MB 上限，413 响应 |
+| `api/routers/documents.py` | filename 路径遍历 | 上传前用 `PurePath(...).name` 净化 |
+| `api/services/document_service.py` | 服务层同样未净化路径 | `Path(filename).name` 二次防护 |
+| `api/routers/theme_pool.py` | `_get_user_or_dev` 无 token 可冒充任意用户 | 非 dev 环境强制返回 401 |
+| `api/routers/theme_pool.py` | skills 每次请求重复 import | 改为模块级 import 一次 |
+| `api/routers/theme_pool.py` | `trigger_score` 线程失败无堆栈 | 加 `exc_info=True` |
+| `api/services/llm_client_factory.py` | HTTP 超时 60s 硬编码 | 改为 `LLM_HTTP_TIMEOUT` 环境变量（默认 90s） |
+| `api/services/llm_client_factory.py` | 重试只覆盖 JSON 错误 | 扩展至 `OSError/ConnectionError` |
+| `api/services/llm_usage_logger.py` | `utcnow()` 与系统时区不一致 | 改为 `datetime.now()` |
+| `api/services/llm_skills/registry.py` | `list_skills` 每次创建 N 个实例 | 注册时缓存 meta，`list_skills` 不再实例化 |
+| `api/tasks/stock_news.py` | Celery beat 重复触发无去重 | 加 Redis 同步锁（TTL=1h） |
+| `api/tasks/macro_fetch.py` | 同上 | 加 Redis 同步锁（TTL=55min） |
+| `web/src/hooks/useSSEFetch.ts` | SSE 无超时，连接可能永久挂起 | 默认 5 分钟 `AbortSignal.timeout()` |
+
+---
+
+#### 8. PostHog 埋点系统
+
+**自托管部署：**
+- `docker-compose.yml` 新增 `posthog`、`posthog-db`（PostgreSQL）、`posthog-redis` 三个服务
+- `nginx.conf` 新增 `/analytics/` 反代到 PostHog 容器
+- `.env.example` 新增 `POSTHOG_DB_PASSWORD` / `POSTHOG_SECRET_KEY` / `POSTHOG_SITE_URL`
+
+**前端 SDK 接入：**
+
+| 文件 | 说明 |
+|------|------|
+| `web/src/lib/posthog.ts` | Key/Host/Enabled 常量 |
+| `web/src/components/PostHogProvider.tsx` | 初始化 + 路由变化自动 `$pageview` |
+| `web/src/hooks/useTrack.ts` | 统一埋点 hook，自动带 `page` 字段 |
+| `web/src/components/TrackingDelegate.tsx` | 全局点击委托，`data-track` 属性自动上报 |
+| `web/src/app/layout.tsx` | 注入 PostHogProvider + TrackingDelegate |
+
+**埋点覆盖：**
+
+| 事件 | 触发位置 |
+|------|---------|
+| `$pageview` | 每次路由跳转（自动） |
+| `nav_click` | 侧边栏所有导航项（AppShell） |
+| `logout_click` | 退出登录按钮 |
+| `tab_switch` | analysis/stock/sentiment 页 tab 切换 |
+| `generate_briefing` | 分析页生成一页纸 |
+| `generate_comprehensive_report` | 生成综合研报 |
+| `generate_tech_report` | 生成技术面报告 |
+| `stock_search_submit` | 个股搜索提交 |
+| `add_to_watchlist` | 加入关注 |
+| `reanalyze_stock_news` | 重新分析新闻 |
+| `knowledge_search` | 知识库搜索 |
+| `upload_document_open` | 打开文档上传弹窗 |
+| `theme_llm_create_open` | 打开 AI 创建主题 |
+| `theme_create_open` | 打开手动创建主题 |
+| `strategy_trigger` | 触发策略执行 |
+| `strategy_force_trigger` | 强制重新触发策略 |
+
+IP 来源分析由 PostHog 自动从请求头提取，在 People/Sessions 页面直接查看。
+
+**PostHog 启动步骤：**
+```bash
+# 1. 在 .env 填写 POSTHOG_DB_PASSWORD / POSTHOG_SECRET_KEY / POSTHOG_SITE_URL
+# 2. 启动服务
+docker compose up -d posthog-db posthog-redis posthog
+# 3. 首次初始化
+docker compose exec posthog python manage.py migrate
+# 4. 重载 Nginx
+docker compose restart nginx
+# 5. 访问 http://<server>/analytics 完成注册，获取 Project API Key
+# 6. 填入 web/.env.local: NEXT_PUBLIC_POSTHOG_KEY=phc_xxx
+```
+
+---
+
+### 新增文件清单
+
+| 文件 | 类型 | 说明 |
+|------|------|------|
+| `api/services/theme_llm_service.py` | 新增 | ThemeCreateSkill + LLM 概念映射 |
+| `api/services/stock_news_service.py` | 新增 | 股票新闻抓取 + 情感分析 |
+| `api/services/global_asset_briefing.py` | 新增 | 全球资产数据 + LLM 简报 |
+| `api/services/llm_client_factory.py` | 新增 | 多模型工厂 + 重试包装 |
+| `api/services/llm_usage_logger.py` | 新增 | LLM 调用用量异步记录 |
+| `api/services/llm_feedback.py` | 新增 | 用户反馈收集 |
+| `api/services/document_service.py` | 新增 | 文档上传/解析/向量化 |
+| `api/services/llm_skills/` (4 文件) | 新增 | Skill 基类 + 注册表 + 3 个 Skill |
+| `api/routers/documents.py` | 新增 | 文档 CRUD 路由 |
+| `api/routers/theme_pool.py` | 新增 | 主题池路由 + LLM 流路由 |
+| `api/tasks/stock_news.py` | 新增 | 每日股票新闻 Celery 任务 |
+| `api/tasks/macro_fetch.py` | 新增 | 每小时宏观数据 Celery 任务 |
+| `data_analyst/fetchers/concept_board_fetcher.py` | 新增 | 概念板块多源拉取 |
+| `data_analyst/fetchers/sw_industry_valuation_fetcher.py` | 新增 | 申万行业估值分位 |
+| `investment_rag/ingest/parsers/docx_parser.py` | 新增 | Word 文档解析器 |
+| `web/src/lib/posthog.ts` | 新增 | PostHog 配置 |
+| `web/src/hooks/useTrack.ts` | 新增 | 统一埋点 hook |
+| `web/src/components/PostHogProvider.tsx` | 新增 | PostHog Provider + 页面浏览追踪 |
+| `web/src/components/TrackingDelegate.tsx` | 新增 | 全局点击委托 |
+| `web/src/components/theme-pool/LLMCreateDialog.tsx` | 新增 | AI 创建主题弹窗 |
+| `web/src/components/theme-pool/ThemeReviewDialog.tsx` | 新增 | 主题评审弹窗 |
+| `web/src/hooks/useSSEFetch.ts` | 新增 | POST SSE 通用 hook |
+| `web/src/app/rag/components/DocumentCard.tsx` | 新增 | 文档卡片 |
+| `web/src/app/rag/components/DocumentUploadDialog.tsx` | 新增 | 文档上传弹窗 |
+| `web/src/app/industry/page.tsx` | 新增 | 行业页（含估值热力图） |
+| `alembic/versions/*` (5 个) | 新增 | llm_usage_logs / llm_feedback / stock_concept_map / trade_briefing / research_document |
+| `tests/unit/` (10 个) | 新增 | LLM 相关模块单元测试 |
+| `docs/plans/2026-04-15-llm-agent-plan.md` | 新增 | LLM Agent 设计方案 |
+| `docs/plans/2026-04-15-valuation-enhancement.md` | 新增 | 估值增强设计方案 |
+
+---
+
+### 待完成
+
+- [ ] PostHog 服务器端部署（执行 migrate + 获取 API Key）
+- [ ] `portfolio-doctor` skill 补充 user_id 权限校验
+- [ ] `document_service.delete_document` 三步删除改软删除
+- [ ] 概念板块 `concept_board_fetcher` 分页加 max_pages 保护
+
+---
+
 ## 2026-04-15 估值数据增强 M1/M2 实施
 
 ### 今日工作内容

@@ -63,17 +63,9 @@ def upload_document(
     tags: Optional[str] = None,
     memo: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Upload and ingest a document.
+    """Save file to disk and create DB record. Returns immediately with status=processing.
 
-    Args:
-        file_content: Raw file bytes.
-        filename: Original filename.
-        title: Document title (defaults to filename stem).
-        tags: Comma-separated tags.
-        memo: User notes.
-
-    Returns:
-        Dict with document_id, status, chunk_count.
+    Actual parsing/embedding is done asynchronously by ingest_document_task (Celery).
     """
     ext = Path(filename).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
@@ -87,13 +79,14 @@ def upload_document(
     month_dir = datetime.now().strftime('%Y%m')
     save_dir = os.path.join(UPLOAD_ROOT, month_dir)
     os.makedirs(save_dir, exist_ok=True)
-    safe_filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}"
+    bare_name = Path(filename).name or 'unknown'
+    safe_filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{bare_name}"
     file_path = os.path.join(save_dir, safe_filename)
 
     with open(file_path, 'wb') as f:
         f.write(file_content)
 
-    # 2. Create DB record
+    # 2. Create DB record with status=processing
     from config.db import get_connection
     conn = get_connection()
     cursor = conn.cursor()
@@ -106,16 +99,27 @@ def upload_document(
     doc_id = cursor.lastrowid
 
     logger.info('[doc-upload] Saved %s (id=%d, type=%s, size=%d)', filename, doc_id, file_type, file_size)
+    return {"document_id": doc_id, "status": "processing", "chunk_count": 0}
 
-    # 3. Parse + embed + store
+
+def process_document(doc_id: int) -> Dict[str, Any]:
+    """Parse, embed and store a document in ChromaDB. Called by Celery worker."""
+    doc = get_document(doc_id)
+    if not doc:
+        raise ValueError(f"Document {doc_id} not found")
+
+    file_path = doc['file_path']
+    file_type = doc['file_type']
+    doc_title = doc['title']
+    tags = doc.get('tags') or ''
+
     try:
         cfg = DEFAULT_CONFIG
         parser = _get_parser(file_type, cfg)
         if not parser:
             raise ValueError(f"No parser for file type: {file_type}")
 
-        # Parse
-        chunks = parser.parse_file(file_path, source_name=filename)
+        chunks = parser.parse_file(file_path, source_name=doc_title)
 
         if not chunks:
             execute_update(
@@ -124,7 +128,6 @@ def upload_document(
             )
             return {"document_id": doc_id, "status": "failed", "chunk_count": 0, "error": "No text content extracted"}
 
-        # Build chunk IDs and metadata with doc_id and tags
         tag_list = [t.strip() for t in tags.split(',') if t.strip()] if tags else []
         for i, chunk in enumerate(chunks):
             chunk.chunk_id = f"doc_{doc_id}_{i}"
@@ -134,12 +137,10 @@ def upload_document(
                 "tags": ','.join(tag_list),
             })
 
-        # Embed
         embed_client = EmbeddingClient(cfg)
         texts = [c.text for c in chunks]
         embeddings = embed_client.embed_texts(texts)
 
-        # Store in ChromaDB
         chroma_client = ChromaClient(cfg)
         ids = [c.chunk_id for c in chunks]
         metadatas = []
@@ -157,7 +158,6 @@ def upload_document(
             metadatas=metadatas,
         )
 
-        # Build BM25 index
         bm25_retriever = BM25Retriever(k1=cfg.bm25_k1, b=cfg.bm25_b)
         bm25_docs = [
             {"id": c.chunk_id, "text": c.text, "metadata": metadatas[i]}
@@ -166,18 +166,16 @@ def upload_document(
         bm25_retriever.build_index('research', bm25_docs)
 
         chunk_count = len(chunks)
-
-        # Update DB
         execute_update(
             "UPDATE research_document SET status = 'done', chunk_count = %s WHERE id = %s",
             (chunk_count, doc_id),
         )
 
-        logger.info('[doc-upload] Ingested %d chunks for doc_id=%d', chunk_count, doc_id)
+        logger.info('[doc-process] Ingested %d chunks for doc_id=%d', chunk_count, doc_id)
         return {"document_id": doc_id, "status": "done", "chunk_count": chunk_count}
 
     except Exception as e:
-        logger.error('[doc-upload] Failed for doc_id=%d: %s', doc_id, e)
+        logger.error('[doc-process] Failed for doc_id=%d: %s', doc_id, e, exc_info=True)
         error_msg = str(e)[:500]
         execute_update(
             "UPDATE research_document SET status = 'failed', error_msg = %s WHERE id = %s",

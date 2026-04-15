@@ -17,6 +17,7 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
   const [memo, setMemo] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadPhase, setUploadPhase] = useState<'uploading' | 'processing' | ''>('');
   const [error, setError] = useState('');
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -25,7 +26,7 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
 
   function reset() {
     setTitle(''); setTags([]); setTagInput(''); setMemo('');
-    setFile(null); setError('');
+    setFile(null); setError(''); setUploadPhase('');
   }
 
   function handleClose() {
@@ -77,6 +78,8 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
     if (memo.trim()) formData.append('memo', memo.trim());
 
     try {
+      // Phase 1: upload file
+      setUploadPhase('uploading');
       const res = await fetch(`${API_BASE}/api/rag/documents/upload`, {
         method: 'POST',
         body: formData,
@@ -92,12 +95,28 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
         return;
       }
       const data = await res.json();
-      if (data.status === 'failed') {
-        setError(data.error || '文档解析失败');
-        return;
+      const docId = data.document_id;
+
+      // Phase 2: poll until done / failed (max 5 min)
+      setUploadPhase('processing');
+      onUploaded(); // refresh list immediately so card shows "processing"
+      const deadline = Date.now() + 5 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const statusRes = await fetch(`${API_BASE}/api/rag/documents/${docId}/status`);
+        if (!statusRes.ok) break;
+        const s = await statusRes.json();
+        onUploaded(); // keep refreshing list
+        if (s.status === 'done') { handleClose(); return; }
+        if (s.status === 'failed') {
+          setError(s.error || '向量化失败，请重试');
+          setUploadPhase('');
+          setUploading(false);
+          return;
+        }
       }
+      // timed out — still close, document card will show status
       handleClose();
-      onUploaded();
     } catch (e) {
       setError('网络错误，请重试');
     } finally {
@@ -263,7 +282,7 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
               border: 'none', borderRadius: '6px', cursor: !file || uploading ? 'not-allowed' : 'pointer',
             }}
           >
-            {uploading ? '解析向量化中...' : '上传'}
+            {uploadPhase === 'uploading' ? '上传中...' : uploadPhase === 'processing' ? '向量化中...' : '上传'}
           </button>
         </div>
       </div>
