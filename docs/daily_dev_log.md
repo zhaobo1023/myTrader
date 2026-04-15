@@ -2,6 +2,94 @@
 
 ---
 
+## 2026-04-15 估值数据增强 M1/M2 实施
+
+### 今日工作内容
+
+#### 1. 理杏仁竞品调研 + 技术方案
+
+对标 https://www.lixinger.com/ 完成产品功能调研，制定 M1-M3 估值增强方案。
+产出文档：`docs/lixinger_research.md`、`docs/plans/2026-04-15-valuation-enhancement.md`
+
+#### 2. 申万行业数据验证与修复
+
+- `trade_stock_basic` 新增 `sw_level1` / `sw_level2` 字段（用户已完成）
+- 覆盖率分析：sw_level1 73.2% → **94.5%**（5194/5497）
+  - 根因：未覆盖股票的 `industry` 字段本来就是 NULL（北交所）或已有值
+  - 修复：用 `industry` 字段回填 `sw_level1`，一条 UPDATE 补充 1169 只股票
+  - 剩余 303 只是北交所股票（无申万行业分类，属正常）
+
+#### 3. 宏观数据补全（macro_fetcher.py）
+
+新增 5 个月度宏观指标写入 `macro_data` 表：
+
+| 指标 | indicator | 数据量 |
+|------|-----------|--------|
+| CPI同比 | cpi_yoy | 20 条（2024.01~2025.08） |
+| PPI同比 | ppi_yoy | 20 条（2024.01~2025.08） |
+| M0货币同比 | m0_yoy | 27 条（2024.01~2026.03） |
+| M1货币同比 | m1_yoy | 27 条（2024.01~2026.03） |
+| M2货币供应同比 | m2_supply_yoy | 27 条（2024.01~2026.03） |
+
+新增函数：`fetch_cpi_yoy`、`fetch_ppi_yoy`、`fetch_money_supply_indicators`（联合函数）
+注册到 `FETCH_FUNCTIONS` 和 `fetch_all_indicators` 的 `skip_set` / 联合调用中。
+
+#### 4. 申万行业估值分位系统
+
+**新建表 `sw_industry_valuation`（17 字段）：**
+- trade_date / sw_name / sw_level
+- pe_ttm（市值加权）/ pe_ttm_eq（等权）/ pe_ttm_med（中位数）
+- pb（市值加权）/ pb_med（中位数）
+- pe_pct_5y / pb_pct_5y / pe_pct_10y / pb_pct_10y（历史分位）
+- valuation_score（0-100 估值温度）/ valuation_label（低估/合理/高估）
+
+**新建 `sw_industry_valuation_fetcher.py`：**
+- `calc_daily_industry_valuation(date)` -- JOIN trade_stock_daily_basic + trade_stock_basic，按申万一级行业聚合 PE/PB（三口径）
+- `calc_percentile(series, window)` -- 滚动历史分位（5年/10年窗口）
+- `_batch_update_percentiles()` -- 一次性加载全量历史批量计算所有分位并 UPDATE
+- `run_daily()` / `run_backfill()` -- 日常增量 + 历史回填
+
+**数据质量验证（2026-04-08）：**
+- 31 个行业全覆盖（含银行 PE=6.8、国防军工 PE=56.4 等合理值）
+- PE 三口径均正常（市值加权 < 等权 < 中位数，符合分布特征）
+
+**历史回填：** 2024-01-01 起回填，后台运行中
+
+#### 5. 估值 API（M2 完成）
+
+**`api/services/analysis_service.py` 新增 3 个函数：**
+- `get_industry_valuation_temperature(trade_date)` -- 行业估值温度列表
+- `get_industry_valuation_history(industry, metric, years)` -- 行业历史走势 + 分位带
+- `get_stock_valuation_history(stock_code, years)` -- 个股历史 PE/PB + 分位带
+
+**`api/routers/analysis.py` 新增 3 个端点：**
+```
+GET /api/analysis/valuation/temperature               # 行业估值温度（低估排前）
+GET /api/analysis/valuation/industry/{name}/history   # 行业历史走势
+GET /api/analysis/valuation/stock/{code}/history      # 个股历史 PE/PB
+```
+
+**`tasks/04_indicators.yaml` 新增：**
+```yaml
+calc_sw_industry_valuation:  # 每日 after_gate 自动运行
+```
+
+### 回填完成验证（2026-04-15）
+
+- 总记录: **20739 条** = 669 交易日 x 31 行业，数据完整
+- 有分位记录: 16895 条（81.5%，前 ~120 天无分位属正常，窗口未满）
+- Bug 修复：唯一键 `(trade_date, sw_code)` 改为 `(trade_date, sw_name)` 后重新回填
+- API 全部验证通过：食品饮料 score=12.1（低估）、通信 score=99.9（高估），符合市场认知
+- 五粮液个股：PE分位=8.2%，PB分位=4.7%，历史极低位
+
+### 待完成
+
+- [ ] M3：前端行业估值热力表 + 个股估值历史走势图
+
+产出文档：`docs/plans/2026-04-15-valuation-enhancement.md`
+
+---
+
 ## 2026-04-14 策略模拟池系统 (SimPool) 完整实现
 
 ### 今日工作内容

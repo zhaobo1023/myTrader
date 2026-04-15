@@ -164,6 +164,31 @@ MACRO_INDICATORS = {
         'source': 'macro_china_pmi',
         'params': {},
     },
+    'cpi_yoy': {
+        'name': 'CPI同比',
+        'source': 'macro_china_cpi_yearly',
+        'params': {},
+    },
+    'ppi_yoy': {
+        'name': 'PPI同比',
+        'source': 'macro_china_ppi_yearly',
+        'params': {},
+    },
+    'm0_yoy': {
+        'name': 'M0同比增速',
+        'source': 'macro_china_money_supply',
+        'params': {},
+    },
+    'm1_yoy': {
+        'name': 'M1同比增速',
+        'source': 'macro_china_money_supply',
+        'params': {},
+    },
+    'm2_supply_yoy': {
+        'name': 'M2货币供应量同比',
+        'source': 'macro_china_money_supply',
+        'params': {},
+    },
 }
 
 
@@ -509,6 +534,126 @@ def fetch_m2_yoy(start_date: str) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+def fetch_cpi_yoy(start_date: str) -> pd.DataFrame:
+    """
+    拉取 CPI 同比（月度）
+
+    AKShare macro_china_cpi_yearly 返回列: 商品, 日期, 今值, 预测值, 前值
+    """
+    if not HAS_AKSHARE:
+        raise RuntimeError("AKShare 未安装")
+
+    df = ak.macro_china_cpi_yearly()
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    date_col = '日期' if '日期' in df.columns else '月份'
+    df[date_col] = pd.to_datetime(df[date_col])
+    df = df[[date_col, '今值']].rename(columns={date_col: 'date', '今值': 'value'})
+    df['value'] = pd.to_numeric(df['value'], errors='coerce')
+    df = df.dropna(subset=['value'])
+
+    start_dt = pd.to_datetime(start_date.replace('-', ''), format='%Y%m%d')
+    df = df[df['date'] >= start_dt]
+
+    return df.reset_index(drop=True)
+
+
+def fetch_ppi_yoy(start_date: str) -> pd.DataFrame:
+    """
+    拉取 PPI 同比（月度）
+
+    AKShare macro_china_ppi_yearly 返回列: 商品, 日期, 今值, 预测值, 前值
+    """
+    if not HAS_AKSHARE:
+        raise RuntimeError("AKShare 未安装")
+
+    df = ak.macro_china_ppi_yearly()
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    date_col = '日期' if '日期' in df.columns else '月份'
+    df[date_col] = pd.to_datetime(df[date_col])
+    df = df[[date_col, '今值']].rename(columns={date_col: 'date', '今值': 'value'})
+    df['value'] = pd.to_numeric(df['value'], errors='coerce')
+    df = df.dropna(subset=['value'])
+
+    start_dt = pd.to_datetime(start_date.replace('-', ''), format='%Y%m%d')
+    df = df[df['date'] >= start_dt]
+
+    return df.reset_index(drop=True)
+
+
+def fetch_money_supply_indicators() -> dict:
+    """
+    联合拉取 M0/M1/M2 货币供应量及同比（一次 AKShare 调用产生多个指标）
+
+    AKShare macro_china_money_supply 返回列:
+      月份, M2数量(亿元), M2同比增长, M2环比增长,
+      M1数量(亿元), M1同比增长, M1环比增长,
+      M0数量(亿元), M0同比增长, M0环比增长
+    """
+    results = {}
+    keys = ['m0_yoy', 'm1_yoy', 'm2_supply_yoy']
+
+    try:
+        latest_date = get_latest_date('m0_yoy')
+        if latest_date:
+            today = date.today().strftime('%Y-%m-%d')
+            if latest_date >= today:
+                for k in keys:
+                    results[k] = {'success': True, 'count': 0, 'error': '已是最新'}
+                return results
+            start_dt = pd.to_datetime(latest_date) + timedelta(days=1)
+            start_date_str = start_dt.strftime('%Y%m%d')
+        else:
+            start_date_str = MACRO_DATA_START
+
+        df = ak.macro_china_money_supply()
+        if df is None or df.empty:
+            for k in keys:
+                results[k] = {'success': True, 'count': 0, 'error': '无新数据'}
+            return results
+
+        # 解析月份列 '2008年01月份' -> 日期
+        def parse_cn_month(s):
+            import re as _re
+            m = _re.match(r'(\d{4})年(\d{1,2})月', str(s))
+            if m:
+                return '{}-{:02d}-01'.format(m.group(1), int(m.group(2)))
+            return None
+
+        df['_date'] = df['月份'].apply(parse_cn_month)
+        df = df.dropna(subset=['_date'])
+        df['_date'] = pd.to_datetime(df['_date'])
+
+        start_dt2 = pd.to_datetime(start_date_str, format='%Y%m%d')
+        df = df[df['_date'] >= start_dt2]
+
+        col_map = {
+            'm0_yoy': '流通中的现金(M0)-同比增长',
+            'm1_yoy': '货币(M1)-同比增长',
+            'm2_supply_yoy': '货币和准货币(M2)-同比增长',
+        }
+
+        for key, col in col_map.items():
+            if col not in df.columns:
+                results[key] = {'success': False, 'count': 0, 'error': '列不存在: ' + col}
+                continue
+            sub = df[['_date', col]].rename(columns={'_date': 'date', col: 'value'}).copy()
+            sub['value'] = pd.to_numeric(sub['value'], errors='coerce')
+            sub = sub.dropna(subset=['value'])
+            count = save_data(key, sub)
+            results[key] = {'success': True, 'count': count, 'error': None}
+
+    except Exception as e:
+        err = str(e)
+        for k in keys:
+            results[k] = {'success': False, 'count': 0, 'error': err}
+
+    return results
+
+
 def fetch_pmi_mfg(start_date: str) -> pd.DataFrame:
     """
     拉取制造业 PMI（月度）
@@ -594,6 +739,8 @@ for _sym_key, _sym_code in [
 
 FETCH_FUNCTIONS['m2_yoy'] = fetch_m2_yoy
 FETCH_FUNCTIONS['pmi_mfg'] = fetch_pmi_mfg
+FETCH_FUNCTIONS['cpi_yoy'] = fetch_cpi_yoy
+FETCH_FUNCTIONS['ppi_yoy'] = fetch_ppi_yoy
 
 
 # ============================================================
@@ -802,7 +949,8 @@ def fetch_all_indicators() -> dict:
     results = {}
 
     # 跳过由联合函数处理的指标
-    skip_set = {'pe_csi300', 'div_yield_csi300', 'cn_10y_bond', 'us_10y_bond'}
+    skip_set = {'pe_csi300', 'div_yield_csi300', 'cn_10y_bond', 'us_10y_bond',
+                'm0_yoy', 'm1_yoy', 'm2_supply_yoy'}
 
     for indicator in FETCH_FUNCTIONS.keys():
         if indicator in skip_set:
@@ -824,6 +972,12 @@ def fetch_all_indicators() -> dict:
     # 联合拉取国债收益率
     bond_results = fetch_bond_yield_indicators()
     for key, res in bond_results.items():
+        res['name'] = MACRO_INDICATORS.get(key, {}).get('name', key)
+        results[key] = res
+
+    # 联合拉取 M0/M1/M2 货币供应量同比
+    money_results = fetch_money_supply_indicators()
+    for key, res in money_results.items():
         res['name'] = MACRO_INDICATORS.get(key, {}).get('name', key)
         results[key] = res
 

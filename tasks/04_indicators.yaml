@@ -58,3 +58,14 @@ tasks:
       max_attempts: 2
       delay_seconds: 60
     timeout_seconds: 300
+
+  - id: calc_sw_industry_valuation
+    name: "SW industry valuation percentile (PE/PB/score)"
+    module: data_analyst.fetchers.sw_industry_valuation_fetcher
+    func: run_daily
+    tags: [indicator, daily, valuation]
+    schedule: "after_gate"
+    depends_on:
+      - _gate_daily_price
+    params: {}
+    timeout_seconds: 300

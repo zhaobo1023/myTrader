@@ -818,3 +818,48 @@ async def get_annual_report_ingest_status(code: str = Query(..., description='6-
     except Exception as e:
         logger.error('[api] annual-report status error: %s', e)
         return {'stock_code': code, 'total_chunks': 0, 'years_available': [], 'has_data': False}
+
+
+# ---------------------------------------------------------------------------
+# 估值分位 API
+# ---------------------------------------------------------------------------
+
+@router.get('/valuation/temperature')
+async def industry_valuation_temperature(
+    date: str = Query(None, description='交易日 YYYY-MM-DD，不传则取最新'),
+):
+    """
+    获取申万一级行业估值温度。
+
+    返回各行业的 PE/PB 及历史分位，按 valuation_score 升序排列（低估在前）。
+    valuation_score 范围 0-100，越低估值越低。
+    valuation_label: 低估 / 合理 / 高估
+    """
+    return await analysis_service.get_industry_valuation_temperature(trade_date=date)
+
+
+@router.get('/valuation/industry/{industry_name}/history')
+async def industry_valuation_history(
+    industry_name: str,
+    metric: str = Query('pe_ttm', description='指标: pe_ttm | pe_ttm_eq | pe_ttm_med | pb | pb_med'),
+    years: int = Query(5, description='历史年数: 5 或 10'),
+):
+    """
+    获取指定申万行业的估值历史走势及分位带。
+
+    返回历史时序数据（每日一条）及 p20/p50/p80 分位参考线。
+    """
+    return await analysis_service.get_industry_valuation_history(industry_name, metric=metric, years=years)
+
+
+@router.get('/valuation/stock/{code}/history')
+async def stock_valuation_history(
+    code: str,
+    years: int = Query(5, description='历史年数: 5 或 10'),
+):
+    """
+    获取个股历史 PE/PB 走势 + 分位带。
+
+    返回历史 PE-TTM / PB 时序及当前估值在历史中的分位位置。
+    """
+    return await analysis_service.get_stock_valuation_history(code, years=years)

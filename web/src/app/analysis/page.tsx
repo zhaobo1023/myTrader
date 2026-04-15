@@ -179,6 +179,326 @@ function ReportDetail({ report }: { report: TechReportCard }) {
 }
 
 // ---------------------------------------------------------------------------
+// Industry valuation heatmap (M3)
+// ---------------------------------------------------------------------------
+
+interface ValuationItem {
+  name: string;
+  pe_ttm: number | null;
+  pe_ttm_med: number | null;
+  pb: number | null;
+  pe_pct_5y: number | null;
+  pb_pct_5y: number | null;
+  valuation_score: number | null;
+  valuation_label: string;
+}
+
+interface ValuationTemperatureResponse {
+  date: string;
+  items: ValuationItem[];
+}
+
+interface IndustryHistoryPoint {
+  date: string;
+  value: number | null;
+}
+
+interface IndustryHistoryResponse {
+  industry: string;
+  metric: string;
+  current: { date: string; value: number | null; valuation_score: number | null; valuation_label: string };
+  history: IndustryHistoryPoint[];
+  percentile_bands: { p20: number; p50: number; p80: number };
+}
+
+function scoreColor(score: number | null): string {
+  if (score === null) return 'var(--text-muted)';
+  if (score < 30) return '#27a644';
+  if (score > 70) return '#e5534b';
+  return '#c69026';
+}
+
+function scoreBg(score: number | null): string {
+  if (score === null) return 'var(--bg-card)';
+  if (score < 30) return 'rgba(39,166,68,0.10)';
+  if (score > 70) return 'rgba(229,83,75,0.10)';
+  return 'rgba(198,144,38,0.10)';
+}
+
+function PctBar({ pct }: { pct: number | null }) {
+  if (pct === null) return <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>-</span>;
+  const pctColor = pct < 0.3 ? '#27a644' : pct > 0.7 ? '#e5534b' : '#c69026';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+      <div style={{ width: '44px', height: '5px', background: 'var(--bg-tag)', borderRadius: '3px', overflow: 'hidden' }}>
+        <div style={{ width: `${Math.round(pct * 100)}%`, height: '100%', background: pctColor, borderRadius: '3px' }} />
+      </div>
+      <span style={{ fontSize: '11px', color: pctColor, fontVariantNumeric: 'tabular-nums' }}>{Math.round(pct * 100)}%</span>
+    </div>
+  );
+}
+
+function MiniLineChart({ history, bands }: { history: IndustryHistoryPoint[]; bands: { p20: number; p50: number; p80: number } }) {
+  const vals = history.map(h => h.value).filter((v): v is number => v !== null);
+  if (vals.length < 2) return <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>暂无数据</div>;
+
+  const W = 320, H = 90;
+  const min = Math.min(...vals, bands.p20) * 0.95;
+  const max = Math.max(...vals, bands.p80) * 1.05;
+  const toY = (v: number) => H - ((v - min) / (max - min)) * H;
+  const toX = (i: number) => (i / (history.length - 1)) * W;
+
+  const points = history
+    .map((h, i) => h.value !== null ? `${toX(i).toFixed(1)},${toY(h.value).toFixed(1)}` : null)
+    .filter(Boolean).join(' ');
+
+  const lineY20 = toY(bands.p20).toFixed(1);
+  const lineY50 = toY(bands.p50).toFixed(1);
+  const lineY80 = toY(bands.p80).toFixed(1);
+
+  return (
+    <svg width={W} height={H} style={{ display: 'block', overflow: 'visible' }}>
+      {/* Band lines */}
+      <line x1="0" y1={lineY80} x2={W} y2={lineY80} stroke="#e5534b" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />
+      <line x1="0" y1={lineY50} x2={W} y2={lineY50} stroke="var(--text-muted)" strokeWidth="1" strokeDasharray="3 3" opacity="0.4" />
+      <line x1="0" y1={lineY20} x2={W} y2={lineY20} stroke="#27a644" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />
+      {/* Labels */}
+      <text x={W + 3} y={parseFloat(lineY80) + 4} fontSize="9" fill="#e5534b" opacity="0.7">p80</text>
+      <text x={W + 3} y={parseFloat(lineY50) + 4} fontSize="9" fill="var(--text-muted)" opacity="0.7">p50</text>
+      <text x={W + 3} y={parseFloat(lineY20) + 4} fontSize="9" fill="#27a644" opacity="0.7">p20</text>
+      {/* Line */}
+      <polyline points={points} fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IndustryValuationHeatmap() {
+  const [expanded, setExpanded] = useState(false);
+  const [selectedIndustry, setSelectedIndustry] = useState<string | null>(null);
+
+  const { data, isLoading } = useQuery<ValuationTemperatureResponse>({
+    queryKey: ['valuation-temperature'],
+    queryFn: () => apiClient.get('/api/analysis/valuation/temperature').then(r => r.data),
+    staleTime: 300000,
+  });
+
+  const { data: histData, isLoading: histLoading } = useQuery<IndustryHistoryResponse>({
+    queryKey: ['valuation-industry-history', selectedIndustry],
+    queryFn: () => apiClient.get(`/api/analysis/valuation/industry/${encodeURIComponent(selectedIndustry!)}/history`, { params: { metric: 'pe_ttm', years: 2 } }).then(r => r.data),
+    enabled: !!selectedIndustry,
+    staleTime: 300000,
+  });
+
+  const displayItems = data?.items ?? [];
+  const visibleItems = expanded ? displayItems : displayItems.slice(0, 10);
+
+  return (
+    <div style={{ marginBottom: '28px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+        <span style={{ fontSize: '14px', fontWeight: 590, color: 'var(--text-primary)' }}>行业估值温度</span>
+        {data?.date && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{data.date}</span>}
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>按 5年PE分位 升序，绿=低估 红=高估</span>
+      </div>
+
+      {isLoading && <div style={{ color: 'var(--text-muted)', fontSize: '13px', padding: '16px 0' }}>加载中...</div>}
+
+      {!isLoading && displayItems.length > 0 && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
+            {visibleItems.map((item) => (
+              <div
+                key={item.name}
+                onClick={() => setSelectedIndustry(selectedIndustry === item.name ? null : item.name)}
+                style={{
+                  padding: '9px 10px',
+                  borderRadius: '7px',
+                  background: scoreBg(item.valuation_score),
+                  border: `1px solid ${selectedIndustry === item.name ? scoreColor(item.valuation_score) : 'transparent'}`,
+                  cursor: 'pointer',
+                  transition: 'all 0.12s',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 510, color: 'var(--text-primary)' }}>{item.name}</span>
+                  <span style={{ fontSize: '11px', fontWeight: 590, color: scoreColor(item.valuation_score) }}>
+                    {item.valuation_score !== null ? item.valuation_score.toFixed(0) : '-'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    PE {item.pe_ttm !== null ? item.pe_ttm.toFixed(1) : '-'}
+                  </span>
+                  <PctBar pct={item.pe_pct_5y} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    PB {item.pb !== null ? item.pb.toFixed(2) : '-'}
+                  </span>
+                  <PctBar pct={item.pb_pct_5y} />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {displayItems.length > 10 && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              style={{ marginTop: '8px', fontSize: '12px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0' }}
+            >
+              {expanded ? '收起' : `展开全部 ${displayItems.length} 个行业`}
+            </button>
+          )}
+
+          {/* Industry PE history chart */}
+          {selectedIndustry && (
+            <div style={{ marginTop: '14px', padding: '14px 16px', background: 'var(--bg-elevated)', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                <span style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-primary)' }}>{selectedIndustry} — PE-TTM 历史（近 2 年）</span>
+                {histData?.current && (
+                  <span style={{ fontSize: '12px', color: scoreColor(histData.current.valuation_score), background: scoreBg(histData.current.valuation_score), padding: '1px 8px', borderRadius: '10px' }}>
+                    {histData.current.valuation_label} · {histData.current.value?.toFixed(1)}x
+                  </span>
+                )}
+                <button onClick={() => setSelectedIndustry(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>×</button>
+              </div>
+              {histLoading && <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>加载中...</div>}
+              {histData && !histLoading && (
+                <div style={{ overflowX: 'auto' }}>
+                  <MiniLineChart history={histData.history} bands={histData.percentile_bands} />
+                  <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                    <span><span style={{ color: '#27a644' }}>p20</span> {histData.percentile_bands.p20?.toFixed(1)}x</span>
+                    <span><span style={{ color: 'var(--text-secondary)' }}>p50</span> {histData.percentile_bands.p50?.toFixed(1)}x</span>
+                    <span><span style={{ color: '#e5534b' }}>p80</span> {histData.percentile_bands.p80?.toFixed(1)}x</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Stock valuation history panel (M3)
+// ---------------------------------------------------------------------------
+
+interface StockHistoryPoint {
+  date: string;
+  pe_ttm: number | null;
+  pb: number | null;
+}
+
+interface StockValuationResponse {
+  code: string;
+  name: string;
+  current: { date: string; pe_ttm: number | null; pb: number | null; pe_pct?: number; pb_pct?: number };
+  history: StockHistoryPoint[];
+  percentile_bands: { pe_ttm?: { p20: number; p50: number; p80: number }; pb?: { p20: number; p50: number; p80: number } };
+}
+
+type ValMetric = 'pe_ttm' | 'pb';
+
+function StockValuationHistory({ stock }: { stock: StockOption }) {
+  const [metric, setMetric] = useState<ValMetric>('pe_ttm');
+
+  const { data, isLoading } = useQuery<StockValuationResponse>({
+    queryKey: ['stock-valuation-history', stock.code],
+    queryFn: () => apiClient.get(`/api/analysis/valuation/stock/${stock.code}/history`, { params: { years: 5 } }).then(r => r.data),
+    staleTime: 300000,
+  });
+
+  if (isLoading) return <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>加载历史估值...</div>;
+  if (!data || !data.history.length) return <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>暂无估值历史数据</div>;
+
+  const history = data.history;
+  const bands = metric === 'pe_ttm' ? data.percentile_bands.pe_ttm : data.percentile_bands.pb;
+  const current = data.current;
+  const currentVal = metric === 'pe_ttm' ? current.pe_ttm : current.pb;
+  const currentPct = metric === 'pe_ttm' ? current.pe_pct : current.pb_pct;
+
+  const histPoints: IndustryHistoryPoint[] = history.map(h => ({
+    date: h.date,
+    value: metric === 'pe_ttm' ? h.pe_ttm : h.pb,
+  }));
+
+  const metricLabel = metric === 'pe_ttm' ? 'PE-TTM' : 'PB';
+
+  return (
+    <div>
+      {/* Current valuation summary */}
+      <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', flexWrap: 'wrap' }}>
+        {[
+          { label: 'PE-TTM', val: current.pe_ttm?.toFixed(1), pct: current.pe_pct },
+          { label: 'PB', val: current.pb?.toFixed(2), pct: current.pb_pct },
+        ].map(item => (
+          <div key={item.label} style={{ padding: '10px 16px', background: 'var(--bg-elevated)', borderRadius: '8px', border: '1px solid var(--border-subtle)', minWidth: '120px' }}>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>{item.label}</div>
+            <div style={{ fontSize: '20px', fontWeight: 590, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{item.val ?? '-'}</div>
+            {item.pct !== undefined && (
+              <div style={{ marginTop: '4px' }}>
+                <PctBar pct={item.pct} />
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', display: 'block' }}>5年历史分位</span>
+              </div>
+            )}
+          </div>
+        ))}
+        <div style={{ padding: '10px 16px', background: 'var(--bg-elevated)', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>数据日期</div>
+          <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{current.date}</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{history.length} 个交易日</div>
+        </div>
+      </div>
+
+      {/* Metric toggle */}
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+        {(['pe_ttm', 'pb'] as ValMetric[]).map(m => (
+          <button
+            key={m}
+            onClick={() => setMetric(m)}
+            style={{
+              padding: '4px 14px', fontSize: '12px', borderRadius: '5px', cursor: 'pointer',
+              background: metric === m ? 'var(--accent)' : 'var(--bg-card)',
+              color: metric === m ? '#fff' : 'var(--text-secondary)',
+              border: `1px solid ${metric === m ? 'var(--accent)' : 'var(--border-subtle)'}`,
+            }}
+          >
+            {m === 'pe_ttm' ? 'PE-TTM' : 'PB'}
+          </button>
+        ))}
+      </div>
+
+      {/* Chart */}
+      <div style={{ padding: '14px 16px', background: 'var(--bg-elevated)', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+          <span style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-primary)' }}>
+            {metricLabel} 历史走势（近 5 年）
+          </span>
+          {currentVal !== null && currentPct !== undefined && (
+            <span style={{ fontSize: '11px', color: scoreColor(currentPct * 100), background: scoreBg(currentPct * 100), padding: '1px 8px', borderRadius: '10px' }}>
+              当前 {currentVal.toFixed(metric === 'pe_ttm' ? 1 : 2)}x · 分位 {(currentPct * 100).toFixed(0)}%
+            </span>
+          )}
+        </div>
+        {bands ? (
+          <div style={{ overflowX: 'auto' }}>
+            <MiniLineChart history={histPoints} bands={bands} />
+            <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <span><span style={{ color: '#27a644' }}>p20</span> {bands.p20?.toFixed(metric === 'pe_ttm' ? 1 : 2)}x</span>
+              <span><span style={{ color: 'var(--text-secondary)' }}>p50</span> {bands.p50?.toFixed(metric === 'pe_ttm' ? 1 : 2)}x</span>
+              <span><span style={{ color: '#e5534b' }}>p80</span> {bands.p80?.toFixed(metric === 'pe_ttm' ? 1 : 2)}x</span>
+            </div>
+          </div>
+        ) : (
+          <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>分位数据不足（需要 10 条以上历史）</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Comprehensive report panel (five-step RAG)
 // ---------------------------------------------------------------------------
 
@@ -976,7 +1296,7 @@ function OnePagerPanel({ stock }: { stock: StockOption }) {
 // Stock panel with tabs: 技术分析 | 综合研报 | 一页纸研究
 // ---------------------------------------------------------------------------
 
-type Tab = 'one-pager' | 'tech' | 'comprehensive';
+type Tab = 'one-pager' | 'tech' | 'comprehensive' | 'valuation';
 
 function StockReportPanel({ stock }: { stock: StockOption }) {
   const [activeTab, setActiveTab] = useState<Tab>('one-pager');
@@ -1005,12 +1325,14 @@ function StockReportPanel({ stock }: { stock: StockOption }) {
           <button style={tabStyle('one-pager')} onClick={() => setActiveTab('one-pager')}>一页纸研究</button>
           <button style={tabStyle('tech')} onClick={() => setActiveTab('tech')}>技术分析</button>
           <button style={tabStyle('comprehensive')} onClick={() => setActiveTab('comprehensive')}>综合研报</button>
+          <button style={tabStyle('valuation')} onClick={() => setActiveTab('valuation')}>估值分析</button>
         </div>
       </div>
 
       {activeTab === 'one-pager' && <OnePagerPanel stock={stock} />}
       {activeTab === 'tech' && <TechReportTabContent stock={stock} />}
       {activeTab === 'comprehensive' && <ComprehensiveReportPanel stock={stock} />}
+      {activeTab === 'valuation' && <StockValuationHistory stock={stock} />}
     </div>
   );
 }
@@ -1042,6 +1364,9 @@ export default function AnalysisPage() {
           </span>
         )}
       </div>
+
+      {/* Industry valuation heatmap (always visible) */}
+      <IndustryValuationHeatmap />
 
       {/* Stock-specific panel */}
       {selectedStock ? (
