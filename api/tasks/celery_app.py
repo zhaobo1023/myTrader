@@ -88,6 +88,12 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=20, minute=0, day_of_week='1-5'),
     },
 
+    # 18:30 - 个股新闻拉取 (已分析股票)
+    'daily-stock-news-fetch': {
+        'task': 'fetch_stock_news_daily',
+        'schedule': crontab(hour=18, minute=30, day_of_week='1-5'),
+    },
+
     # ============================================================
     # 舆情监控任务 (每小时)
     # ============================================================
