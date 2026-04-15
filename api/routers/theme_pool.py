@@ -466,8 +466,10 @@ async def llm_create_theme(req: LLMThemeCreateRequest):
       reason       str          LLM-generated one-line rationale
     """
     from api.services.theme_llm_service import ThemeCreateSkill
+    from api.dependencies import get_redis
 
-    skill = ThemeCreateSkill()
+    redis = await get_redis()
+    skill = ThemeCreateSkill(redis=redis)
 
     async def event_gen():
         async for event in skill.stream(
@@ -485,3 +487,60 @@ async def llm_create_theme(req: LLMThemeCreateRequest):
             'X-Accel-Buffering': 'no',
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Unified LLM skill stream endpoint (M2-T6)
+# ---------------------------------------------------------------------------
+
+class LLMStreamRequest(BaseModel):
+    skill_id: str
+    params: dict = {}
+
+
+@router.post('/llm/stream')
+async def llm_skill_stream(req: LLMStreamRequest):
+    """
+    Unified SSE streaming endpoint that routes to any registered LLM skill.
+
+    Request body:
+      skill_id  str   e.g. "theme-review"
+      params    dict  skill-specific parameters, e.g. {"theme_id": 1, "theme_name": "电网设备"}
+
+    Returns Server-Sent Events stream. Each event is a JSON object with a "type" field.
+    Last event has type "done" (success) or "error" (failure).
+    """
+    from api.services.llm_skills.registry import get_skill
+    # ensure skills are registered
+    import api.services.llm_skills.theme_review  # noqa: F401
+
+    skill = get_skill(req.skill_id)
+    if skill is None:
+        async def _error_gen():
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Unknown skill: {req.skill_id}'}, ensure_ascii=False)}\n\n"
+        return StreamingResponse(
+            _error_gen(),
+            media_type='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+        )
+
+    async def event_gen():
+        async for event in skill.stream(**req.params):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
+@router.get('/llm/skills')
+async def list_llm_skills():
+    """List all registered LLM skills."""
+    from api.services.llm_skills.registry import list_skills
+    import api.services.llm_skills.theme_review  # noqa: F401
+    return {'skills': list_skills()}

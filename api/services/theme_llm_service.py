@@ -18,8 +18,7 @@ import logging
 import re
 
 from config.db import execute_query
-from investment_rag.embeddings.embed_model import LLMClient
-from investment_rag.config import DEFAULT_CONFIG
+from api.services.llm_client_factory import get_llm_client, llm_call_with_retry
 from api.services.theme_llm_prompts import (
     CONCEPT_MAPPING_SYSTEM, CONCEPT_MAPPING_USER,
     STOCK_FILTER_SYSTEM, STOCK_FILTER_USER,
@@ -125,10 +124,12 @@ class ThemeCreateSkill:
       5. LLM supplement (stocks not in AKShare)
     """
 
-    def __init__(self):
-        self._fetcher = AKShareConceptFetcher()
+    def __init__(self, model_alias: str | None = None, redis=None):
+        from api.services.akshare_cache import CachedAKShareFetcher
+        inner = AKShareConceptFetcher()
+        self._fetcher = CachedAKShareFetcher(inner=inner, redis=redis) if redis else inner
         self._validator = StockCodeValidator()
-        self._llm = LLMClient(DEFAULT_CONFIG)
+        self._llm_factory = get_llm_client(model_alias)
 
     async def stream(self, theme_name: str, description: str = '', max_candidates: int = 40):
         """Async generator: yields SSE event dicts."""
@@ -229,16 +230,15 @@ class ThemeCreateSkill:
 
     async def _llm_call(self, prompt: str, system_prompt: str, temperature: float = 0.3,
                         max_tokens: int = 2048) -> str:
-        """Run LLM.generate in executor (sync -> async)."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None,
-            lambda: self._llm.generate(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+        """Async LLM call via factory, with 30s timeout (no JSON validation at this layer)."""
+        return await llm_call_with_retry(
+            self._llm_factory.call,
+            validate_json=False,
+            timeout_sec=30.0,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
     @staticmethod
