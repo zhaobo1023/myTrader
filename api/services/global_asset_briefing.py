@@ -23,44 +23,52 @@ logger = logging.getLogger('myTrader.global_briefing')
 # Prompt templates
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """你是一位专业的全球宏观分析师，服务于中国A股投资者。
-请基于以下全球大类资产数据进行简明解读。
+SYSTEM_PROMPT = """你是一位专业的A股市场分析师。
+请基于以下A股大盘信号和全球资产数据进行简明解读。
 
 要求：
-- 使用简洁专业的中文
-- 重点关注对A股市场的潜在影响
+- 使用简洁专业的中文，重点服务A股投资者
+- A股大盘信号（市场温度/趋势/情绪/风格/股债/宏观）是核心，全球资产是辅助参考
 - 标注关键风险信号和机会信号
 - 不使用任何emoji字符
 - 用纯文本标记如[风险]、[机会]、[关注]等
-- 输出格式为Markdown"""
+- 输出格式为Markdown，控制在800字以内"""
 
 MORNING_PROMPT = """## 盘前速递（{date}）
 
-以下是昨夜至今晨的全球资产数据，请给出**开盘前**简明解读，重点关注：
-1. 美股三大指数昨夜表现及背后驱动
-2. 美债收益率变动及对流动性的含义
-3. 大宗商品（黄金/原油）异动分析
-4. 美元指数及人民币汇率变化
-5. VIX/GVZ等波动率指标的风险提示
-6. 加密货币市场情绪参考
-7. 综合判断：今日A股可能受到的外围影响（偏多/偏空/中性）
+以下是A股大盘信号和昨夜全球资产数据，请给出**开盘前**简明解读：
 
-### 数据快照
+### 一、A股大盘信号（前一交易日）
+{dashboard_snapshot}
+
+### 二、全球资产（隔夜）
 {data_snapshot}
+
+请从以下维度解读：
+1. **A股市场状态**：基于温度/趋势/情绪信号，判断当前所处阶段
+2. **外围影响**：美股/美债/商品对A股今日可能的映射
+3. **风格与资金**：大小盘/成长价值偏好、北向资金方向
+4. **风险提示**：当前最需警惕的风险因素
+5. **操作建议**：今日整体偏多/偏空/中性，仓位建议
 """
 
 EVENING_PROMPT = """## 收盘复盘（{date}）
 
-以下是今日全球资产收盘数据（含A股收盘后数据），请给出**收盘后**全面复盘，重点关注：
-1. A股今日表现回顾（结合宏观数据解读）
-2. A股与外围市场的联动分析
-3. 美债/汇率对资金面的影响
-4. 大宗商品对资源板块的映射
-5. 波动率指标的风险/机会信号
-6. 明日展望：需要重点关注的风险点和机会
+以下是今日A股大盘信号和全球资产数据，请给出**收盘后**全面复盘：
 
-### 数据快照
+### 一、A股大盘信号（今日）
+{dashboard_snapshot}
+
+### 二、全球资产
 {data_snapshot}
+
+请从以下维度解读：
+1. **今日行情回顾**：结合温度/趋势/情绪信号，概括今日市场特征
+2. **资金面分析**：北向资金、融资余额、成交量变化的含义
+3. **风格轮动**：大小盘/成长价值表现，轮动方向判断
+4. **股债性价比**：当前股债利差水平的配置含义
+5. **外围联动**：全球资产对明日A股的潜在影响
+6. **明日展望**：需关注的风险点和机会，仓位建议
 """
 
 
@@ -160,6 +168,90 @@ def _collect_data_snapshot(indicators: list[str], lookback_days: int = 5) -> str
     return '\n'.join(lines)
 
 
+def _collect_dashboard_snapshot() -> str:
+    """
+    Collect A-share dashboard signal data from the market-overview API.
+    Returns formatted text for LLM prompt.
+    """
+    try:
+        from data_analyst.market_dashboard.calculator import compute_dashboard
+        data = compute_dashboard()
+    except Exception as e:
+        logger.warning('Failed to get dashboard data: %s', e)
+        return '(大盘信号数据不可用)'
+
+    if not data:
+        return '(大盘信号数据不可用)'
+
+    lines = []
+
+    # Temperature
+    temp = data.get('temperature', {})
+    if temp.get('available'):
+        inds = temp.get('indicators', {})
+        vol = inds.get('volume', {})
+        vr = inds.get('volume_ratio_ma20', {})
+        tp = inds.get('turnover_pct_rank', {})
+        ad = inds.get('advance_decline', {})
+        lu = inds.get('limit_up_down', {})
+        lines.append('**市场温度** (信号: {})'.format(temp.get('level', '-')))
+        lines.append('  成交额: {}亿 | 量/MA20: {} ({}) | 换手分位: {}%'.format(
+            vol.get('value', '-'), vr.get('value', '-'), vr.get('signal', '-'), tp.get('value', '-')))
+        lines.append('  涨/跌家数: {}/{} | 涨停/跌停: {}/{}'.format(
+            ad.get('advance', '-'), ad.get('decline', '-'),
+            lu.get('up', '-'), lu.get('down', '-')))
+
+    # Trend
+    trend = data.get('trend', {})
+    if trend.get('available'):
+        inds = trend.get('indicators', {})
+        lines.append('**趋势方向** (信号: {})'.format(trend.get('level', '-')))
+        lines.append('  均线形态: {} | ADX: {} ({}) | MACD周线: {}'.format(
+            inds.get('ma_alignment', '-'),
+            inds.get('adx', {}).get('value', '-'), inds.get('adx', {}).get('signal', '-'),
+            inds.get('macd_weekly', {}).get('signal', '-')))
+
+    # Sentiment
+    sent = data.get('sentiment', {})
+    if sent.get('available'):
+        inds = sent.get('indicators', {})
+        lines.append('**情绪** (综合: {} {})'.format(sent.get('score', '-'), sent.get('level_label', '-')))
+        lines.append('  QVIX: {} ({}) | 北向资金: {} | 封板率: {}%'.format(
+            inds.get('qvix', {}).get('value', '-'), inds.get('qvix', {}).get('signal', '-'),
+            inds.get('north_flow', {}).get('signal', '-'),
+            inds.get('seal_rate', {}).get('value', '-')))
+
+    # Style
+    style = data.get('style', {})
+    if style.get('available'):
+        scale = style.get('scale', {})
+        st = style.get('style', {})
+        lines.append('**风格轮动**')
+        lines.append('  规模: {} (大盘{} vs 小盘{}) | 风格: {} (成长{} vs 价值{})'.format(
+            scale.get('leader', '-'), scale.get('large_cap', '-'), scale.get('small_cap', '-'),
+            st.get('leader', '-'), st.get('growth', '-'), st.get('value', '-')))
+
+    # Stock-Bond
+    sb = data.get('stock_bond', {})
+    if sb.get('available'):
+        lines.append('**股债性价比** ({})'.format(sb.get('level_label', '-')))
+        spread = sb.get('spread', {})
+        lines.append('  股债利差: {}% (分位: {}%)'.format(
+            spread.get('value', '-'), spread.get('percentile', '-')))
+
+    # Macro
+    macro = data.get('macro', {})
+    if macro.get('available'):
+        inds = macro.get('indicators', {})
+        lines.append('**宏观背景** ({})'.format(macro.get('level_label', '-')))
+        lines.append('  PMI: {} ({}) | M2: {}% | AH溢价: {} ({})'.format(
+            inds.get('pmi_mfg', {}).get('value', '-'), inds.get('pmi_mfg', {}).get('signal', '-'),
+            inds.get('m2_yoy', {}).get('value', '-'),
+            inds.get('ah_premium', {}).get('value', '-'), inds.get('ah_premium', {}).get('signal', '-')))
+
+    return '\n'.join(lines) if lines else '(大盘信号数据不可用)'
+
+
 # ---------------------------------------------------------------------------
 # Briefing generation
 # ---------------------------------------------------------------------------
@@ -175,36 +267,16 @@ async def generate_briefing(session: str = 'morning') -> dict:
         {'session': str, 'date': str, 'content': str, 'cached': bool}
     """
     today_str = date.today().strftime('%Y-%m-%d')
-    cache_key = 'briefing_{}'.format(session)
-
-    # Check cache: already generated today?
-    cached = execute_query(
-        "SELECT value FROM macro_data WHERE indicator = %s AND date = %s",
-        (cache_key, today_str),
-    )
-    if cached and cached[0]['value'] is not None:
-        # Value is stored as a reference ID; content is in the dedicated column
-        pass  # Fall through to check content cache below
-
-    # Check content cache in a separate table or re-generate
-    content_key = 'briefing_content_{}_{}'.format(session, today_str)
-    content_rows = execute_query(
-        "SELECT value FROM macro_data WHERE indicator = %s AND date = %s",
-        (content_key, today_str),
-    )
-    # We store briefing content as a long string in a simple cache table
-    # Since macro_data.value is DECIMAL, we use a separate approach:
-    # Store in macro_data with a text-friendly indicator name, value=1 as marker
-    # and read from a file-based or Redis cache. For simplicity, regenerate if missing.
 
     # Collect data
     indicators = MORNING_INDICATORS if session == 'morning' else EVENING_INDICATORS
     snapshot = _collect_data_snapshot(indicators)
+    dashboard_snapshot = _collect_dashboard_snapshot()
 
     if session == 'morning':
-        prompt = MORNING_PROMPT.format(date=today_str, data_snapshot=snapshot)
+        prompt = MORNING_PROMPT.format(date=today_str, data_snapshot=snapshot, dashboard_snapshot=dashboard_snapshot)
     else:
-        prompt = EVENING_PROMPT.format(date=today_str, data_snapshot=snapshot)
+        prompt = EVENING_PROMPT.format(date=today_str, data_snapshot=snapshot, dashboard_snapshot=dashboard_snapshot)
 
     # Call LLM
     llm = get_llm_client()
