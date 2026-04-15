@@ -40,6 +40,10 @@ class SentimentStorage:
         Returns:
             是否成功
         """
+        if result.vix is None:
+            logger.warning('save_fear_index: vix is None, skipping save to avoid NOT NULL violation')
+            return False
+
         try:
             sql = """
             INSERT INTO trade_fear_index (
