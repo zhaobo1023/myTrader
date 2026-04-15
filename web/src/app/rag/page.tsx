@@ -178,6 +178,12 @@ export default function RAGPage() {
   const [kbFilterTag, setKbFilterTag] = useState<string | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
 
+  // KB search state
+  const [kbQuery, setKbQuery] = useState('');
+  const [kbSearching, setKbSearching] = useState(false);
+  const [kbAnswer, setKbAnswer] = useState('');
+  const [kbSources, setKbSources] = useState<any[]>([]);
+
   async function loadKbDocuments() {
     setKbLoading(true);
     try {
@@ -195,6 +201,27 @@ export default function RAGPage() {
   useEffect(() => {
     if (tab === 'knowledge') loadKbDocuments();
   }, [tab, kbFilterTag]);
+
+  async function handleKbSearch() {
+    if (!kbQuery.trim() || kbSearching) return;
+    setKbSearching(true);
+    setKbAnswer('');
+    setKbSources([]);
+    try {
+      const res = await fetch(`${API_BASE}/api/rag/query/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: kbQuery, collection: 'research', top_k: 5 }),
+      });
+      const data = await res.json();
+      setKbAnswer(data.answer || '');
+      setKbSources(data.sources || []);
+    } catch {
+      setKbAnswer('[ERROR] Search failed');
+    } finally {
+      setKbSearching(false);
+    }
+  }
 
   // Generate form state
   const [selectedStock, setSelectedStock] = useState<StockSearchItem | null>(null);
@@ -545,6 +572,82 @@ export default function RAGPage() {
       {/* ------------------------------------------------------------------ */}
       {tab === 'knowledge' && (
         <div>
+          {/* Search & verify section */}
+          <div style={{
+            background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+            borderRadius: '10px', padding: '16px 20px', marginBottom: '16px',
+          }}>
+            <div style={{ fontSize: '12px', fontWeight: 510, color: 'var(--text-muted)', marginBottom: '10px' }}>
+              Search Knowledge Base
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input
+                value={kbQuery}
+                onChange={(e) => setKbQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleKbSearch(); }}
+                placeholder="Ask a question to verify retrieval from uploaded documents..."
+                style={{
+                  flex: 1, padding: '8px 12px',
+                  background: 'var(--bg-input)', border: '1px solid var(--border-subtle)',
+                  borderRadius: '6px', fontSize: '13px', color: 'var(--text-primary)', outline: 'none',
+                }}
+              />
+              <button
+                onClick={handleKbSearch}
+                disabled={kbSearching || !kbQuery.trim()}
+                style={{
+                  padding: '8px 16px', fontSize: '13px', fontWeight: 510,
+                  background: kbSearching || !kbQuery.trim() ? 'var(--bg-elevated)' : 'var(--accent-bg)',
+                  color: kbSearching || !kbQuery.trim() ? 'var(--text-muted)' : '#fff',
+                  border: 'none', borderRadius: '6px', cursor: kbSearching ? 'wait' : 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {kbSearching ? 'Searching...' : 'Search'}
+              </button>
+            </div>
+
+            {/* Search results */}
+            {(kbAnswer || kbSources.length > 0) && (
+              <div style={{ marginTop: '14px' }}>
+                {/* Answer */}
+                {kbAnswer && (
+                  <div style={{
+                    fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.8,
+                    padding: '12px 14px', background: 'var(--bg-elevated)', borderRadius: '6px',
+                    marginBottom: kbSources.length > 0 ? '12px' : '0',
+                  }}>
+                    {kbAnswer}
+                  </div>
+                )}
+                {/* Sources */}
+                {kbSources.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: '11px', fontWeight: 510, color: 'var(--text-muted)', marginBottom: '6px' }}>
+                      Sources ({kbSources.length})
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {kbSources.map((src: any, i: number) => (
+                        <div key={i} style={{
+                          padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: '6px',
+                          borderLeft: '3px solid var(--accent)',
+                        }}>
+                          <div style={{ fontSize: '11px', color: 'var(--accent)', fontWeight: 510, marginBottom: '4px' }}>
+                            {src.source || `Source ${i + 1}`}
+                            {src.metadata?.title && <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: '8px' }}>{src.metadata.title}</span>}
+                          </div>
+                          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                            {src.text}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Top bar: upload button + tag filter */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
