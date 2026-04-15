@@ -36,13 +36,11 @@ async def list_watchlist(
 @router.post('', response_model=WatchlistItem, status_code=status.HTTP_201_CREATED)
 async def add_to_watchlist(
     req: WatchlistAddRequest,
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Add stock to watchlist"""
+    """Add stock to watchlist (no auth required, shared watchlist)"""
     existing = await db.execute(
         select(UserWatchlist).where(
-            UserWatchlist.user_id == current_user.id,
             UserWatchlist.stock_code == req.stock_code,
         )
     )
@@ -53,7 +51,7 @@ async def add_to_watchlist(
         )
 
     item = UserWatchlist(
-        user_id=current_user.id,
+        user_id=0,
         stock_code=req.stock_code,
         stock_name=req.stock_name,
         note=req.note,
@@ -61,7 +59,7 @@ async def add_to_watchlist(
     db.add(item)
     await db.flush()
     await db.refresh(item)
-    logger.info('[WATCHLIST] user=%s added stock=%s', current_user.id, req.stock_code)
+    logger.info('[WATCHLIST] added stock=%s', req.stock_code)
     return WatchlistItem.model_validate(item)
 
 
