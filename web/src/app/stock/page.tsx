@@ -868,10 +868,25 @@ function NewsTab({ stock }: { stock: StockOption }) {
 // Stock search box
 // ---------------------------------------------------------------------------
 
+async function addToWatchlist(stock: StockOption): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/api/watchlist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stock_code: stock.stock_code, stock_name: stock.stock_name || '' }),
+    });
+    return res.ok || res.status === 409; // 409 = already in watchlist, still ok
+  } catch {
+    return false;
+  }
+}
+
 function StockSearchBox({ onSelect, compact }: { onSelect: (s: StockOption) => void; compact?: boolean }) {
   const [kw, setKw] = useState('');
   const [results, setResults] = useState<StockOption[]>([]);
   const [open, setOpen] = useState(false);
+  const [adding, setAdding] = useState<string | null>(null);   // stock_code being added
+  const [added, setAdded] = useState<Set<string>>(new Set());  // already added this session
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -894,6 +909,15 @@ function StockSearchBox({ onSelect, compact }: { onSelect: (s: StockOption) => v
     return () => document.removeEventListener('mousedown', h);
   }, []);
 
+  const handleAdd = async (e: React.MouseEvent, item: StockOption) => {
+    e.stopPropagation();
+    if (adding || added.has(item.stock_code)) return;
+    setAdding(item.stock_code);
+    const ok = await addToWatchlist(item);
+    setAdding(null);
+    if (ok) setAdded(prev => new Set(prev).add(item.stock_code));
+  };
+
   return (
     <div ref={ref} style={{ position: 'relative', width: compact ? '220px' : '280px' }}>
       <input
@@ -915,22 +939,43 @@ function StockSearchBox({ onSelect, compact }: { onSelect: (s: StockOption) => v
           borderRadius: '6px', boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
           maxHeight: '220px', overflowY: 'auto',
         }}>
-          {results.map((item) => (
-            <div
-              key={item.stock_code}
-              onClick={() => { setKw(`${item.stock_code} ${item.stock_name || ''}`); setOpen(false); onSelect(item); }}
-              style={{
-                padding: '8px 12px', cursor: 'pointer', fontSize: '13px',
-                display: 'flex', justifyContent: 'space-between',
-                borderBottom: '1px solid var(--border-subtle)',
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-nav-hover)'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
-            >
-              <span style={{ color: 'var(--text-primary)' }}>{item.stock_name || item.stock_code}</span>
-              <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{item.stock_code}</span>
-            </div>
-          ))}
+          {results.map((item) => {
+            const isAdded = added.has(item.stock_code);
+            const isAdding = adding === item.stock_code;
+            return (
+              <div
+                key={item.stock_code}
+                onClick={() => { setKw(`${item.stock_code} ${item.stock_name || ''}`); setOpen(false); onSelect(item); }}
+                style={{
+                  padding: '8px 12px', cursor: 'pointer', fontSize: '13px',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  borderBottom: '1px solid var(--border-subtle)',
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-nav-hover)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                  <span style={{ color: 'var(--text-primary)' }}>{item.stock_name || item.stock_code}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{item.stock_code}</span>
+                </div>
+                <button
+                  onClick={(e) => handleAdd(e, item)}
+                  title={isAdded ? '已关注' : '加入关注'}
+                  style={{
+                    marginLeft: '8px', flexShrink: 0,
+                    width: '24px', height: '24px', borderRadius: '50%', border: 'none',
+                    background: isAdded ? 'rgba(39,166,68,0.15)' : 'var(--bg-elevated)',
+                    color: isAdded ? '#27a644' : 'var(--text-muted)',
+                    cursor: isAdded ? 'default' : 'pointer',
+                    fontSize: '14px', lineHeight: '24px', textAlign: 'center',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  {isAdding ? '...' : isAdded ? 'v' : '+'}
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
