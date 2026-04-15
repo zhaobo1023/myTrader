@@ -704,16 +704,16 @@ async def list_analyzed_stocks() -> dict:
     codes = [r['stock_code'] for r in rows]
     placeholders = ','.join(['%s'] * len(codes))
 
-    # Latest market cap per stock
+    # Latest market cap + PE/PB per stock from trade_stock_daily_basic
     cap_sql = f"""
-        SELECT v.stock_code, v.market_cap, v.circ_market_cap
-        FROM trade_stock_valuation_factor v
+        SELECT b.stock_code, b.total_mv, b.circ_mv, b.pe_ttm, b.pb
+        FROM trade_stock_daily_basic b
         INNER JOIN (
-            SELECT stock_code, MAX(calc_date) AS max_date
-            FROM trade_stock_valuation_factor
+            SELECT stock_code, MAX(trade_date) AS max_date
+            FROM trade_stock_daily_basic
             WHERE stock_code IN ({placeholders})
             GROUP BY stock_code
-        ) latest ON v.stock_code = latest.stock_code AND v.calc_date = latest.max_date
+        ) latest ON b.stock_code = latest.stock_code AND b.trade_date = latest.max_date
     """
     cap_rows = list(execute_query(cap_sql, tuple(codes), env='online'))
     cap_map = {r['stock_code']: r for r in cap_rows}
@@ -751,27 +751,33 @@ async def list_analyzed_stocks() -> dict:
     data = []
     for r in rows:
         cap = cap_map.get(r['stock_code'], {})
-        # market_cap in DB is raw yuan — convert to 亿
-        mc_raw = cap.get('market_cap')
-        cmc_raw = cap.get('circ_market_cap')
-        mc  = round(float(mc_raw)  / 1e8, 1) if mc_raw  else None
-        cmc = round(float(cmc_raw) / 1e8, 1) if cmc_raw else None
+        # total_mv / circ_mv are already in 亿
+        mc_raw  = cap.get('total_mv')
+        cmc_raw = cap.get('circ_mv')
+        mc  = round(float(mc_raw),  1) if mc_raw  is not None else None
+        cmc = round(float(cmc_raw), 1) if cmc_raw is not None else None
+        pe_raw = cap.get('pe_ttm')
+        pb_raw = cap.get('pb')
+        pe = round(float(pe_raw), 2) if pe_raw is not None else None
+        pb = round(float(pb_raw), 2) if pb_raw is not None else None
         # ind_map may be keyed by full code or bare code depending on DB schema
         bare = r['stock_code'].split('.')[0] if '.' in r['stock_code'] else r['stock_code']
         ind_row = ind_map.get(r['stock_code']) or ind_map.get(bare) or {}
         data.append({
-            'stock_code':     r['stock_code'],
-            'stock_name':     r['stock_name'],
-            'latest_date':    _fmt_date(r['latest_date']),
-            'score':          int(r['score']) if r['score'] is not None else 0,
-            'score_label':    r['score_label'] or '',
-            'max_severity':   r['max_severity'] or 'NONE',
-            'summary':        r['summary'] or '',
-            'market_cap':     mc,
+            'stock_code':      r['stock_code'],
+            'stock_name':      r['stock_name'],
+            'latest_date':     _fmt_date(r['latest_date']),
+            'score':           int(r['score']) if r['score'] is not None else 0,
+            'score_label':     r['score_label'] or '',
+            'max_severity':    r['max_severity'] or 'NONE',
+            'summary':         r['summary'] or '',
+            'market_cap':      mc,
             'circ_market_cap': cmc,
-            'industry':       ind_row.get('industry', ''),
-            'sw_level1':      ind_row.get('sw_level1', '') or ind_row.get('industry', ''),
-            'sw_level2':      ind_row.get('sw_level2', ''),
+            'pe_ttm':          pe,
+            'pb':              pb,
+            'industry':        ind_row.get('industry', ''),
+            'sw_level1':       ind_row.get('sw_level1', '') or ind_row.get('industry', ''),
+            'sw_level2':       ind_row.get('sw_level2', ''),
         })
 
     return {'data': data}

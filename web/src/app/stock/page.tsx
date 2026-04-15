@@ -24,6 +24,8 @@ interface StockCard {
   summary: string;
   market_cap: number | null;
   circ_market_cap: number | null;
+  pe_ttm: number | null;
+  pb: number | null;
   industry: string;
   sw_level1: string;
   sw_level2: string;
@@ -74,8 +76,10 @@ const TAB_REPORT_TYPE: Record<StockTab, string> = {
 };
 
 type CapFilter = 'all' | 'large' | 'mid' | 'small';
+type StyleFilter = 'all' | 'value' | 'growth' | 'balanced';
 
 const CAP_LABELS: Record<CapFilter, string> = { all: '全部市值', large: '大盘(>=500亿)', mid: '中盘(100-500亿)', small: '小盘(<100亿)' };
+const STYLE_LABELS: Record<StyleFilter, string> = { all: '全部风格', value: '价值(PE<20,PB<2)', growth: '成长(PE>30)', balanced: '均衡' };
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -111,6 +115,15 @@ function capCategory(market_cap: number | null): CapFilter {
   if (market_cap >= 500) return 'large';
   if (market_cap >= 100) return 'mid';
   return 'small';
+}
+
+function styleCategory(pe: number | null, pb: number | null): StyleFilter {
+  if (pe == null && pb == null) return 'all';
+  const isValue   = (pe != null && pe > 0 && pe < 20)  && (pb != null && pb > 0 && pb < 2);
+  const isGrowth  = (pe != null && pe > 30);
+  if (isValue)  return 'value';
+  if (isGrowth) return 'growth';
+  return 'balanced';
 }
 
 function marketLabel(code: string): string {
@@ -879,6 +892,7 @@ function StockCardGrid({ onSelect }: { onSelect: (s: StockOption) => void }) {
   const [selectedL1, setSelectedL1] = useState('');
   const [selectedL2, setSelectedL2] = useState('');
   const [capFilter, setCapFilter] = useState<CapFilter>('all');
+  const [styleFilter, setStyleFilter] = useState<StyleFilter>('all');
 
   useEffect(() => {
     Promise.all([
@@ -928,7 +942,11 @@ function StockCardGrid({ onSelect }: { onSelect: (s: StockOption) => void }) {
     const l1 = c.sw_level1 || c.industry;
     if (selectedL1 && l1 !== selectedL1) return false;
     if (selectedL2 && c.sw_level2 !== selectedL2) return false;
-    if (capFilter !== 'all' && capCategory(c.market_cap) !== capFilter) return false;
+    if (capFilter !== 'all') {
+      if (c.market_cap == null) return false;
+      if (capCategory(c.market_cap) !== capFilter) return false;
+    }
+    if (styleFilter !== 'all' && styleCategory(c.pe_ttm, c.pb) !== styleFilter) return false;
     return true;
   });
 
@@ -953,6 +971,12 @@ function StockCardGrid({ onSelect }: { onSelect: (s: StockOption) => void }) {
             options={Object.entries(CAP_LABELS) as [CapFilter, string][]}
             value={capFilter}
             onChange={setCapFilter}
+          />
+          <FilterPills
+            label="风格"
+            options={Object.entries(STYLE_LABELS) as [StyleFilter, string][]}
+            value={styleFilter}
+            onChange={setStyleFilter}
           />
           <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
             {filtered.length} / {cards.length} 只股票
@@ -1012,9 +1036,19 @@ function StockCardGrid({ onSelect }: { onSelect: (s: StockOption) => void }) {
               </span>
               <span>{card.latest_date}</span>
             </div>
+            {(card.pe_ttm != null || card.pb != null) && (
+              <div style={{ display: 'flex', gap: '10px', marginTop: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                {card.pe_ttm != null && card.pe_ttm > 0 && (
+                  <span>PE <span style={{ color: 'var(--text-secondary)' }}>{card.pe_ttm.toFixed(1)}</span></span>
+                )}
+                {card.pb != null && card.pb > 0 && (
+                  <span>PB <span style={{ color: 'var(--text-secondary)' }}>{card.pb.toFixed(2)}</span></span>
+                )}
+              </div>
+            )}
             {card.summary && (
               <div style={{
-                marginTop: '8px', fontSize: '12px', color: 'var(--text-muted)',
+                marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)',
                 overflow: 'hidden', display: '-webkit-box',
                 WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
               }}>
