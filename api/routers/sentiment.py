@@ -81,6 +81,34 @@ async def get_fear_index():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/fear-index/dimensions")
+async def get_fear_index_dimensions():
+    """
+    Real-time multi-dimensional Fear & Greed index.
+    Calculates 7 dimensions from macro_data, returns composite score + per-dimension detail.
+    """
+    try:
+        service = FearIndexService()
+        result = service.get_fear_index()
+        dimensions = getattr(result, '_dimensions', [])
+        regime_label = getattr(result, '_regime_label', '')
+        return {
+            'score': result.fear_greed_score,
+            'regime': result.market_regime,
+            'regime_label': regime_label,
+            'dimensions': dimensions,
+            'vix': result.vix,
+            'gvz': result.gvz,
+            'us10y': result.us10y,
+            'vix_level': result.vix_level,
+            'us10y_strategy': result.us10y_strategy,
+            'timestamp': result.timestamp.isoformat(),
+        }
+    except Exception as e:
+        logger.error("Failed to calculate fear index dimensions: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/fear-index/history", response_model=FearIndexHistoryResponse)
 async def get_fear_index_history(
     days: int = Query(7, ge=1, le=90, description="获取最近几天的数据")

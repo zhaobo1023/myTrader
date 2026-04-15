@@ -1,18 +1,25 @@
 """
-Fear Index Service
+Fear & Greed Index Service (v2)
 
-恐慌指数服务 - 基于课程代码 market_fear_index.py
-- 获取 VIX/OVX/GVZ/US10Y 数据
-- 计算综合恐慌/贪婪评分
-- 判断市场状态
-- 检测风险传导
+Multi-dimensional composite index inspired by CNN Fear & Greed,
+adapted for A-share + global macro context.
+
+7 dimensions, each scored 0-100 (0=extreme fear, 100=extreme greed):
+  1. Volatility     -- QVIX / VIX level
+  2. Market Momentum -- CSI300 vs 60-day MA
+  3. Breadth        -- advance/decline ratio
+  4. Price Strength  -- limit-up vs limit-down
+  5. Safe Haven     -- US 10Y yield change (rising = fear)
+  6. Capital Flow   -- North-bound net flow
+  7. Valuation      -- CSI300 PE percentile (5-year)
+
+Final score = weighted average of available dimensions.
+Data sourced from macro_data table (no yfinance dependency at runtime).
 """
 
 import logging
 from typing import Optional
-from datetime import datetime
-
-import yfinance as yf
+from datetime import datetime, date, timedelta
 
 from data_analyst.sentiment.config import VIX_THRESHOLDS, US10Y_THRESHOLDS, DATA_SOURCE_CONFIG
 from data_analyst.sentiment.schemas import FearIndexResult
@@ -20,194 +27,251 @@ from data_analyst.sentiment.schemas import FearIndexResult
 logger = logging.getLogger(__name__)
 
 
+def _query_macro(indicator: str, days: int = 30) -> list:
+    """Query recent values from macro_data, newest first."""
+    from config.db import execute_query
+    cutoff = (date.today() - timedelta(days=days + 5)).strftime('%Y-%m-%d')
+    rows = list(execute_query(
+        "SELECT date, value FROM macro_data WHERE indicator = %s AND date >= %s ORDER BY date DESC",
+        (indicator, cutoff),
+    ))
+    return [(r['date'], float(r['value'])) for r in rows if r['value'] is not None]
+
+
+def _latest(indicator: str) -> Optional[float]:
+    pts = _query_macro(indicator, days=5)
+    return pts[0][1] if pts else None
+
+
+def _ma(indicator: str, window: int) -> Optional[float]:
+    pts = _query_macro(indicator, days=window + 10)
+    vals = [v for _, v in pts[:window]]
+    return sum(vals) / len(vals) if len(vals) >= window * 0.8 else None
+
+
+# ---------------------------------------------------------------------------
+# Dimension scorers (each returns 0-100 or None if data missing)
+# ---------------------------------------------------------------------------
+
+def _score_volatility() -> tuple:
+    """QVIX-based volatility dimension. Low vol = greed, high vol = fear."""
+    qvix = _latest('qvix')
+    vix = _latest('vix')
+    val = qvix or vix
+    if val is None:
+        return None, {'qvix': qvix, 'vix': vix}
+    # QVIX/VIX typical range: 10-50
+    if val < 13:
+        score = 90  # extreme greed (complacency)
+    elif val < 17:
+        score = 70
+    elif val < 22:
+        score = 50
+    elif val < 30:
+        score = 25
+    else:
+        score = 5   # extreme fear
+    return score, {'qvix': qvix, 'vix': vix, 'used': val}
+
+
+def _score_momentum() -> tuple:
+    """CSI300 price vs 60-day MA. Above MA = greed, below = fear."""
+    price = _latest('idx_csi300')
+    ma60 = _ma('idx_csi300', 60)
+    if price is None or ma60 is None or ma60 == 0:
+        return None, {'price': price, 'ma60': ma60}
+    pct = (price - ma60) / ma60 * 100  # deviation %
+    # Map: -10% -> 0, 0% -> 50, +10% -> 100
+    score = max(0, min(100, 50 + pct * 5))
+    return int(score), {'price': round(price, 2), 'ma60': round(ma60, 2), 'deviation_pct': round(pct, 2)}
+
+
+def _score_breadth() -> tuple:
+    """Advance/decline ratio. More advancers = greed."""
+    adv = _latest('advance_count')
+    dec = _latest('decline_count')
+    if adv is None or dec is None:
+        return None, {'advance': adv, 'decline': dec}
+    total = adv + dec
+    if total == 0:
+        return 50, {'advance': adv, 'decline': dec}
+    ratio = adv / total
+    # Map: 0.3 -> 10, 0.5 -> 50, 0.7 -> 90
+    score = max(0, min(100, (ratio - 0.3) / 0.4 * 100))
+    return int(score), {'advance': int(adv), 'decline': int(dec), 'ratio': round(ratio, 3)}
+
+
+def _score_price_strength() -> tuple:
+    """Limit-up vs limit-down count. More limit-ups = greed."""
+    up = _latest('limit_up_count')
+    down = _latest('limit_down_count')
+    if up is None or down is None:
+        return None, {'limit_up': up, 'limit_down': down}
+    total = up + down
+    if total == 0:
+        return 50, {'limit_up': int(up), 'limit_down': int(down)}
+    ratio = up / total
+    score = max(0, min(100, ratio * 100))
+    return int(score), {'limit_up': int(up), 'limit_down': int(down), 'ratio': round(ratio, 3)}
+
+
+def _score_safe_haven() -> tuple:
+    """US 10Y yield: rising yield = fear (money leaving risk assets)."""
+    pts = _query_macro('us_10y_bond', days=10)
+    if len(pts) < 2:
+        return None, {}
+    current = pts[0][1]
+    prev_5d = pts[min(4, len(pts) - 1)][1]
+    change = current - prev_5d  # in percentage points
+    # Rising rates (+0.2) = fear, falling (-0.2) = greed
+    # Map: -0.3 -> 90, 0 -> 50, +0.3 -> 10
+    score = max(0, min(100, 50 - change * 130))
+    return int(score), {'current': current, 'change_5d': round(change, 3)}
+
+
+def _score_capital_flow() -> tuple:
+    """North-bound capital flow. Net inflow = greed, outflow = fear."""
+    pts = _query_macro('north_flow', days=10)
+    if not pts:
+        return None, {}
+    # Sum last 5 days
+    vals = [v for _, v in pts[:5]]
+    flow_5d = sum(vals)
+    # Typical range: -200 ~ +200 (亿)
+    score = max(0, min(100, 50 + flow_5d / 4))
+    return int(score), {'flow_5d': round(flow_5d, 2), 'days': len(vals)}
+
+
+def _score_valuation() -> tuple:
+    """CSI300 PE percentile in recent history. High PE = greed, low = fear."""
+    pts = _query_macro('pe_csi300', days=365 * 3)
+    if len(pts) < 20:
+        return None, {}
+    current = pts[0][1]
+    all_vals = sorted([v for _, v in pts])
+    # Percentile rank
+    rank = sum(1 for v in all_vals if v <= current) / len(all_vals) * 100
+    return int(rank), {'pe': current, 'percentile': round(rank, 1), 'sample_size': len(all_vals)}
+
+
+# ---------------------------------------------------------------------------
+# Composite index
+# ---------------------------------------------------------------------------
+
+DIMENSIONS = [
+    ('volatility',      '波动率',     _score_volatility,      0.20),
+    ('momentum',        '市场动量',   _score_momentum,        0.15),
+    ('breadth',         '涨跌广度',   _score_breadth,         0.15),
+    ('price_strength',  '涨跌停强度', _score_price_strength,  0.10),
+    ('safe_haven',      '避险需求',   _score_safe_haven,      0.15),
+    ('capital_flow',    '资金流向',   _score_capital_flow,    0.15),
+    ('valuation',       '估值水位',   _score_valuation,       0.10),
+]
+
+
 class FearIndexService:
-    """恐慌指数服务"""
+    """Multi-dimensional Fear & Greed Index (v2)"""
 
     def __init__(self):
         self.config = DATA_SOURCE_CONFIG['yfinance']
 
-    def _fetch_yf_ticker(self, ticker_symbol: str, name: str) -> Optional[float]:
-        """
-        Fetch latest close price from yfinance with retry.
-        Returns None on failure (not 0.0) to distinguish missing data from actual zero.
-        """
-        for attempt in range(3):
-            try:
-                ticker = yf.Ticker(ticker_symbol)
-                data = ticker.history(period='5d')
-                if not data.empty:
-                    value = float(data['Close'].dropna().iloc[-1])
-                    if value <= 0:
-                        logger.warning(f"Suspicious {name} value: {value} (attempt {attempt + 1})")
-                        if attempt < 2:
-                            continue
-                        return None
-                    return value
-                logger.warning(f"{name} data is empty (attempt {attempt + 1})")
-            except Exception as e:
-                logger.error(f"Failed to fetch {name} (attempt {attempt + 1}): {e}")
-        return None
-
-    def fetch_vix(self) -> Optional[float]:
-        """获取 VIX 恐慌指数，yfinance 失败时用 QVIX 替代"""
-        result = self._fetch_yf_ticker(self.config['vix_ticker'], 'VIX')
-        if result is not None:
-            return result
-        # Fallback: QVIX (50ETF implied volatility, China market proxy)
-        try:
-            import akshare as ak
-            df = ak.index_option_50etf_qvix()
-            if df is not None and not df.empty:
-                qvix = float(df['close'].iloc[-1])
-                logger.info("VIX fallback to QVIX: %.2f", qvix)
-                return qvix
-        except Exception as e:
-            logger.error("QVIX fallback failed: %s", e)
-        return None
-
-    def fetch_ovx(self) -> Optional[float]:
-        """获取 OVX 原油波动率指数，失败返回 None 而非 0.0"""
-        return self._fetch_yf_ticker(self.config['ovx_ticker'], 'OVX')
-
-    def fetch_gvz(self) -> Optional[float]:
-        """获取 GVZ 黄金波动率指数，失败返回 None 而非 0.0"""
-        return self._fetch_yf_ticker(self.config['gvz_ticker'], 'GVZ')
-
-    def fetch_us10y(self) -> Optional[float]:
-        """获取美国10年期国债收益率，yfinance 失败时用 AKShare bond_zh_us_rate 替代"""
-        result = self._fetch_yf_ticker(self.config['us10y_ticker'], 'US10Y')
-        if result is not None:
-            return result
-        # Fallback: AKShare bond_zh_us_rate (works on Aliyun servers)
-        try:
-            import akshare as ak
-            from datetime import date, timedelta
-            start = (date.today() - timedelta(days=30)).strftime('%Y%m%d')
-            df = ak.bond_zh_us_rate(start_date=start)
-            if df is not None and not df.empty:
-                col = '美国国债收益率10年'
-                if col in df.columns:
-                    val = df[col].dropna().iloc[-1]
-                    logger.info("US10Y fallback to AKShare bond_zh_us_rate: %.2f", val)
-                    return float(val)
-        except Exception as e:
-            logger.error("US10Y AKShare fallback failed: %s", e)
-        return None
-
-    def calculate_fear_greed_score(self, vix: Optional[float], us10y: Optional[float]) -> int:
-        """
-        计算综合恐慌/贪婪评分 (0-100)
-        0 = 极度恐慌, 100 = 极度贪婪
-        None 值跳过对应维度的调整
-        """
-        score = 50  # 基准分
-
-        # VIX 维度
-        if vix is not None:
-            if vix < VIX_THRESHOLDS['extreme_calm']:
-                score += 30      # 极度贪婪
-            elif vix < VIX_THRESHOLDS['normal']:
-                score += 15      # 偏贪婪
-            elif vix < VIX_THRESHOLDS['anxiety']:
-                score += 0       # 中性
-            elif vix < VIX_THRESHOLDS['fear']:
-                score -= 15      # 恐慌
-            else:
-                score -= 30      # 极度恐慌
-
-        # 10年期国债维度
-        if us10y is not None:
-            if us10y < US10Y_THRESHOLDS['low']:
-                score += 10      # 宽松利好
-            elif us10y > US10Y_THRESHOLDS['high'] + 0.4:  # > 4.8
-                score -= 10      # 紧缩利空
-
-        return max(0, min(100, score))
-
-    def get_market_regime(self, score: int) -> str:
-        """根据评分判断市场状态"""
-        if score <= 20:
-            return 'extreme_fear'
-        elif score <= 40:
-            return 'fear'
-        elif score <= 60:
-            return 'neutral'
-        elif score <= 80:
-            return 'greed'
-        else:
-            return 'extreme_greed'
-
-    def get_vix_level(self, vix: Optional[float]) -> str:
-        """获取 VIX 级别描述"""
-        if vix is None:
-            return '数据获取失败'
-        if vix < VIX_THRESHOLDS['extreme_calm']:
-            return '极度平静(警惕自满)'
-        elif vix < VIX_THRESHOLDS['normal']:
-            return '正常'
-        elif vix < VIX_THRESHOLDS['anxiety']:
-            return '焦虑'
-        elif vix < VIX_THRESHOLDS['fear']:
-            return '恐慌'
-        else:
-            return '极度恐慌'
-
-    def get_us10y_strategy(self, us10y: Optional[float]) -> str:
-        """获取 US10Y 策略建议"""
-        if us10y is None:
-            return '数据获取失败'
-        if us10y > US10Y_THRESHOLDS['high']:
-            return '利率偏高，看好价值股和防御板块'
-        elif us10y > US10Y_THRESHOLDS['watershed']:
-            return '利率处于分水岭，密切关注方向选择'
-        else:
-            return '宽松预期，资金回流成长股'
-
-    def check_risk_contagion(self, vix: Optional[float], ovx: Optional[float]) -> Optional[str]:
-        """
-        风险传导检测
-        - OVX飙升但VIX滞后 -> 风险集中在能源端
-        - OVX与VIX同步共振向上 -> 地缘风险已触发流动性危机
-        """
-        if vix is None or ovx is None:
-            return None
-        if ovx > 50 and vix > 25:
-            return 'OVX与VIX同步共振向上: 地缘风险已触发流动性危机或全球经济衰退预期，需立即风控'
-        elif ovx > 50 and vix < 20:
-            return 'OVX飙升但VIX滞后: 风险仍集中在能源端，尚未传导至全球宏观信用风险'
-        return None
-
     def get_fear_index(self) -> FearIndexResult:
-        """获取完整恐慌指数"""
-        logger.info("Fetching fear index data...")
+        """Calculate composite fear & greed index from macro_data."""
+        logger.info("Calculating multi-dimensional fear & greed index...")
 
-        # 获取各项指标
-        vix = self.fetch_vix()
-        ovx = self.fetch_ovx()
-        gvz = self.fetch_gvz()
-        us10y = self.fetch_us10y()
+        dimensions = []
+        weighted_sum = 0.0
+        weight_sum = 0.0
 
-        logger.info(f"VIX: {vix}, OVX: {ovx}, GVZ: {gvz}, US10Y: {us10y}")
+        for key, label, scorer, weight in DIMENSIONS:
+            try:
+                score, detail = scorer()
+            except Exception as e:
+                logger.warning("Dimension %s failed: %s", key, e)
+                score, detail = None, {'error': str(e)}
 
-        # 计算评分和状态
-        score = self.calculate_fear_greed_score(vix, us10y)
-        regime = self.get_market_regime(score)
-        vix_level = self.get_vix_level(vix)
-        us10y_strategy = self.get_us10y_strategy(us10y)
-        risk_alert = self.check_risk_contagion(vix, ovx)
+            dimensions.append({
+                'key': key,
+                'label': label,
+                'score': score,
+                'weight': weight,
+                'detail': detail,
+            })
+
+            if score is not None:
+                weighted_sum += score * weight
+                weight_sum += weight
+
+        # Composite score (re-normalize weights for available dimensions)
+        composite = int(weighted_sum / weight_sum) if weight_sum > 0 else 50
+
+        # Determine regime
+        if composite <= 20:
+            regime = 'extreme_fear'
+        elif composite <= 40:
+            regime = 'fear'
+        elif composite <= 60:
+            regime = 'neutral'
+        elif composite <= 80:
+            regime = 'greed'
+        else:
+            regime = 'extreme_greed'
+
+        regime_labels = {
+            'extreme_fear': '极度恐慌',
+            'fear': '恐慌',
+            'neutral': '中性',
+            'greed': '贪婪',
+            'extreme_greed': '极度贪婪',
+        }
+
+        # Extract individual values for backward compatibility
+        vix = _latest('vix')
+        qvix = _latest('qvix')
+        us10y = _latest('us_10y_bond')
+
+        vix_val = vix or qvix
+        vix_level = '数据缺失'
+        if vix_val is not None:
+            if vix_val < 15:
+                vix_level = '极度平静(警惕自满)'
+            elif vix_val < 20:
+                vix_level = '正常'
+            elif vix_val < 25:
+                vix_level = '焦虑'
+            elif vix_val < 35:
+                vix_level = '恐慌'
+            else:
+                vix_level = '极度恐慌'
+
+        us10y_strategy = '数据缺失'
+        if us10y is not None:
+            if us10y > 4.4:
+                us10y_strategy = '利率偏高，看好价值股和防御板块'
+            elif us10y > 4.3:
+                us10y_strategy = '利率处于分水岭，密切关注方向选择'
+            else:
+                us10y_strategy = '宽松预期，资金回流成长股'
 
         result = FearIndexResult(
             vix=vix,
-            ovx=ovx,
-            gvz=gvz,
+            ovx=None,
+            gvz=_latest('gvz'),
             us10y=us10y,
-            fear_greed_score=score,
+            fear_greed_score=composite,
             market_regime=regime,
             vix_level=vix_level,
             us10y_strategy=us10y_strategy,
-            risk_alert=risk_alert,
+            risk_alert=None,
             timestamp=datetime.now(),
         )
 
-        logger.info(f"Fear index calculated: score={score}, regime={regime}")
+        logger.info("Fear & Greed index: %d (%s), %d/%d dimensions available",
+                     composite, regime_labels.get(regime, regime),
+                     sum(1 for d in dimensions if d['score'] is not None), len(dimensions))
+
+        # Attach dimensions detail to result for API exposure
+        result._dimensions = dimensions  # type: ignore
+        result._regime_label = regime_labels.get(regime, regime)  # type: ignore
+
         return result

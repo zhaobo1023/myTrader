@@ -93,9 +93,10 @@ function BriefingCard() {
 
   const { data: briefing, isLoading: briefingLoading, error: briefingError, refetch } = useQuery({
     queryKey: ['globalBriefing', session],
-    queryFn: () => apiClient.get('/api/market/global-briefing', { params: { session } }).then((r) => r.data),
+    queryFn: () => apiClient.get('/api/market/global-briefing', { params: { session }, timeout: 60000 }).then((r) => r.data),
     staleTime: 10 * 60 * 1000,
     retry: 1,
+    enabled: false,  // only fetch on button click
   });
 
   return (
