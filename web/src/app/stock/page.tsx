@@ -676,18 +676,190 @@ function TechnicalTab({ stock }: { stock: StockOption }) {
 // News tab (placeholder)
 // ---------------------------------------------------------------------------
 
-function NewsTab({ stock }: { stock: StockOption }) {
+interface NewsItemData {
+  title: string;
+  content: string;
+  source: string;
+  url: string;
+  publish_time: string | null;
+  event_type: string | null;
+  event_category: string | null;
+  event_signal: string | null;
+  matched_keywords: string[];
+}
+
+interface NewsAnalysis {
+  news_count: number;
+  sentiment_score: number;
+  bullish_count: number;
+  bearish_count: number;
+  neutral_count: number;
+  summary: string;
+  key_events: { title: string; type: string; impact: string }[];
+  cached: boolean;
+}
+
+function eventBadge(type: string | null) {
+  if (!type) return null;
+  const styles: Record<string, { bg: string; color: string; label: string }> = {
+    bullish: { bg: 'rgba(39,166,68,0.12)', color: '#27a644', label: '利好' },
+    bearish: { bg: 'rgba(229,83,75,0.12)', color: '#e5534b', label: '利空' },
+    policy:  { bg: 'rgba(94,106,210,0.12)', color: '#5e6ad2', label: '政策' },
+  };
+  const s = styles[type];
+  if (!s) return null;
   return (
-    <div style={{
-      background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
-      borderRadius: '8px', padding: '40px 24px', textAlign: 'center',
+    <span style={{
+      fontSize: '10px', padding: '1px 6px', borderRadius: '3px',
+      background: s.bg, color: s.color, fontWeight: 510, whiteSpace: 'nowrap',
     }}>
-      <div style={{ fontSize: '14px', fontWeight: 510, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-        {stock.stock_name} 个股动态
+      {s.label}
+    </span>
+  );
+}
+
+function sentimentBar(score: number) {
+  const color = score >= 60 ? '#27a644' : score <= 40 ? '#e5534b' : '#c69026';
+  const label = score >= 60 ? '偏多' : score <= 40 ? '偏空' : '中性';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div style={{
+        width: '80px', height: '6px', borderRadius: '3px',
+        background: 'var(--border-subtle)', overflow: 'hidden',
+      }}>
+        <div style={{ width: `${score}%`, height: '100%', borderRadius: '3px', background: color }} />
       </div>
-      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-        公司公告、重大事件抓取即将上线
-      </div>
+      <span style={{ fontSize: '12px', fontWeight: 510, color }}>{score} {label}</span>
+    </div>
+  );
+}
+
+function NewsTab({ stock }: { stock: StockOption }) {
+  const [news, setNews] = useState<NewsItemData[]>([]);
+  const [analysis, setAnalysis] = useState<NewsAnalysis | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [analyzing, setAnalyzing] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setAnalysis(null);
+    const code = stock.stock_code;
+    Promise.all([
+      fetch(`${API_BASE}/api/analysis/stock-news?code=${code}&days=7`).then(r => r.json()),
+      fetch(`${API_BASE}/api/analysis/stock-news/analysis?code=${code}&name=${encodeURIComponent(stock.stock_name || '')}`).then(r => r.json()),
+    ])
+      .then(([newsData, analysisData]) => {
+        setNews(newsData.items || []);
+        setAnalysis(analysisData);
+      })
+      .catch(() => { setNews([]); setAnalysis(null); })
+      .finally(() => setLoading(false));
+  }, [stock.stock_code, stock.stock_name]);
+
+  const handleReanalyze = () => {
+    setAnalyzing(true);
+    fetch(`${API_BASE}/api/analysis/stock-news/analysis?code=${stock.stock_code}&name=${encodeURIComponent(stock.stock_name || '')}`)
+      .then(r => r.json())
+      .then(d => setAnalysis(d))
+      .finally(() => setAnalyzing(false));
+  };
+
+  if (loading) {
+    return <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>拉取新闻中...</div>;
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {/* LLM Analysis Card */}
+      {analysis && (
+        <div style={{
+          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+          borderRadius: '8px', padding: '16px 20px',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontSize: '14px', fontWeight: 590, color: 'var(--text-primary)' }}>AI 舆情分析</span>
+              {sentimentBar(analysis.sentiment_score)}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                {analysis.news_count} 条新闻 | 利好{analysis.bullish_count} 利空{analysis.bearish_count} 中性{analysis.neutral_count}
+              </span>
+              <button
+                onClick={handleReanalyze}
+                disabled={analyzing}
+                style={{
+                  fontSize: '11px', padding: '2px 8px', borderRadius: '4px',
+                  border: '1px solid var(--border-subtle)', background: 'var(--bg-card)',
+                  color: 'var(--text-muted)', cursor: analyzing ? 'not-allowed' : 'pointer',
+                  opacity: analyzing ? 0.5 : 1,
+                }}
+              >
+                {analyzing ? '...' : '重新分析'}
+              </button>
+            </div>
+          </div>
+          {analysis.summary && (
+            <div style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.7, marginBottom: '12px' }}>
+              {analysis.summary}
+            </div>
+          )}
+          {analysis.key_events && analysis.key_events.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              {analysis.key_events.map((ev, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
+                  {eventBadge(ev.type)}
+                  <span style={{ color: 'var(--text-secondary)' }}>{ev.title}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{ev.impact}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* News List */}
+      {news.length === 0 ? (
+        <div style={{
+          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+          borderRadius: '8px', padding: '40px 24px', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>近7天无相关新闻</div>
+        </div>
+      ) : (
+        <div style={{
+          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+          borderRadius: '8px', overflow: 'hidden',
+        }}>
+          {news.map((item, i) => (
+            <div
+              key={i}
+              style={{
+                padding: '10px 16px',
+                borderBottom: i < news.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                cursor: item.url ? 'pointer' : 'default',
+              }}
+              onClick={() => { if (item.url) window.open(item.url, '_blank'); }}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', marginBottom: '4px' }}>
+                {eventBadge(item.event_type)}
+                <span style={{ fontSize: '13px', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                  {item.title}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                {item.publish_time && <span>{item.publish_time}</span>}
+                {item.source && <span>{item.source}</span>}
+                {item.matched_keywords.length > 0 && (
+                  <span style={{ color: 'var(--accent)', opacity: 0.7 }}>
+                    {item.matched_keywords.join(' ')}
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

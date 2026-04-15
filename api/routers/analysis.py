@@ -863,3 +863,27 @@ async def stock_valuation_history(
     返回历史 PE-TTM / PB 时序及当前估值在历史中的分位位置。
     """
     return await analysis_service.get_stock_valuation_history(code, years=years)
+
+
+# ---------------------------------------------------------------------------
+# Stock News & Dynamics
+# ---------------------------------------------------------------------------
+
+@router.get('/stock-news')
+async def get_stock_news(
+    code: str = Query(..., description="Stock code, e.g. 601872.SH or 601872"),
+    days: int = Query(7, ge=1, le=30, description="Lookback days"),
+):
+    """Get recent news for a stock with event detection tags."""
+    from api.services.stock_news_service import get_stock_news_list
+    return await get_stock_news_list(code, days=days)
+
+
+@router.get('/stock-news/analysis')
+async def get_stock_news_analysis(
+    code: str = Query(..., description="Stock code"),
+    name: str = Query('', description="Stock name for LLM context"),
+):
+    """Get LLM-generated news sentiment analysis for a stock (cached daily)."""
+    from api.services.stock_news_service import analyze_stock_news
+    return await analyze_stock_news(code, stock_name=name)
