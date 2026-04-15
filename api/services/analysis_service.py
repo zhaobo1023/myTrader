@@ -799,7 +799,8 @@ async def list_industry_tree() -> dict:
     sql = """
         SELECT industry, sw_level1, sw_level2, COUNT(*) as cnt
         FROM trade_stock_basic
-        WHERE industry IS NOT NULL AND industry != ''
+        WHERE (sw_level1 IS NOT NULL AND sw_level1 != '')
+           OR (industry IS NOT NULL AND industry != '')
         GROUP BY industry, sw_level1, sw_level2
     """
     rows = list(execute_query(sql, env='online'))
