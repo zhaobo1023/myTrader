@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import AppShell from '@/components/layout/AppShell';
 import DocumentUploadDialog from './components/DocumentUploadDialog';
@@ -170,7 +170,7 @@ function ReportViewer({ markdown }: { markdown: string }) {
 // Main Page
 // ---------------------------------------------------------------------------
 
-export default function RAGPage() {
+export function RAGPage() {
   const searchParams = useSearchParams();
   const initialTab = searchParams.get('tab') === 'knowledge' ? 'knowledge' as const : 'generate' as const;
   const [tab, setTab] = useState<'generate' | 'history' | 'knowledge'>(initialTab);
@@ -726,5 +726,13 @@ export default function RAGPage() {
         onUploaded={loadKbDocuments}
       />
     </AppShell>
+  );
+}
+
+export default function RAGPageWrapper() {
+  return (
+    <Suspense fallback={<div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading...</div>}>
+      <RAGPage />
+    </Suspense>
   );
 }
