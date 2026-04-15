@@ -89,3 +89,11 @@ async def get_latest_date():
     """Get the latest trading date in the database."""
     date = await market_service.get_latest_trade_date()
     return {'latest_date': date or ''}
+
+
+@router.get('/global-assets')
+async def get_global_assets(
+    days: int = Query(default=30, ge=1, le=365, description="Trend data lookback days"),
+):
+    """Get global macro asset overview: latest values, changes, and trend sparklines."""
+    return await market_service.get_global_assets(days)

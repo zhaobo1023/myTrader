@@ -44,6 +44,13 @@ except ImportError:
     HAS_AKSHARE = False
     print("警告: AKShare 未安装，请运行 pip install akshare")
 
+# 尝试导入 yfinance
+try:
+    import yfinance as yf
+    HAS_YFINANCE = True
+except ImportError:
+    HAS_YFINANCE = False
+
 
 # ============================================================
 # 配置
@@ -149,8 +156,23 @@ MACRO_INDICATORS = {
         'source': 'bond_zh_us_rate',
         'params': {},
     },
+    'us_2y_bond': {
+        'name': '美国2Y国债',
+        'source': 'bond_zh_us_rate',
+        'params': {},
+    },
     'us_10y_bond': {
         'name': '美国10Y国债',
+        'source': 'bond_zh_us_rate',
+        'params': {},
+    },
+    'us_30y_bond': {
+        'name': '美国30Y国债',
+        'source': 'bond_zh_us_rate',
+        'params': {},
+    },
+    'us_10y_2y_spread': {
+        'name': '美债10Y-2Y利差',
         'source': 'bond_zh_us_rate',
         'params': {},
     },
@@ -187,6 +209,53 @@ MACRO_INDICATORS = {
     'm2_supply_yoy': {
         'name': 'M2货币供应量同比',
         'source': 'macro_china_money_supply',
+        'params': {},
+    },
+    # --- 全球大类资产 (yfinance) ---
+    'vix': {
+        'name': 'VIX恐慌指数',
+        'source': 'yfinance',
+        'params': {'ticker': '^VIX'},
+    },
+    'gvz': {
+        'name': 'GVZ黄金波动率',
+        'source': 'yfinance',
+        'params': {'ticker': '^GVZ'},
+    },
+    'btc': {
+        'name': '比特币',
+        'source': 'yfinance',
+        'params': {'ticker': 'BTC-USD'},
+    },
+    'dxy': {
+        'name': '美元指数',
+        'source': 'yfinance',
+        'params': {'ticker': 'DX-Y.NYB'},
+    },
+    'brent_oil': {
+        'name': '布伦特原油',
+        'source': 'yfinance',
+        'params': {'ticker': 'BZ=F'},
+    },
+    'spy': {
+        'name': 'SPY(标普500ETF)',
+        'source': 'yfinance',
+        'params': {'ticker': 'SPY'},
+    },
+    'qqq': {
+        'name': 'QQQ(纳指100ETF)',
+        'source': 'yfinance',
+        'params': {'ticker': 'QQQ'},
+    },
+    'dia': {
+        'name': 'DIA(道指ETF)',
+        'source': 'yfinance',
+        'params': {'ticker': 'DIA'},
+    },
+    # --- 汇率 (AKShare) ---
+    'usdcny': {
+        'name': '美元/人民币',
+        'source': 'currency_boc_sina',
         'params': {},
     },
 }
@@ -467,13 +536,13 @@ def fetch_csi300_valuation(start_date: str) -> pd.DataFrame:
 
 def fetch_bond_yields(start_date: str) -> pd.DataFrame:
     """
-    拉取中国和美国 10 年期国债收益率
+    拉取中国和美国国债收益率 (2Y/10Y/30Y + 10Y-2Y利差)
 
     Args:
         start_date: 起始日期，YYYY-MM-DD 或 YYYYMMDD 格式
 
     Returns:
-        DataFrame with columns: [date, cn_10y, us_10y]
+        DataFrame with columns: [date, cn_10y, us_2y, us_10y, us_30y, us_10y_2y_spread]
     """
     if not HAS_AKSHARE:
         raise RuntimeError("AKShare 未安装")
@@ -486,18 +555,26 @@ def fetch_bond_yields(start_date: str) -> pd.DataFrame:
 
     df['日期'] = pd.to_datetime(df['日期'])
 
-    cn_col = '中国国债收益率10年'
-    us_col = '美国国债收益率10年'
+    col_map = {
+        '日期': 'date',
+        '中国国债收益率10年': 'cn_10y',
+        '美国国债收益率2年': 'us_2y',
+        '美国国债收益率10年': 'us_10y',
+        '美国国债收益率30年': 'us_30y',
+        '美国国债收益率10年-2年': 'us_10y_2y_spread',
+    }
 
-    df = df[['日期', cn_col, us_col]].rename(
-        columns={'日期': 'date', cn_col: 'cn_10y', us_col: 'us_10y'}
-    )
+    # Only keep columns that exist
+    available = {k: v for k, v in col_map.items() if k in df.columns}
+    df = df[list(available.keys())].rename(columns=available)
 
-    df['cn_10y'] = pd.to_numeric(df['cn_10y'], errors='coerce')
-    df['us_10y'] = pd.to_numeric(df['us_10y'], errors='coerce')
+    for col in df.columns:
+        if col != 'date':
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # 去掉两列均为 NaN 的行
-    df = df.dropna(subset=['cn_10y', 'us_10y'], how='all')
+    # Drop rows where all yield columns are NaN
+    yield_cols = [c for c in df.columns if c != 'date']
+    df = df.dropna(subset=yield_cols, how='all')
 
     return df.reset_index(drop=True)
 
@@ -713,6 +790,73 @@ def fetch_pmi_mfg(start_date: str) -> pd.DataFrame:
 
 
 # ============================================================
+# yfinance 通用拉取函数
+# ============================================================
+
+def _make_yfinance_fetcher(ticker: str):
+    """工厂函数: 返回一个 yfinance 拉取函数"""
+    def fetcher(start_date: str) -> pd.DataFrame:
+        if not HAS_YFINANCE:
+            raise RuntimeError("yfinance 未安装，请运行 pip install yfinance")
+        start_dt = pd.to_datetime(start_date.replace('-', ''), format='%Y%m%d')
+        t = yf.Ticker(ticker)
+        df = t.history(start=start_dt.strftime('%Y-%m-%d'), auto_adjust=True)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.reset_index()
+        df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
+        df = df[['Date', 'Close']].rename(columns={'Date': 'date', 'Close': 'value'})
+        df = df.dropna(subset=['value'])
+        return df
+    fetcher.__name__ = 'fetch_yf_{}'.format(ticker.replace('^', '').replace('=', '_'))
+    return fetcher
+
+
+def fetch_usdcny(start_date: str) -> pd.DataFrame:
+    """
+    拉取美元/人民币 PBOC中间价 (AKShare currency_boc_sina)
+    """
+    if not HAS_AKSHARE:
+        raise RuntimeError("AKShare 未安装")
+
+    start_date_no_dash = start_date.replace('-', '')
+    end_date_no_dash = date.today().strftime('%Y%m%d')
+
+    try:
+        df = ak.currency_boc_sina(
+            symbol='美元',
+            start_date=start_date_no_dash,
+            end_date=end_date_no_dash,
+        )
+    except Exception:
+        # Fallback to yfinance
+        if HAS_YFINANCE:
+            return _make_yfinance_fetcher('CNY=X')(start_date)
+        return pd.DataFrame()
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # BOC data columns: 日期, 中行汇买价, 中行钞买价, 中行汇卖价, 中行钞卖价, 央行中间价
+    date_col = '日期' if '日期' in df.columns else df.columns[0]
+    # Use '央行中间价' (PBOC midpoint) if available
+    value_col = None
+    for candidate in ['央行中间价', '中行汇卖价', '中行钞卖价']:
+        if candidate in df.columns:
+            value_col = candidate
+            break
+    if value_col is None:
+        return pd.DataFrame()
+
+    df[date_col] = pd.to_datetime(df[date_col])
+    df = df[[date_col, value_col]].rename(columns={date_col: 'date', value_col: 'value'})
+    df['value'] = pd.to_numeric(df['value'], errors='coerce') / 100  # BOC gives 6xx, need 6.xx
+    df = df.dropna(subset=['value'])
+    df = df.sort_values('date')
+    return df.reset_index(drop=True)
+
+
+# ============================================================
 # 数据拉取映射
 # ============================================================
 FETCH_FUNCTIONS = {
@@ -741,6 +885,22 @@ FETCH_FUNCTIONS['m2_yoy'] = fetch_m2_yoy
 FETCH_FUNCTIONS['pmi_mfg'] = fetch_pmi_mfg
 FETCH_FUNCTIONS['cpi_yoy'] = fetch_cpi_yoy
 FETCH_FUNCTIONS['ppi_yoy'] = fetch_ppi_yoy
+
+# 注册 yfinance 全球资产拉取函数
+for _yf_key, _yf_ticker in [
+    ('vix', '^VIX'),
+    ('gvz', '^GVZ'),
+    ('btc', 'BTC-USD'),
+    ('dxy', 'DX-Y.NYB'),
+    ('brent_oil', 'BZ=F'),
+    ('spy', 'SPY'),
+    ('qqq', 'QQQ'),
+    ('dia', 'DIA'),
+]:
+    FETCH_FUNCTIONS[_yf_key] = _make_yfinance_fetcher(_yf_ticker)
+
+# 注册 USD/CNY 拉取函数
+FETCH_FUNCTIONS['usdcny'] = fetch_usdcny
 
 
 # ============================================================
@@ -889,22 +1049,28 @@ def fetch_csi300_valuation_indicators() -> dict:
 
 def fetch_bond_yield_indicators() -> dict:
     """
-    联合拉取中国和美国 10Y 国债收益率（一次 AKShare 调用产生两个指标）
+    联合拉取中国和美国国债收益率 (cn_10y, us_2y, us_10y, us_30y, 10y-2y spread)
 
     Returns:
         结果字典 {indicator: {'success': bool, 'count': int, 'error': str or None}}
     """
     results = {}
-    cn_key = 'cn_10y_bond'
-    us_key = 'us_10y_bond'
+    bond_keys = ['cn_10y_bond', 'us_2y_bond', 'us_10y_bond', 'us_30y_bond', 'us_10y_2y_spread']
+    col_to_key = {
+        'cn_10y': 'cn_10y_bond',
+        'us_2y': 'us_2y_bond',
+        'us_10y': 'us_10y_bond',
+        'us_30y': 'us_30y_bond',
+        'us_10y_2y_spread': 'us_10y_2y_spread',
+    }
 
     try:
-        latest_date = get_latest_date(cn_key)
+        latest_date = get_latest_date('cn_10y_bond')
         if latest_date:
             today = date.today().strftime('%Y-%m-%d')
             if latest_date >= today:
-                results[cn_key] = {'success': True, 'count': 0, 'error': '已是最新'}
-                results[us_key] = {'success': True, 'count': 0, 'error': '已是最新'}
+                for k in bond_keys:
+                    results[k] = {'success': True, 'count': 0, 'error': '已是最新'}
                 return results
             start_dt = pd.to_datetime(latest_date) + timedelta(days=1)
             start_date = start_dt.strftime('%Y%m%d')
@@ -914,19 +1080,17 @@ def fetch_bond_yield_indicators() -> dict:
         df = fetch_bond_yields(start_date)
 
         if df.empty:
-            results[cn_key] = {'success': True, 'count': 0, 'error': '无新数据'}
-            results[us_key] = {'success': True, 'count': 0, 'error': '无新数据'}
+            for k in bond_keys:
+                results[k] = {'success': True, 'count': 0, 'error': '无新数据'}
             return results
 
-        # 保存中国国债
-        cn_df = df[['date', 'cn_10y']].rename(columns={'cn_10y': 'value'}).dropna(subset=['value'])
-        cn_count = save_data(cn_key, cn_df)
-        results[cn_key] = {'success': True, 'count': cn_count, 'error': None}
-
-        # 保存美国国债
-        us_df = df[['date', 'us_10y']].rename(columns={'us_10y': 'value'}).dropna(subset=['value'])
-        us_count = save_data(us_key, us_df)
-        results[us_key] = {'success': True, 'count': us_count, 'error': None}
+        for col, key in col_to_key.items():
+            if col in df.columns:
+                sub = df[['date', col]].rename(columns={col: 'value'}).dropna(subset=['value'])
+                cnt = save_data(key, sub)
+                results[key] = {'success': True, 'count': cnt, 'error': None}
+            else:
+                results[key] = {'success': True, 'count': 0, 'error': '列不存在'}
 
     except Exception as e:
         err = str(e)
@@ -949,7 +1113,8 @@ def fetch_all_indicators() -> dict:
     results = {}
 
     # 跳过由联合函数处理的指标
-    skip_set = {'pe_csi300', 'div_yield_csi300', 'cn_10y_bond', 'us_10y_bond',
+    skip_set = {'pe_csi300', 'div_yield_csi300',
+                'cn_10y_bond', 'us_2y_bond', 'us_10y_bond', 'us_30y_bond', 'us_10y_2y_spread',
                 'm0_yoy', 'm1_yoy', 'm2_supply_yoy'}
 
     for indicator in FETCH_FUNCTIONS.keys():

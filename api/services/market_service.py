@@ -275,3 +275,112 @@ def _format_date(date_str: str) -> str:
     if len(date_str) == 8:
         return f'{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}'
     return date_str
+
+
+# ---------------------------------------------------------------------------
+# Global Assets
+# ---------------------------------------------------------------------------
+
+# Asset configuration: indicator_key -> display metadata
+GLOBAL_ASSET_CONFIG = [
+    # group, key, name, unit, decimals
+    ('commodity', 'gold',       '黄金',           'USD', 2),
+    ('commodity', 'wti_oil',    'WTI原油',        'USD', 2),
+    ('commodity', 'brent_oil',  '布伦特原油',     'USD', 2),
+    ('rate',      'us_2y_bond', '美债2Y',         '%',   3),
+    ('rate',      'us_10y_bond','美债10Y',         '%',   3),
+    ('rate',      'us_30y_bond','美债30Y',         '%',   3),
+    ('rate',      'us_10y_2y_spread', '10Y-2Y利差', 'bp', 3),
+    ('fx',        'dxy',        '美元指数',       '',    2),
+    ('fx',        'usdcny',     '美元/人民币',    '',    4),
+    ('volatility','vix',        'VIX恐慌指数',    '',    2),
+    ('volatility','gvz',        'GVZ黄金波动率',  '',    2),
+    ('crypto',    'btc',        '比特币',         'USD', 0),
+    ('us_equity', 'spy',        'SPY',            'USD', 2),
+    ('us_equity', 'qqq',        'QQQ',            'USD', 2),
+    ('us_equity', 'dia',        'DIA',            'USD', 2),
+]
+
+
+async def get_global_assets(days: int = 30) -> dict:
+    """
+    Return global asset overview: latest value, daily change, and trend sparkline.
+    Reads from macro_data table (populated by macro_fetcher).
+    """
+    from datetime import date as _date, timedelta
+    from decimal import Decimal
+
+    keys = [cfg[1] for cfg in GLOBAL_ASSET_CONFIG]
+    placeholders = ','.join(['%s'] * len(keys))
+
+    cutoff = (_date.today() - timedelta(days=days + 10)).strftime('%Y-%m-%d')
+
+    sql = f"""
+        SELECT indicator, date, value
+        FROM macro_data
+        WHERE indicator IN ({placeholders})
+          AND date >= %s
+        ORDER BY indicator, date
+    """
+    rows = list(execute_query(sql, tuple(keys) + (cutoff,)))
+
+    # Group by indicator
+    grouped: dict = {}
+    for r in rows:
+        key = r['indicator']
+        if key not in grouped:
+            grouped[key] = []
+        v = r['value']
+        grouped[key].append({
+            'date': r['date'].strftime('%Y-%m-%d') if hasattr(r['date'], 'strftime') else str(r['date']),
+            'value': float(v) if v is not None else None,
+        })
+
+    assets = []
+    for group, key, name, unit, decimals in GLOBAL_ASSET_CONFIG:
+        points = grouped.get(key, [])
+        if not points:
+            assets.append({
+                'key': key, 'name': name, 'group': group, 'unit': unit,
+                'value': None, 'change': None, 'change_pct': None,
+                'date': None, 'trend': [],
+            })
+            continue
+
+        latest = points[-1]
+        prev = points[-2] if len(points) >= 2 else None
+        change = None
+        change_pct = None
+        if prev and prev['value'] and latest['value']:
+            change = round(latest['value'] - prev['value'], decimals)
+            if prev['value'] != 0:
+                change_pct = round((latest['value'] - prev['value']) / abs(prev['value']) * 100, 2)
+
+        # Sparkline: take last N days of points
+        trend = [p['value'] for p in points[-days:] if p['value'] is not None]
+
+        assets.append({
+            'key': key,
+            'name': name,
+            'group': group,
+            'unit': unit,
+            'value': round(latest['value'], decimals) if latest['value'] is not None else None,
+            'change': change,
+            'change_pct': change_pct,
+            'date': latest['date'],
+            'trend': trend,
+        })
+
+    # Group assets
+    groups = {}
+    GROUP_NAMES = {
+        'commodity': '商品', 'rate': '利率', 'fx': '汇率',
+        'volatility': '波动率', 'crypto': '加密货币', 'us_equity': '美股ETF',
+    }
+    for a in assets:
+        g = a['group']
+        if g not in groups:
+            groups[g] = {'name': GROUP_NAMES.get(g, g), 'items': []}
+        groups[g]['items'].append(a)
+
+    return {'groups': list(groups.values()), 'updated': _date.today().strftime('%Y-%m-%d')}
