@@ -19,7 +19,6 @@ from investment_rag.store.chroma_client import ChromaClient
 from investment_rag.retrieval.bm25_retriever import BM25Retriever
 from investment_rag.ingest.parsers.pdf_parser import PDFParser, Chunk
 from investment_rag.ingest.parsers.md_parser import MarkdownParser
-from investment_rag.ingest.parsers.docx_parser import DocxParser
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +36,11 @@ def _get_parser(file_type: str, config: RAGConfig):
     """Return the appropriate parser for a file type."""
     if file_type == 'pdf':
         return PDFParser(chunk_size=config.chunk_size, chunk_overlap=config.chunk_overlap)
-    elif file_type in ('md', 'markdown'):
+    elif file_type in ('md', 'markdown', 'txt'):
         return MarkdownParser(chunk_size=config.chunk_size, chunk_overlap=config.chunk_overlap)
     elif file_type in ('docx', 'doc'):
+        from investment_rag.ingest.parsers.docx_parser import DocxParser
         return DocxParser(chunk_size=config.chunk_size, chunk_overlap=config.chunk_overlap)
-    elif file_type == 'txt':
-        return MarkdownParser(chunk_size=config.chunk_size, chunk_overlap=config.chunk_overlap)
     return None
 
 
