@@ -9,13 +9,17 @@ import FearIndexPanel from './components/FearIndexPanel';
 import NewsSentimentPanel from './components/NewsSentimentPanel';
 import EventSignalPanel from './components/EventSignalPanel';
 import PolymarketPanel from './components/PolymarketPanel';
+import GlobalAssetsPanel from './components/GlobalAssetsPanel';
+import DataHealthPanel from './components/DataHealthPanel';
 
-type MainTab = 'dashboard' | 'sentiment';
+type MainTab = 'dashboard' | 'global' | 'sentiment' | 'data-health';
 type SentimentTab = 'fear' | 'news' | 'events' | 'polymarket';
 
 const MAIN_TABS: { key: MainTab; label: string }[] = [
-  { key: 'dashboard',  label: '大盘总览' },
-  { key: 'sentiment',  label: '舆情详情' },
+  { key: 'dashboard',   label: '大盘总览' },
+  { key: 'global',      label: '全球资产' },
+  { key: 'sentiment',   label: '舆情详情' },
+  { key: 'data-health', label: '数据完备度' },
 ];
 
 const SENTIMENT_TABS: { key: SentimentTab; label: string }[] = [
@@ -45,13 +49,8 @@ export default function SentimentPage() {
       {/* Page header */}
       <div style={{ marginBottom: '20px' }}>
         <h1 style={{ fontSize: '20px', fontWeight: 590, color: 'var(--text-primary)', letterSpacing: '-0.3px', marginBottom: '4px' }}>
-          {mainTab === 'dashboard' ? '大盘总览' : '舆情监控'}
+          大盘
         </h1>
-        <p style={{ fontSize: '13px', color: 'var(--text-tertiary)' }}>
-          {mainTab === 'dashboard'
-            ? '一屏掌握市场全貌: 温度、趋势、情绪、风格、股债、宏观'
-            : '实时监控市场情绪、新闻事件和预测市场'}
-        </p>
       </div>
 
       {/* Main tab switcher */}
@@ -92,6 +91,8 @@ export default function SentimentPage() {
 
       {/* Content */}
       {mainTab === 'dashboard' && <DashboardView />}
+      {mainTab === 'global' && <GlobalAssetsPanel />}
+      {mainTab === 'data-health' && <DataHealthPanel />}
 
       {mainTab === 'sentiment' && (
         <>
