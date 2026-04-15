@@ -71,12 +71,71 @@ def ensure_tables():
 # News fetching + event detection
 # ---------------------------------------------------------------------------
 
+def _fetch_news_from_eastmoney(bare_code: str) -> list[dict]:
+    """
+    Directly call East Money stock news API (same source as ak.stock_news_em
+    but avoids the pyarrow regex bug in current akshare).
+    Returns list of dicts with keys: title, content, source, url, publish_time.
+    """
+    import requests
+
+    url = 'https://search-api-web.eastmoney.com/search/jsonp'
+    results = []
+
+    for page in range(1, 4):  # 3 pages, ~30 articles
+        params = {
+            'cb': 'jQuery_callback',
+            'param': json.dumps({
+                'uid': '',
+                'keyword': bare_code,
+                'type': ['cmsArticleWebOld'],
+                'client': 'web',
+                'clientType': 'web',
+                'clientVersion': 'curr',
+                'param': {
+                    'cmsArticleWebOld': {
+                        'searchScope': 'default',
+                        'sort': 'default',
+                        'pageIndex': page,
+                        'pageSize': 10,
+                        'preTag': '',
+                        'postTag': '',
+                    }
+                }
+            }),
+        }
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            text = resp.text
+            # Strip JSONP wrapper: jQuery_callback({...})
+            start = text.index('(') + 1
+            end = text.rindex(')')
+            data = json.loads(text[start:end])
+
+            articles = (data.get('result', {})
+                           .get('cmsArticleWebOld', {})
+                           .get('list', []))
+
+            for art in articles:
+                results.append({
+                    'title': art.get('title', '').replace('<em>', '').replace('</em>', ''),
+                    'content': art.get('content', '').replace('<em>', '').replace('</em>', ''),
+                    'source': art.get('mediaName', ''),
+                    'url': art.get('url', ''),
+                    'publish_time': art.get('date', ''),
+                })
+        except Exception as e:
+            logger.warning('East Money news fetch page %d failed: %s', page, e)
+            break
+
+    return results
+
+
 def fetch_and_store_news(stock_code: str, days: int = 7) -> dict:
     """
-    Fetch news for a stock via AKShare, detect events, and store in DB.
+    Fetch news for a stock via East Money API, detect events, and store in DB.
     Returns: {'fetched': int, 'new': int, 'events': int}
     """
-    import akshare as ak
     from data_analyst.sentiment.event_detector import EventDetector
 
     ensure_tables()
@@ -84,12 +143,12 @@ def fetch_and_store_news(stock_code: str, days: int = 7) -> dict:
     bare_code = stock_code.split('.')[0] if '.' in stock_code else stock_code
 
     try:
-        df = ak.stock_news_em(symbol=bare_code)
+        raw_news = _fetch_news_from_eastmoney(bare_code)
     except Exception as e:
-        logger.error('AKShare stock_news_em failed for %s: %s', bare_code, e)
+        logger.error('News fetch failed for %s: %s', bare_code, e)
         return {'fetched': 0, 'new': 0, 'events': 0}
 
-    if df is None or df.empty:
+    if not raw_news:
         return {'fetched': 0, 'new': 0, 'events': 0}
 
     cutoff = datetime.now() - timedelta(days=days)
@@ -97,12 +156,12 @@ def fetch_and_store_news(stock_code: str, days: int = 7) -> dict:
     rows_to_insert = []
     event_count = 0
 
-    for _, row in df.iterrows():
-        title = str(row.get('新闻标题', '')).strip()
-        content = str(row.get('新闻内容', '') or '').strip()
-        source = str(row.get('文章来源', '') or '').strip()
-        url = str(row.get('新闻链接', '') or '').strip()
-        pub_str = str(row.get('发布时间', '') or '').strip()
+    for row in raw_news:
+        title = str(row.get('title', '')).strip()
+        content = str(row.get('content', '') or '').strip()
+        source = str(row.get('source', '') or '').strip()
+        url = str(row.get('url', '') or '').strip()
+        pub_str = str(row.get('publish_time', '') or '').strip()
 
         if not title:
             continue
@@ -146,7 +205,7 @@ def fetch_and_store_news(stock_code: str, days: int = 7) -> dict:
         ))
 
     if not rows_to_insert:
-        return {'fetched': len(df), 'new': 0, 'events': 0}
+        return {'fetched': len(raw_news), 'new': 0, 'events': 0}
 
     # Batch insert, ignore duplicates
     insert_sql = """
@@ -167,7 +226,7 @@ def fetch_and_store_news(stock_code: str, days: int = 7) -> dict:
         logger.error('Failed to insert news: %s', e)
         new_count = 0
 
-    return {'fetched': len(df), 'new': new_count, 'events': event_count}
+    return {'fetched': len(raw_news), 'new': new_count, 'events': event_count}
 
 
 # ---------------------------------------------------------------------------
