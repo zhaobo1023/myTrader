@@ -7,8 +7,9 @@ Main entry point with lifespan management for DB pool and Redis.
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from api.config import settings
 from api.dependencies import close_redis
@@ -134,6 +135,12 @@ app.include_router(theme_pool_router)
 app.include_router(candidate_pool_router)
 app.include_router(sim_pool_router)
 app.include_router(documents_router)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error('[unhandled] %s %s -> %s', request.method, request.url.path, exc, exc_info=True)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 @app.get('/')

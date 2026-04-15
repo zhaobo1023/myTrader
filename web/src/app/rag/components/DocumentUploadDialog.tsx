@@ -50,6 +50,10 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
       setError('不支持的文件类型，仅支持 PDF / Markdown / Word / TXT');
       return;
     }
+    if (f.size > 100 * 1024 * 1024) {
+      setError('文件过大，最大支持 100 MB');
+      return;
+    }
     setFile(f);
     if (!title) setTitle(f.name.replace(/\.[^.]+$/, ''));
     setError('');
@@ -77,15 +81,25 @@ export default function DocumentUploadDialog({ open, onClose, onUploaded }: Docu
         method: 'POST',
         body: formData,
       });
-      const data = await res.json();
       if (!res.ok) {
-        setError(data.detail || '上传失败');
-      } else {
-        handleClose();
-        onUploaded();
+        const text = await res.text();
+        try {
+          const errData = JSON.parse(text);
+          setError(errData.detail || `上传失败 (${res.status})`);
+        } catch {
+          setError(`上传失败 (${res.status})`);
+        }
+        return;
       }
+      const data = await res.json();
+      if (data.status === 'failed') {
+        setError(data.error || '文档解析失败');
+        return;
+      }
+      handleClose();
+      onUploaded();
     } catch (e) {
-      setError(String(e));
+      setError('网络错误，请重试');
     } finally {
       setUploading(false);
     }

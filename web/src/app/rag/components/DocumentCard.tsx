@@ -37,9 +37,11 @@ export default function DocumentCard({ doc, onDeleted, onUpdated }: DocumentCard
   const [editMemo, setEditMemo] = useState(doc.memo || '');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   async function handleSave() {
     setSaving(true);
+    setSaveError('');
     try {
       const res = await fetch(`${API_BASE}/api/rag/documents/${doc.id}`, {
         method: 'PUT',
@@ -49,9 +51,12 @@ export default function DocumentCard({ doc, onDeleted, onUpdated }: DocumentCard
       if (res.ok) {
         setEditing(false);
         onUpdated();
+      } else {
+        setSaveError('保存失败，请重试');
       }
-    } catch { /* ignore */ }
-    finally { setSaving(false); }
+    } catch {
+      setSaveError('网络错误，请重试');
+    } finally { setSaving(false); }
   }
 
   async function handleDelete() {
@@ -60,7 +65,10 @@ export default function DocumentCard({ doc, onDeleted, onUpdated }: DocumentCard
     try {
       const res = await fetch(`${API_BASE}/api/rag/documents/${doc.id}`, { method: 'DELETE' });
       if (res.ok) onDeleted();
-    } catch { /* ignore */ }
+      else alert('删除失败，请重试');
+    } catch {
+      alert('网络错误，请重试');
+    }
     finally { setDeleting(false); }
   }
 
@@ -177,6 +185,9 @@ export default function DocumentCard({ doc, onDeleted, onUpdated }: DocumentCard
           >
             {saving ? '保存中...' : '保存'}
           </button>
+          {saveError && (
+            <div style={{ fontSize: '11px', color: '#e5534b', marginTop: '4px' }}>{saveError}</div>
+          )}
         </div>
       )}
 

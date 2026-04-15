@@ -33,6 +33,7 @@ export default function KnowledgePage() {
     try {
       const params = filterTag ? `?tags=${encodeURIComponent(filterTag)}` : '';
       const res = await fetch(`${API_BASE}/api/rag/documents${params}`);
+      if (!res.ok) { setDocuments([]); return; }
       const data = await res.json();
       setDocuments(data.documents || []);
     } catch {
@@ -55,11 +56,15 @@ export default function KnowledgePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, collection: 'research', top_k: 5 }),
       });
+      if (!res.ok) {
+        setAnswer('搜索失败，请稍后重试');
+        return;
+      }
       const data = await res.json();
       setAnswer(data.answer || '');
       setSources(data.sources || []);
     } catch {
-      setAnswer('[ERROR] Search failed');
+      setAnswer('网络错误，请稍后重试');
     } finally {
       setSearching(false);
     }
