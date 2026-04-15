@@ -94,19 +94,16 @@ def upload_document(
         f.write(file_content)
 
     # 2. Create DB record
-    rows = execute_query(
+    from config.db import get_connection
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
         """INSERT INTO research_document (title, file_type, file_size, file_path, tags, memo, status)
            VALUES (%s, %s, %s, %s, %s, %s, 'processing')""",
         (doc_title, file_type, file_size, file_path, tags, memo),
     )
-    doc_id = rows  # execute_update with INSERT returns last insert id
-
-    # Re-query to get the actual ID
-    db_rows = execute_query(
-        "SELECT id FROM research_document WHERE file_path = %s ORDER BY id DESC LIMIT 1",
-        (file_path,),
-    )
-    doc_id = db_rows[0]['id'] if db_rows else 0
+    conn.commit()
+    doc_id = cursor.lastrowid
 
     logger.info('[doc-upload] Saved %s (id=%d, type=%s, size=%d)', filename, doc_id, file_type, file_size)
 
