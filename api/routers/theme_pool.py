@@ -517,7 +517,9 @@ async def llm_skill_stream(req: LLMStreamRequest):
     """
     from api.services.llm_skills.registry import get_skill
     # ensure skills are registered
-    import api.services.llm_skills.theme_review  # noqa: F401
+    import api.services.llm_skills.theme_review        # noqa: F401
+    import api.services.llm_skills.portfolio_doctor    # noqa: F401
+    import api.services.llm_skills.signal_interpreter  # noqa: F401
 
     skill = get_skill(req.skill_id)
     if skill is None:
@@ -554,5 +556,47 @@ async def llm_skill_stream(req: LLMStreamRequest):
 async def list_llm_skills():
     """List all registered LLM skills."""
     from api.services.llm_skills.registry import list_skills
-    import api.services.llm_skills.theme_review  # noqa: F401
+    import api.services.llm_skills.theme_review        # noqa: F401
+    import api.services.llm_skills.portfolio_doctor    # noqa: F401
+    import api.services.llm_skills.signal_interpreter  # noqa: F401
     return {'skills': list_skills()}
+
+
+# ---------------------------------------------------------------------------
+# LLM feedback endpoint (M3-T3)
+# ---------------------------------------------------------------------------
+
+class LLMFeedbackRequest(BaseModel):
+    skill_id: str
+    rating: str          # "helpful" | "unhelpful"
+    resource_id: int | None = None
+    comment: str | None = None
+
+
+@router.post('/llm/feedback')
+async def submit_llm_feedback(req: LLMFeedbackRequest, current_user=Depends(get_current_user)):
+    """Record user feedback (helpful / unhelpful) on a LLM skill output."""
+    from api.services.llm_feedback import LLMFeedbackService, FeedbackRecord
+    try:
+        rec = FeedbackRecord(
+            skill_id=req.skill_id,
+            rating=req.rating,
+            user_id=current_user.id,
+            resource_id=req.resource_id,
+            comment=req.comment,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    svc = LLMFeedbackService(db_session_factory=None)  # fire-and-forget, no DB yet
+    await svc.submit(rec)
+    return {'status': 'ok'}
+
+
+@router.get('/llm/feedback/stats/{skill_id}')
+async def get_llm_feedback_stats(skill_id: str, _=Depends(get_current_user)):
+    """Get helpful/unhelpful count for a skill."""
+    from api.services.llm_feedback import LLMFeedbackService
+    svc = LLMFeedbackService(db_session_factory=None)
+    stats = await svc.get_stats(skill_id)
+    return {'skill_id': skill_id, 'stats': stats}
