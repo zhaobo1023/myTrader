@@ -246,19 +246,23 @@ class ThemeCreateSkill:
         """Extract first JSON object or array from LLM output text."""
         # strip markdown code fences
         text = re.sub(r'```(?:json)?\s*', '', text).strip()
-        # find first [ or {
-        for start_char, end_char in [('[', ']'), ('{', '}')]:
-            idx = text.find(start_char)
-            if idx != -1:
-                # find matching end
-                depth = 0
-                for i, ch in enumerate(text[idx:], start=idx):
-                    if ch == start_char:
-                        depth += 1
-                    elif ch == end_char:
-                        depth -= 1
-                    if depth == 0:
-                        return text[idx:i + 1]
+        # find the first [ or { by position (whichever appears first)
+        idx_bracket = text.find('[')
+        idx_brace = text.find('{')
+        candidates = [(idx, '[', ']') for idx in [idx_bracket] if idx != -1] + \
+                     [(idx, '{', '}') for idx in [idx_brace] if idx != -1]
+        if not candidates:
+            return text
+        start_idx, start_char, end_char = min(candidates, key=lambda x: x[0])
+        # find matching end using depth tracking
+        depth = 0
+        for i, ch in enumerate(text[start_idx:], start=start_idx):
+            if ch == start_char:
+                depth += 1
+            elif ch == end_char:
+                depth -= 1
+            if depth == 0:
+                return text[start_idx:i + 1]
         return text
 
     async def _map_concepts(self, theme_name: str) -> list[str]:
