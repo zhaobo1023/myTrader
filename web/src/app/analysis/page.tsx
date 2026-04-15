@@ -179,36 +179,12 @@ function ReportDetail({ report }: { report: TechReportCard }) {
 }
 
 // ---------------------------------------------------------------------------
-// Industry valuation heatmap (M3)
+// Stock valuation history panel (M3) - shared helpers
 // ---------------------------------------------------------------------------
-
-interface ValuationItem {
-  name: string;
-  pe_ttm: number | null;
-  pe_ttm_med: number | null;
-  pb: number | null;
-  pe_pct_5y: number | null;
-  pb_pct_5y: number | null;
-  valuation_score: number | null;
-  valuation_label: string;
-}
-
-interface ValuationTemperatureResponse {
-  date: string;
-  items: ValuationItem[];
-}
 
 interface IndustryHistoryPoint {
   date: string;
   value: number | null;
-}
-
-interface IndustryHistoryResponse {
-  industry: string;
-  metric: string;
-  current: { date: string; value: number | null; valuation_score: number | null; valuation_label: string };
-  history: IndustryHistoryPoint[];
-  percentile_bands: { p20: number; p50: number; p80: number };
 }
 
 function scoreColor(score: number | null): string {
@@ -241,148 +217,29 @@ function PctBar({ pct }: { pct: number | null }) {
 function MiniLineChart({ history, bands }: { history: IndustryHistoryPoint[]; bands: { p20: number; p50: number; p80: number } }) {
   const vals = history.map(h => h.value).filter((v): v is number => v !== null);
   if (vals.length < 2) return <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>暂无数据</div>;
-
   const W = 320, H = 90;
   const min = Math.min(...vals, bands.p20) * 0.95;
   const max = Math.max(...vals, bands.p80) * 1.05;
   const toY = (v: number) => H - ((v - min) / (max - min)) * H;
   const toX = (i: number) => (i / (history.length - 1)) * W;
-
   const points = history
     .map((h, i) => h.value !== null ? `${toX(i).toFixed(1)},${toY(h.value).toFixed(1)}` : null)
     .filter(Boolean).join(' ');
-
   const lineY20 = toY(bands.p20).toFixed(1);
   const lineY50 = toY(bands.p50).toFixed(1);
   const lineY80 = toY(bands.p80).toFixed(1);
-
   return (
     <svg width={W} height={H} style={{ display: 'block', overflow: 'visible' }}>
-      {/* Band lines */}
       <line x1="0" y1={lineY80} x2={W} y2={lineY80} stroke="#e5534b" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />
       <line x1="0" y1={lineY50} x2={W} y2={lineY50} stroke="var(--text-muted)" strokeWidth="1" strokeDasharray="3 3" opacity="0.4" />
       <line x1="0" y1={lineY20} x2={W} y2={lineY20} stroke="#27a644" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />
-      {/* Labels */}
       <text x={W + 3} y={parseFloat(lineY80) + 4} fontSize="9" fill="#e5534b" opacity="0.7">p80</text>
       <text x={W + 3} y={parseFloat(lineY50) + 4} fontSize="9" fill="var(--text-muted)" opacity="0.7">p50</text>
       <text x={W + 3} y={parseFloat(lineY20) + 4} fontSize="9" fill="#27a644" opacity="0.7">p20</text>
-      {/* Line */}
       <polyline points={points} fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   );
 }
-
-function IndustryValuationHeatmap() {
-  const [expanded, setExpanded] = useState(false);
-  const [selectedIndustry, setSelectedIndustry] = useState<string | null>(null);
-
-  const { data, isLoading } = useQuery<ValuationTemperatureResponse>({
-    queryKey: ['valuation-temperature'],
-    queryFn: () => apiClient.get('/api/analysis/valuation/temperature').then(r => r.data),
-    staleTime: 300000,
-  });
-
-  const { data: histData, isLoading: histLoading } = useQuery<IndustryHistoryResponse>({
-    queryKey: ['valuation-industry-history', selectedIndustry],
-    queryFn: () => apiClient.get(`/api/analysis/valuation/industry/${encodeURIComponent(selectedIndustry!)}/history`, { params: { metric: 'pe_ttm', years: 2 } }).then(r => r.data),
-    enabled: !!selectedIndustry,
-    staleTime: 300000,
-  });
-
-  const displayItems = data?.items ?? [];
-  const visibleItems = expanded ? displayItems : displayItems.slice(0, 10);
-
-  return (
-    <div style={{ marginBottom: '28px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-        <span style={{ fontSize: '14px', fontWeight: 590, color: 'var(--text-primary)' }}>行业估值温度</span>
-        {data?.date && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{data.date}</span>}
-        <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>按 5年PE分位 升序，绿=低估 红=高估</span>
-      </div>
-
-      {isLoading && <div style={{ color: 'var(--text-muted)', fontSize: '13px', padding: '16px 0' }}>加载中...</div>}
-
-      {!isLoading && displayItems.length > 0 && (
-        <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
-            {visibleItems.map((item) => (
-              <div
-                key={item.name}
-                onClick={() => setSelectedIndustry(selectedIndustry === item.name ? null : item.name)}
-                style={{
-                  padding: '9px 10px',
-                  borderRadius: '7px',
-                  background: scoreBg(item.valuation_score),
-                  border: `1px solid ${selectedIndustry === item.name ? scoreColor(item.valuation_score) : 'transparent'}`,
-                  cursor: 'pointer',
-                  transition: 'all 0.12s',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '12px', fontWeight: 510, color: 'var(--text-primary)' }}>{item.name}</span>
-                  <span style={{ fontSize: '11px', fontWeight: 590, color: scoreColor(item.valuation_score) }}>
-                    {item.valuation_score !== null ? item.valuation_score.toFixed(0) : '-'}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                    PE {item.pe_ttm !== null ? item.pe_ttm.toFixed(1) : '-'}
-                  </span>
-                  <PctBar pct={item.pe_pct_5y} />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                    PB {item.pb !== null ? item.pb.toFixed(2) : '-'}
-                  </span>
-                  <PctBar pct={item.pb_pct_5y} />
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {displayItems.length > 10 && (
-            <button
-              onClick={() => setExpanded(!expanded)}
-              style={{ marginTop: '8px', fontSize: '12px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0' }}
-            >
-              {expanded ? '收起' : `展开全部 ${displayItems.length} 个行业`}
-            </button>
-          )}
-
-          {/* Industry PE history chart */}
-          {selectedIndustry && (
-            <div style={{ marginTop: '14px', padding: '14px 16px', background: 'var(--bg-elevated)', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-                <span style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-primary)' }}>{selectedIndustry} — PE-TTM 历史（近 2 年）</span>
-                {histData?.current && (
-                  <span style={{ fontSize: '12px', color: scoreColor(histData.current.valuation_score), background: scoreBg(histData.current.valuation_score), padding: '1px 8px', borderRadius: '10px' }}>
-                    {histData.current.valuation_label} · {histData.current.value?.toFixed(1)}x
-                  </span>
-                )}
-                <button onClick={() => setSelectedIndustry(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>×</button>
-              </div>
-              {histLoading && <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>加载中...</div>}
-              {histData && !histLoading && (
-                <div style={{ overflowX: 'auto' }}>
-                  <MiniLineChart history={histData.history} bands={histData.percentile_bands} />
-                  <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                    <span><span style={{ color: '#27a644' }}>p20</span> {histData.percentile_bands.p20?.toFixed(1)}x</span>
-                    <span><span style={{ color: 'var(--text-secondary)' }}>p50</span> {histData.percentile_bands.p50?.toFixed(1)}x</span>
-                    <span><span style={{ color: '#e5534b' }}>p80</span> {histData.percentile_bands.p80?.toFixed(1)}x</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Stock valuation history panel (M3)
-// ---------------------------------------------------------------------------
 
 interface StockHistoryPoint {
   date: string;
@@ -1364,9 +1221,6 @@ export default function AnalysisPage() {
           </span>
         )}
       </div>
-
-      {/* Industry valuation heatmap (always visible) */}
-      <IndustryValuationHeatmap />
 
       {/* Stock-specific panel */}
       {selectedStock ? (
