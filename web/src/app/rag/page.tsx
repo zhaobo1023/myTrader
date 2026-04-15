@@ -75,9 +75,10 @@ export default function KnowledgePage() {
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
         <h1 style={{ fontSize: '20px', fontWeight: 590, color: 'var(--text-primary)', letterSpacing: '-0.3px', margin: 0 }}>
-          Knowledge Base
+          知识库
         </h1>
         <button
+          data-track="upload_document_open"
           onClick={() => setUploadOpen(true)}
           style={{
             padding: '6px 14px', fontSize: '12px', fontWeight: 510,
@@ -85,7 +86,7 @@ export default function KnowledgePage() {
             border: 'none', borderRadius: '6px', cursor: 'pointer',
           }}
         >
-          + Upload
+          + 上传
         </button>
       </div>
 
@@ -95,14 +96,14 @@ export default function KnowledgePage() {
         borderRadius: '10px', padding: '16px 20px', marginBottom: '16px',
       }}>
         <div style={{ fontSize: '12px', fontWeight: 510, color: 'var(--text-muted)', marginBottom: '10px' }}>
-          Search
+          搜索
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
-            placeholder="Query your uploaded documents..."
+            placeholder="搜索已上传的文档..."
             style={{
               flex: 1, padding: '8px 12px',
               background: 'var(--bg-input)', border: '1px solid var(--border-subtle)',
@@ -110,6 +111,7 @@ export default function KnowledgePage() {
             }}
           />
           <button
+            data-track="knowledge_search"
             onClick={handleSearch}
             disabled={searching || !query.trim()}
             style={{
@@ -120,7 +122,7 @@ export default function KnowledgePage() {
               whiteSpace: 'nowrap',
             }}
           >
-            {searching ? 'Searching...' : 'Search'}
+            {searching ? '搜索中...' : '搜索'}
           </button>
         </div>
 
@@ -139,7 +141,7 @@ export default function KnowledgePage() {
             {sources.length > 0 && (
               <div>
                 <div style={{ fontSize: '11px', fontWeight: 510, color: 'var(--text-muted)', marginBottom: '6px' }}>
-                  Sources ({sources.length})
+                  来源 ({sources.length})
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {sources.map((src: any, i: number) => (
@@ -176,7 +178,7 @@ export default function KnowledgePage() {
               cursor: 'pointer', fontWeight: 510,
             }}
           >
-            All
+            全部
           </button>
           {allTags.map((tag) => (
             <button
@@ -198,12 +200,12 @@ export default function KnowledgePage() {
 
       {/* Document list */}
       {loading && (
-        <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '40px 0', textAlign: 'center' }}>Loading...</div>
+        <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '40px 0', textAlign: 'center' }}>加载中...</div>
       )}
       {!loading && documents.length === 0 && (
         <div style={{ textAlign: 'center', padding: '60px 0' }}>
-          <div style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '8px' }}>No documents yet</div>
-          <div style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>Upload research reports, notes, or analysis to build your knowledge base</div>
+          <div style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '8px' }}>暂无文档</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>上传研报、笔记或分析文档以构建知识库</div>
         </div>
       )}
       {!loading && documents.length > 0 && (
