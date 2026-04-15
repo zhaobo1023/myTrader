@@ -2,6 +2,291 @@
 
 ---
 
+## 2026-04-15 收盘复盘行情回顾 -- 数据质量与幻觉问题排查
+
+### 问题背景
+
+用户使用系统生成的收盘复盘（Evening Briefing）与实际行情对比，发现多处严重数据错误和 LLM 幻觉。
+**核心原则：投资是严肃的事情，宁愿说"数据缺失/不确定"也不许瞎说。**
+
+### 错误清单
+
+#### 严重错误（数据失真，直接影响投资判断）
+
+| # | 指标 | 系统输出 | 实际值 | 偏差 | 根因分析 |
+|---|------|---------|--------|------|---------|
+| 1 | 成交额 | 2.15万亿 | 2.43万亿 | -13% | macro_data.market_volume 数据未更新到当日，LLM 使用了过期数据或自行编造 |
+| 2 | 涨跌家数 | 2312涨/2719跌 | 1702涨/3387跌 | 涨多报610只，跌少报668只 | advance_count/decline_count 缺失或过期，LLM 自行"脑补"了看似合理的数值 |
+| 3 | 跌停家数 | 4家 | 15家 | 少报11只（4倍偏差） | limit_down_count 缺失，LLM 编造了"仅4家" |
+| 4 | AH溢价 | 11.51 | 118.94 | 格式完全错误 | AH溢价指数基准为100，实际值约118.94；macro_data中存储的是原始指数值，但 LLM 可能将其误解为百分比溢价率(18.94%->11.51) |
+| 5 | 沪深300涨幅 | +0.21% | 当日上证仅+0.01%，300大概率微跌或持平 | LLM 编造了具体涨幅数值 |
+| 6 | 中证1000涨幅 | +0.34% | 深成指-0.97%、创业板-1.22%，小盘大概率也下跌 | LLM 编造了具体涨幅数值 |
+
+#### 定性错误（LLM 解读偏差）
+
+| # | 描述 | 系统输出 | 应有判断 |
+|---|------|---------|---------|
+| 7 | 市场格局判断 | "个股分化明显" | 1700涨/3400跌是明显普跌，不是"分化" |
+| 8 | 情绪判断 | "情绪中性" | 普跌+15只跌停，应为偏弱 |
+| 9 | 走势描述 | "震荡整理" | 创业板盘中创2015年来新高后跳水-1.22%，应为"冲高回落" |
+| 10 | 创业板重大事件 | 完全未提及 | 创业板指盘中创2015年6月19日以来新高后跳水，止步5连阳，是当日最重要技术信号 |
+| 11 | 热点板块 | 完全未提及 | 医药板块（国办政策利好）是当日核心主线，GPU/钠电池/折叠屏等活跃 |
+
+#### 不可验证但存疑
+
+| # | 指标 | 系统输出 | 存疑原因 |
+|---|------|---------|---------|
+| 12 | 北向资金 | "净流出" | 港交所已调整披露机制，不再实时展示净买额，来源可疑 |
+| 13 | 10Y国债收益率 | 1.783% | 近期区间1.81%-1.84%，偏低约3bp |
+| 14 | 封板率 | 50% | 涨停基数就不对(59 vs 实际68)，封板率无法验证 |
+
+### 根因总结
+
+1. **数据管道断裂**：macro_data 表的 4月9日-15日数据未入库（fetcher 未执行），LLM 拿到的是过期数据或空值
+2. **LLM 无数据校验约束**：当数据缺失时，LLM 不说"数据缺失"，而是自行编造看似合理的数值（幻觉）
+3. **Prompt 无数据完备性声明**：EVENING_PROMPT 未要求 LLM 标注哪些数据是实际值、哪些是缺失的
+4. **数据快照无日期标注**：`_collect_dashboard_snapshot()` 输出的数据没有标注每个指标的实际日期，LLM 无法判断数据是否过期
+5. **AH溢价单位歧义**：macro_data 存储的是原始指数值(118.94)，但 Prompt 中未标注单位，LLM 可能误解
+6. **缺少板块/行业/个股层面数据**：Dashboard 仅提供宽基指数级别信号，缺少板块轮动和个股亮点数据，LLM 无法生成板块分析
+7. **缺少涨跌停个股明细**：仅有涨停/跌停数量统计，无个股名单和原因分类，无法做风格解读
+
+### 数据库现状
+
+- `trade_stock_daily` 最新数据：2026-04-08（缺失 04-09 ~ 04-15 共5个交易日）
+- `macro_data` 部分指标：同样滞后
+- 涨跌家数(advance_count/decline_count)：依赖 `stock_market_activity_legu()` 或 `stock_zh_a_spot_em()`，需当日盘后执行
+
+---
+
+## 2026-04-15 收盘复盘改进方案
+
+### 改进原则
+
+**投资是严肃的事情，宁愿说"不知道"也不许瞎说。** 所有改进围绕三条铁律：
+
+1. **数据先验证，再解读** -- 任何指标在进入 LLM Prompt 之前必须通过完备性校验
+2. **缺失即标注** -- 数据缺失/过期时，Prompt 中明确标注 `[数据缺失]` 或 `[数据过期: 实际日期 vs 目标日期]`
+3. **LLM 禁止编造数值** -- Prompt 硬约束：对于标注为缺失/过期的数据，必须回答"数据暂缺"，不得自行推测
+
+### 改进任务清单
+
+#### P0 -- 消除幻觉（必须立即修复）
+
+**T1: 数据完备性校验层** (`global_asset_briefing.py`)
+
+在 `_collect_data_snapshot()` 和 `_collect_dashboard_snapshot()` 中增加数据新鲜度校验：
+
+```python
+def _validate_data_freshness(indicator: str, latest_date: str, target_date: str) -> str:
+    """
+    校验数据新鲜度，返回状态标注。
+    - 当日数据 -> "[OK]"
+    - 滞后1天 -> "[WARN: 数据为{latest_date}，非当日]"
+    - 滞后>1天 -> "[STALE: 数据停留在{latest_date}，已过期{N}天]"
+    - 无数据 -> "[MISSING: 无数据]"
+    """
+```
+
+修改数据快照输出格式，为每行指标追加新鲜度标注：
+```
+| 指标 | 最新值 | 日期 | 状态 |
+| 成交额 | 21522亿 | 2026-04-08 | [STALE: 过期7天] |
+| 涨跌家数 | -- | -- | [MISSING: 无数据] |
+```
+
+**T2: Prompt 硬约束** (`global_asset_briefing.py`)
+
+在 SYSTEM_PROMPT 中增加不可违反的规则：
+
+```python
+SYSTEM_PROMPT += """
+## 铁律（不可违反）
+1. 你收到的数据表格中，标注为 [MISSING] 或 [STALE] 的指标，必须在输出中注明"数据暂缺"或"数据过期(截止XX日)"，不得自行推测或编造数值
+2. 不得编造任何未在数据表中出现的具体数值（涨跌幅、成交额、资金流向等）
+3. 如果某个维度的核心指标全部缺失，该维度输出"[数据不足，无法判断]"，不做空泛推测
+4. 涨跌家数、涨停/跌停等市场微观结构数据如缺失，不得用"个股分化"等模糊措辞替代
+5. AH溢价指数基准为100（>100表示A股溢价），不要将其误读为百分比
+"""
+```
+
+**T3: Dashboard 数据快照增加日期标注** (`calculator.py`)
+
+`compute_dashboard()` 返回的每个板块增加 `data_date` 字段：
+
+```python
+{
+    "temperature": {
+        "available": True,
+        "data_date": "2026-04-08",  # 新增：数据实际日期
+        "target_date": "2026-04-15",  # 新增：目标日期
+        "is_fresh": False,  # 新增：是否为最新交易日数据
+        "level": "常温",
+        ...
+    }
+}
+```
+
+`_collect_dashboard_snapshot()` 利用 `is_fresh` 标注：
+```
+**市场温度** (信号: 常温) [STALE: 数据为04-08，非当日]
+```
+
+**T4: AH溢价单位显式标注**
+
+在 INDICATOR_NAMES 中明确单位：
+```python
+'ah_premium': 'AH溢价指数(基准100，>100表示A股溢价)',
+```
+
+#### P1 -- 丰富数据维度（短期优化）
+
+**T5: 增加板块/行业层面数据**
+
+在 `_collect_dashboard_snapshot()` 中追加申万一级行业当日涨跌幅 Top5/Bottom5：
+- 数据来源：`sw_industry_valuation` 表 或 AKShare `stock_board_industry_name_em()`
+- 输出格式：`领涨行业: 综合+3.24% 电子+2.67% | 领跌行业: 石油石化-1.18% 煤炭-1.02%`
+
+**T6: 增加涨跌停个股明细**
+
+新增函数 `_collect_limit_stocks(trade_date)`:
+- 数据来源：`stock_zt_pool_em()` / `stock_zt_pool_dtgc_em()`
+- 输出涨停/跌停个股名单 + 所属概念板块
+- 格式：`涨停73只，主要集中在: CPO/光模块(沪电股份/协创数据)、新能源(正邦科技/腾远钴业)、...`
+
+**T7: 增加创新高/新低个股明细**
+
+从 `macro_data.new_high_60d` / `new_low_60d` 扩展为具体个股名单（至少 Top10），便于 LLM 解读市场风格特征。
+
+**T8: 增加指数分时特征**
+
+当日指数的高点/低点/收盘位置关系（如"盘中创新高后回落收阴"），目前仅有收盘价，缺少分时信息。
+
+#### P2 -- 数据管道健壮性（中期优化）
+
+**T9: 数据管道断裂告警**
+
+在 `generate_briefing()` 中增加前置检查：
+```python
+async def generate_briefing(session: str = 'morning') -> dict:
+    # 前置检查：数据新鲜度
+    freshness = _check_overall_freshness(target_date=today_str)
+    if freshness['stale_count'] > 3:
+        logger.error('[briefing] %d/%d indicators are stale, aborting generation',
+                     freshness['stale_count'], freshness['total_count'])
+        return {
+            'session': session,
+            'date': today_str,
+            'content': '## 数据不足，暂无法生成行情回顾\n\n'
+                       f"以下 {freshness['stale_count']} 项核心指标数据过期或缺失：\n"
+                       + freshness['detail'],
+            'cached': False,
+            'data_quality': 'insufficient',
+        }
+```
+
+当核心指标（成交额、涨跌家数、指数收盘价）缺失时，直接拒绝生成，返回数据不足提示，而不是让 LLM 编造。
+
+**T10: 数据管道自动补拉**
+
+在 Celery Beat 中增加数据完备性检查任务（每日 17:00），如果发现当日数据缺失自动触发补拉：
+```python
+'data-freshness-check': {
+    'task': 'api.tasks.macro_fetch.check_and_backfill',
+    'schedule': crontab(hour=17, minute=0, day_of_week='1-5'),
+}
+```
+
+**T11: Briefing 输出增加数据质量评分**
+
+在返回的 briefing 中附加元数据：
+```python
+{
+    'content': '...',
+    'data_quality': {
+        'score': 0.72,  # 0-1, 数据覆盖率
+        'fresh_indicators': 18,
+        'stale_indicators': 4,
+        'missing_indicators': 3,
+        'stale_list': ['advance_count', 'decline_count', 'margin_balance', ...],
+    }
+}
+```
+
+前端据此在 AIBriefingCard 中展示数据质量提示：
+- score >= 0.9: 正常展示
+- 0.7 <= score < 0.9: 展示黄色提示"部分指标数据过期，仅供参考"
+- score < 0.7: 展示红色警告"数据严重不足，解读可信度低"
+
+#### P3 -- LLM 输出后校验（长期优化）
+
+**T12: LLM 输出后置校验**
+
+LLM 生成 briefing 后，用规则引擎做一轮后置校验：
+- 提取 briefing 中提到的所有数值（正则匹配"XX万亿"、"XX只涨停"等）
+- 与 `_collect_data_snapshot()` 中的实际值对比
+- 偏差超过阈值的标记为 `[数据存疑]`
+- 出现在 [MISSING] 列表中的指标如果 LLM 仍给出了数值，强制替换为"数据暂缺"
+
+**T13: 历史 Briefing 回测验证**
+
+建立回测机制：用历史数据生成 briefing，与实际行情对比，计算准确率指标：
+- 方向准确率（涨/跌/震荡判断）
+- 数值偏差率（成交额/涨跌家数等）
+- 板块命中率（提到的热点板块是否实际领涨）
+
+### 实施优先级
+
+| 优先级 | 任务 | 预计工时 | 效果 |
+|--------|------|---------|------|
+| P0 | T1 数据完备性校验层 | 2h | 消除90%的数值幻觉 |
+| P0 | T2 Prompt 硬约束 | 0.5h | 强制 LLM 不编造 |
+| P0 | T3 Dashboard 日期标注 | 1h | LLM 能判断数据时效性 |
+| P0 | T4 AH溢价单位标注 | 0.5h | 消除单位歧义 |
+| P1 | T5 行业涨跌数据 | 2h | 解读能覆盖板块轮动 |
+| P1 | T6 涨跌停明细 | 2h | 支持风格和情绪深度解读 |
+| P1 | T7 创新高/低明细 | 1h | 捕捉市场结构变化 |
+| P1 | T8 指数分时特征 | 1h | 识别冲高回落等日内模式 |
+| P2 | T9 管道断裂告警 | 1h | 数据不足时拒绝生成 |
+| P2 | T10 自动补拉 | 2h | 减少人工干预 |
+| P2 | T11 质量评分 | 1.5h | 前端展示可信度 |
+| P3 | T12 后置校验 | 3h | 兜底拦截漏网幻觉 |
+| P3 | T13 回测验证 | 4h | 持续评估质量 |
+
+### 改进后的数据流
+
+```
+AKShare / yfinance / 交易所
+       |
+macro_fetcher (Celery 每小时/每日)
+       |
+macro_data 表
+       |
+[新增] _check_overall_freshness()  <-- 前置校验
+       |
+       +-- 核心指标缺失 --> 拒绝生成，返回"数据不足"
+       |
+       +-- 数据充足 -->
+            |
+    _collect_data_snapshot()  (每行带 [OK]/[STALE]/[MISSING] 标注)
+    _collect_dashboard_snapshot()  (每板块带 data_date/is_fresh)
+    [新增] _collect_industry_snapshot()  (行业涨跌 Top5)
+    [新增] _collect_limit_stocks()  (涨跌停明细)
+            |
+    EVENING_PROMPT + SYSTEM_PROMPT(含铁律约束)
+            |
+    LLM 生成 briefing
+            |
+    [新增] _post_validate(briefing, raw_data)  <-- 后置校验
+            |
+    trade_briefing 表 + data_quality 元数据
+            |
+    API 返回 (content + data_quality)
+            |
+    前端 AIBriefingCard (根据 data_quality.score 展示可信度提示)
+```
+
+---
+
 ## 2026-04-15（补充）RAG 知识库 Bug 修复 + 文档异步向量化
 
 ### 今日工作内容（补充）
