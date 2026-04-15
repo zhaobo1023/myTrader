@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import AppShell from '@/components/layout/AppShell';
 import DocumentUploadDialog from './components/DocumentUploadDialog';
 import DocumentCard from './components/DocumentCard';
@@ -170,7 +171,9 @@ function ReportViewer({ markdown }: { markdown: string }) {
 // ---------------------------------------------------------------------------
 
 export default function RAGPage() {
-  const [tab, setTab] = useState<'generate' | 'history' | 'knowledge'>('generate');
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get('tab') === 'knowledge' ? 'knowledge' as const : 'generate' as const;
+  const [tab, setTab] = useState<'generate' | 'history' | 'knowledge'>(initialTab);
 
   // Knowledge base state
   const [kbDocuments, setKbDocuments] = useState<any[]>([]);
