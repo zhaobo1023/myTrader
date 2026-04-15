@@ -52,10 +52,10 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=16, minute=30, day_of_week='1-5'),
     },
 
-    # 17:30 - 宏观数据拉取
-    'daily-macro-fetch': {
-        'task': 'scheduler.adapters.run_macro_fetch',
-        'schedule': crontab(hour=17, minute=30, day_of_week='1-5'),
+    # 每小时 :15 - 宏观数据 + 全球资产增量拉取
+    'hourly-macro-fetch': {
+        'task': 'fetch_macro_data_hourly',
+        'schedule': crontab(minute=15),
     },
 
     # 18:00 - 等待数据就绪
