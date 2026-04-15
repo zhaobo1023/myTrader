@@ -10,16 +10,13 @@ import NewsSentimentPanel from './components/NewsSentimentPanel';
 import EventSignalPanel from './components/EventSignalPanel';
 import PolymarketPanel from './components/PolymarketPanel';
 import GlobalAssetsPanel from './components/GlobalAssetsPanel';
-import DataHealthPanel from './components/DataHealthPanel';
 
-type MainTab = 'dashboard' | 'global' | 'sentiment' | 'data-health';
+type MainTab = 'dashboard' | 'sentiment';
 type SentimentTab = 'fear' | 'news' | 'events' | 'polymarket';
 
 const MAIN_TABS: { key: MainTab; label: string }[] = [
-  { key: 'dashboard',   label: '大盘总览' },
-  { key: 'global',      label: '全球资产' },
-  { key: 'sentiment',   label: '舆情详情' },
-  { key: 'data-health', label: '数据完备度' },
+  { key: 'dashboard',  label: '大盘总览' },
+  { key: 'sentiment',  label: '舆情详情' },
 ];
 
 const SENTIMENT_TABS: { key: SentimentTab; label: string }[] = [
@@ -90,9 +87,20 @@ export default function SentimentPage() {
       </div>
 
       {/* Content */}
-      {mainTab === 'dashboard' && <DashboardView />}
-      {mainTab === 'global' && <GlobalAssetsPanel />}
-      {mainTab === 'data-health' && <DataHealthPanel />}
+      {mainTab === 'dashboard' && (
+        <>
+          <DashboardView />
+          <div style={{ marginTop: '24px' }}>
+            <h2 style={{ fontSize: '14px', fontWeight: 510, color: 'var(--text-primary)', marginBottom: '4px' }}>
+              全球资产
+            </h2>
+            <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+              商品 / 利率 / 汇率 / 波动率 / 加密货币 / 美股ETF
+            </p>
+            <GlobalAssetsPanel />
+          </div>
+        </>
+      )}
 
       {mainTab === 'sentiment' && (
         <>

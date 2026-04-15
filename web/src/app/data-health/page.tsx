@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import apiClient from '@/lib/api-client';
+import AppShell from '@/components/layout/AppShell';
 
 interface HealthItem {
   key: string;
@@ -59,11 +60,11 @@ export default function DataHealthPage() {
     : {};
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-3xl mx-auto">
+    <AppShell>
+      <div>
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-base font-semibold text-gray-800">数据完备度</h1>
+            <h1 style={{ fontSize: '20px', fontWeight: 590, color: 'var(--text-primary)', letterSpacing: '-0.3px' }}>数据完备度</h1>
             {data && <p className="text-xs text-gray-400 mt-0.5">检查时间: {data.checked_at}</p>}
           </div>
           <button
@@ -140,6 +141,6 @@ export default function DataHealthPage() {
           </div>
         )}
       </div>
-    </div>
+    </AppShell>
   );
 }

@@ -93,7 +93,17 @@ const NAV_ITEMS: NavItem[] = [
       </svg>
     ),
   },
-  // 组合管理暂时隐藏
+  {
+    href: '/data-health',
+    label: '数据完备度',
+    labelEn: 'Data Health',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+        <circle cx="12" cy="12" r="1"/>
+      </svg>
+    ),
+  },
 ];
 
 // ----------------------------------------------------------------
