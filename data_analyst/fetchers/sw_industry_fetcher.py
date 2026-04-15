@@ -30,14 +30,6 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s %(message)s',
 )
 
-# ---------------------------------------------------------------------------
-# SW Level2 index code range to scan (801xxx)
-# Level1 codes are round numbers (801010, 801030, ...), level2 codes are in between.
-# Confirmed valid range from empirical scan: 801011-801245
-# We exclude large codes (801250+) which are size/style indices, not industry indices.
-# ---------------------------------------------------------------------------
-SCAN_MIN = 801011
-SCAN_MAX = 801245
 
 
 
@@ -70,14 +62,9 @@ def fetch_sw_mapping() -> dict:
 
     stock_map: dict = {}  # bare_code -> (level1, level2)
 
-    logger.info('Scanning SW level2 codes from %d to %d...', SCAN_MIN, SCAN_MAX)
+    logger.info('Scanning %d SW level2 codes from sw_index_second_info...', len(code_to_names))
 
-    for code_int in range(SCAN_MIN, SCAN_MAX + 1):
-        code = str(code_int)
-        if code not in code_to_names:
-            continue
-
-        l2_name, l1_name = code_to_names[code]
+    for code, (l2_name, l1_name) in code_to_names.items():
 
         try:
             df = ak.index_component_sw(symbol=code)
