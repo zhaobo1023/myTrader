@@ -39,7 +39,7 @@ SYSTEM_PROMPT = """你是一位专业的A股市场分析师。
 2. 绝不可编造具体数字（成交量、涨跌家数、指数涨跌幅、资金流向）——如果数据中没有提供，就不要写
 3. 如果某个维度的所有核心指标均缺失，该维度输出"[数据不足]"
 4. 如果涨跌家数或涨停跌停数据缺失，不要用"个股分化"等模糊措辞替代，直接说明数据缺失
-5. AH溢价指数基准值为100（>100表示A股溢价），不要将其误读为百分比"""
+5. AH股溢价指数是点位值（越高表示A股相对H股溢价越大），正常范围约10-15"""
 
 MORNING_PROMPT = """## 盘前速递（{date}）
 
@@ -314,7 +314,7 @@ def _collect_dashboard_snapshot() -> str:
     if macro.get('available'):
         inds = macro.get('indicators', {})
         lines.append('**宏观背景** ({})'.format(macro.get('level_label', '-')))
-        lines.append('  PMI: {} ({}) | M2: {}% | AH溢价指数(基准100): {} ({})'.format(
+        lines.append('  PMI: {} ({}) | M2: {}% | AH股溢价指数: {} ({})'.format(
             inds.get('pmi_mfg', {}).get('value', '-'), inds.get('pmi_mfg', {}).get('signal', '-'),
             inds.get('m2_yoy', {}).get('value', '-'),
             inds.get('ah_premium', {}).get('value', '-'), inds.get('ah_premium', {}).get('signal', '-')))
