@@ -1354,6 +1354,78 @@ function StockDetail({
 }
 
 // ---------------------------------------------------------------------------
+// Watchlist bar (shown on stock list view)
+// ---------------------------------------------------------------------------
+
+interface WatchlistEntry {
+  id: number;
+  stock_code: string;
+  stock_name: string;
+  added_at: string;
+}
+
+function WatchlistBar({ onSelect }: { onSelect: (s: StockOption) => void }) {
+  const [items, setItems] = useState<WatchlistEntry[]>([]);
+
+  const refresh = useCallback(() => {
+    fetch(`${API_BASE}/api/watchlist`)
+      .then((r) => r.json())
+      .then((d) => setItems(d.items || []))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const handleRemove = (e: React.MouseEvent, code: string) => {
+    e.stopPropagation();
+    fetch(`${API_BASE}/api/watchlist/${encodeURIComponent(code)}`, { method: 'DELETE' })
+      .then(() => setItems((prev) => prev.filter((i) => i.stock_code !== code)))
+      .catch(() => {});
+  };
+
+  if (items.length === 0) return null;
+
+  return (
+    <div style={{
+      background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+      borderRadius: '8px', padding: '10px 16px', marginBottom: '16px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+        <span style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-primary)' }}>关注列表</span>
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)', background: 'var(--bg-tag)', padding: '1px 6px', borderRadius: '8px' }}>
+          {items.length}
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+        {items.map((item) => (
+          <div
+            key={item.stock_code}
+            onClick={() => onSelect({ stock_code: item.stock_code, stock_name: item.stock_name })}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '4px',
+              padding: '4px 10px', borderRadius: '6px', cursor: 'pointer',
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+              fontSize: '12px', color: 'var(--text-primary)',
+              transition: 'background 0.15s',
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-nav-hover)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-elevated)'; }}
+          >
+            <span>{item.stock_name || item.stock_code}</span>
+            <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{item.stock_code}</span>
+            <span
+              onClick={(e) => handleRemove(e, item.stock_code)}
+              style={{ marginLeft: '2px', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '13px', lineHeight: 1 }}
+              title="取消关注"
+            >x</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -1402,7 +1474,10 @@ export default function StockPage() {
           onBack={handleBack}
         />
       ) : (
-        <StockCardGrid onSelect={handleSelect} />
+        <>
+          <WatchlistBar onSelect={handleSelect} />
+          <StockCardGrid onSelect={handleSelect} />
+        </>
       )}
     </AppShell>
   );
