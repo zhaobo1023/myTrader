@@ -78,6 +78,30 @@ def _clear_proxy():
     os.environ["NO_PROXY"] = "*"
 
 
+def fetch_stock_daily_incremental(dry_run: bool = False, envs: str = "online"):
+    """
+    Daily incremental fetch of trade_stock_daily via AKShare.
+    Pulls all A-share daily OHLCV data from 东方财富.
+    """
+    if dry_run:
+        logger.info("[DRY-RUN] fetch_stock_daily: would fetch latest daily prices")
+        return
+
+    _clear_proxy()
+
+    import sys
+    import os
+    import importlib.util
+    sys.argv = ["akshare_fetcher"]
+
+    script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                               "data_analyst", "fetchers", "akshare_fetcher.py")
+    spec = importlib.util.spec_from_file_location("akshare_fetcher", script_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.main()
+
+
 def fetch_moneyflow_incremental(dry_run: bool = False, envs: str = "local,online"):
     """
     Daily incremental fetch of trade_stock_moneyflow.

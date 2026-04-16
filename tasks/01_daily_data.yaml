@@ -1,0 +1,25 @@
+# 01_daily_data.yaml - Daily stock price fetch (runs before factor gate)
+#
+# AKShare fetcher pulls A-share OHLCV from 东方财富 (free, no token).
+# Must run on server with direct internet access (no proxy).
+# Schedule: 16:30 (after market close at 15:00, data usually ready by 16:00)
+
+tasks:
+  - id: fetch_stock_daily
+    name: "Fetch daily stock prices (AKShare incremental)"
+    module: scheduler.adapters
+    func: fetch_stock_daily_incremental
+    tags: [daily, data_fetch, price]
+    schedule: "16:30"
+    depends_on: []
+    params:
+      envs: "online"
+    env:
+      local:
+        enabled: false    # local Mac may not reach eastmoney.com
+      prod:
+        enabled: true
+    retry:
+      max_attempts: 2
+      delay_seconds: 120
+    timeout_seconds: 7200   # ~5000 stocks * 0.5s / 3 workers ~ 14 min; allow 2h for backfill
