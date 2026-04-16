@@ -349,6 +349,132 @@ def run_theme_pool_score(dry_run: bool = False, env: str = "online"):
 # Market Dashboard adapters
 # ---------------------------------------------------------------------------
 
+def run_data_gate(dry_run: bool = False, env: str = 'online', timeout_min: int = 60):
+    """
+    Wait for daily price data to land in trade_stock_daily.
+    Polls until MAX(trade_date) matches today's expected trade date.
+    """
+    if dry_run:
+        logger.info("[DRY-RUN] run_data_gate: would poll for daily data readiness (env=%s)", env)
+        return
+
+    from scheduler.readiness import wait_for_daily_data
+    from scheduler.task_logger import TaskLogger
+
+    with TaskLogger('data_gate', 'gate', env=env):
+        wait_for_daily_data(dry_run=False, timeout_min=timeout_min)
+        logger.info("[OK] data gate passed")
+
+
+def run_factor_calculation(dry_run: bool = False, env: str = 'online'):
+    """
+    Run all factor calculations after daily data is ready.
+    Includes: basic, extended, valuation, quality, technical factors.
+    """
+    if dry_run:
+        logger.info("[DRY-RUN] run_factor_calculation: would run all factor calculations (env=%s)", env)
+        return
+
+    from scheduler.task_logger import TaskLogger
+
+    # Basic factors
+    with TaskLogger('calc_basic_factor', 'factor', env=env):
+        from data_analyst.factors.basic_factor_calculator import calculate_and_save_factors
+        calculate_and_save_factors()
+        logger.info("[OK] basic factors done")
+
+    # Extended factors
+    with TaskLogger('calc_extended_factor', 'factor', env=env):
+        from data_analyst.factors.extended_factor_calculator import main as ext_main
+        ext_main()
+        logger.info("[OK] extended factors done")
+
+    # Valuation factors
+    try:
+        with TaskLogger('calc_valuation_factor', 'factor', env=env):
+            from data_analyst.factors.valuation_factor_calculator import main as val_main
+            val_main()
+            logger.info("[OK] valuation factors done")
+    except Exception as e:
+        logger.warning("[WARN] valuation factors failed (non-critical): %s", e)
+
+    # Quality factors
+    try:
+        with TaskLogger('calc_quality_factor', 'factor', env=env):
+            from data_analyst.factors.quality_factor_calculator import main as qual_main
+            qual_main()
+            logger.info("[OK] quality factors done")
+    except Exception as e:
+        logger.warning("[WARN] quality factors failed (non-critical): %s", e)
+
+    # Technical factors
+    try:
+        with TaskLogger('calc_technical_factor', 'factor', env=env):
+            from data_analyst.factors.factor_calculator import calculate_factors_for_date
+            calculate_factors_for_date()
+            logger.info("[OK] technical factors done")
+    except Exception as e:
+        logger.warning("[WARN] technical factors failed (non-critical): %s", e)
+
+
+def run_indicator_calculation(dry_run: bool = False, env: str = 'online'):
+    """
+    Run all indicator calculations after factors are ready.
+    Includes: RPS, technical indicators, SVD monitor.
+    """
+    if dry_run:
+        logger.info("[DRY-RUN] run_indicator_calculation: would run all indicator calculations (env=%s)", env)
+        return
+
+    from scheduler.task_logger import TaskLogger
+
+    # RPS
+    with TaskLogger('calc_rps', 'indicator', env=env):
+        from data_analyst.indicators.rps_calculator import rps_daily_update
+        rps_daily_update()
+        logger.info("[OK] RPS done")
+
+    # Technical indicators (MA/MACD/RSI/KDJ for all stocks)
+    run_technical_indicator_scan(dry_run=False, env=env)
+
+    # SVD market state monitor
+    try:
+        with TaskLogger('calc_svd_monitor', 'indicator', env=env):
+            from data_analyst.market_monitor.run_monitor import run_daily_monitor
+            run_daily_monitor()
+            logger.info("[OK] SVD monitor done")
+    except Exception as e:
+        logger.warning("[WARN] SVD monitor failed (non-critical): %s", e)
+
+
+def run_data_integrity_check(dry_run: bool = False, env: str = 'online'):
+    """Run daily data completeness check and save results to trade_data_health."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_data_integrity_check: would check data completeness (env=%s)", env)
+        return
+
+    from scheduler.task_logger import TaskLogger
+    from scheduler.check_data_completeness import run_check
+
+    with TaskLogger('check_data_completeness', 'maintenance', env=env):
+        result = run_check(env=env)
+        logger.info("[OK] data integrity check done: %s", result)
+
+
+def run_tech_scan(dry_run: bool = False, env: str = 'online'):
+    """Run daily technical scan for portfolio holdings."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_tech_scan: would scan portfolio holdings (env=%s)", env)
+        return
+
+    from scheduler.task_logger import TaskLogger
+    from strategist.tech_scan.run_scan import run_daily_scan
+
+    with TaskLogger('tech_scan', 'strategy', env=env):
+        report_path = run_daily_scan()
+        logger.info("[OK] tech scan done: %s", report_path)
+
+
 def run_dashboard_fetch(dry_run: bool = False, env: str = "online", trade_date: str = ""):
     """Fetch new market-level indicators for the dashboard (volume, advance/decline, etc.)."""
     if dry_run:

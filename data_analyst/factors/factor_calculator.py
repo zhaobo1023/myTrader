@@ -25,7 +25,6 @@ import logging
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from config.db import execute_query, get_connection
-from config.settings import settings
 from data_analyst.factors.factor_storage import (
     create_factor_table, batch_save_factors,
     load_factors, get_factor_dates, get_latest_factor_date

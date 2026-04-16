@@ -60,20 +60,39 @@ def get_existing_latest_dates() -> Dict[str, str]:
 
 
 def get_all_stock_codes() -> List[str]:
-    """获取全部 A 股代码列表（通过 AKShare）"""
+    """获取全部 A 股代码列表（通过 AKShare，东方财富优先，新浪备用）"""
     if not HAS_AKSHARE:
         print("错误: AKShare 未安装")
         return []
 
+    # 方式1: 东方财富实时行情（速度快，字段全）
     try:
-        # 获取 A 股列表
         df = ak.stock_zh_a_spot_em()
-        # 返回代码列表，格式如 '600519'
         codes = df['代码'].tolist()
+        print(f"  [东方财富] 获取 {len(codes)} 只股票")
         return codes
     except Exception as e:
-        print(f"获取股票列表失败: {e}")
-        return []
+        print(f"  [东方财富] 获取失败: {e}, 尝试备用源...")
+
+    # 方式2: 从数据库已有数据获取代码列表
+    try:
+        rows = execute_query(
+            "SELECT DISTINCT stock_code FROM trade_stock_daily"
+        )
+        if rows:
+            codes = []
+            for r in rows:
+                code = r['stock_code']
+                # 去掉 .SH/.SZ 后缀
+                if '.' in code:
+                    code = code.split('.')[0]
+                codes.append(code)
+            print(f"  [数据库] 获取 {len(codes)} 只股票")
+            return codes
+    except Exception as e:
+        print(f"  [数据库] 获取失败: {e}")
+
+    return []
 
 
 # ============================================================
@@ -132,8 +151,50 @@ def fetch_single_stock(stock_code: str, days: int = 30) -> pd.DataFrame:
     return df
 
 
+def _fetch_hist_eastmoney(stock_code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+    """东方财富数据源"""
+    df = ak.stock_zh_a_hist(
+        symbol=stock_code, period="daily",
+        start_date=start_date, end_date=end_date, adjust="qfq",
+    )
+    if df is None or df.empty:
+        return None
+    return df.rename(columns={
+        '日期': 'trade_date', '开盘': 'open', '收盘': 'close',
+        '最高': 'high', '最低': 'low', '成交量': 'volume',
+        '成交额': 'amount', '换手率': 'turnover_rate',
+    })
+
+
+def _fetch_hist_sina(stock_code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+    """新浪数据源（备用）"""
+    prefix = 'sh' if stock_code.startswith('6') else 'sz'
+    df = ak.stock_zh_a_daily(symbol=f"{prefix}{stock_code}", adjust="qfq")
+    if df is None or df.empty:
+        return None
+    df = df.rename(columns={
+        'date': 'trade_date', 'open': 'open', 'close': 'close',
+        'high': 'high', 'low': 'low', 'volume': 'volume',
+        'outstanding_share': '_drop1', 'turnover': 'turnover_rate',
+    })
+    if 'amount' not in df.columns:
+        df['amount'] = None
+    # 过滤日期范围
+    df['trade_date'] = pd.to_datetime(df['trade_date'])
+    start_dt = pd.to_datetime(start_date)
+    end_dt = pd.to_datetime(end_date)
+    df = df[(df['trade_date'] >= start_dt) & (df['trade_date'] <= end_dt)]
+    return df if not df.empty else None
+
+
+# 数据源失败计数，用于动态切换
+_eastmoney_failures = 0
+_EASTMONEY_FAIL_THRESHOLD = 5
+
+
 def download_and_save(stock_code: str, start_date: str) -> tuple:
-    """增量下载单只股票的日线数据并写入 MySQL"""
+    """增量下载单只股票的日线数据并写入 MySQL（东方财富优先，新浪备用）"""
+    global _eastmoney_failures
     if not HAS_AKSHARE:
         return stock_code, 0, "AKShare 未安装"
 
@@ -141,29 +202,24 @@ def download_and_save(stock_code: str, start_date: str) -> tuple:
         time.sleep(REQUEST_DELAY)  # 限流
 
         end_date = date.today().strftime('%Y%m%d')
+        df = None
 
-        df = ak.stock_zh_a_hist(
-            symbol=stock_code,
-            period="daily",
-            start_date=start_date,
-            end_date=end_date,
-            adjust="qfq"
-        )
+        # 东方财富失败过多时直接用新浪
+        if _eastmoney_failures < _EASTMONEY_FAIL_THRESHOLD:
+            try:
+                df = _fetch_hist_eastmoney(stock_code, start_date, end_date)
+            except Exception:
+                _eastmoney_failures += 1
+                df = None
+
+        if df is None:
+            try:
+                df = _fetch_hist_sina(stock_code, start_date, end_date)
+            except Exception:
+                pass
 
         if df is None or df.empty:
             return stock_code, 0, None
-
-        # 重命名列
-        df = df.rename(columns={
-            '日期': 'trade_date',
-            '开盘': 'open',
-            '收盘': 'close',
-            '最高': 'high',
-            '最低': 'low',
-            '成交量': 'volume',
-            '成交额': 'amount',
-            '换手率': 'turnover_rate'
-        })
 
         # 转换日期格式
         df['trade_date'] = pd.to_datetime(df['trade_date'])
