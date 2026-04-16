@@ -165,6 +165,18 @@ function AIBriefingCard() {
               {isHistorical ? `${briefing.date}` : 'cached'}
             </span>
           )}
+          {briefing?.data_quality && !isLoading && (
+            <span style={{
+              fontSize: '9px', fontWeight: 500, padding: '1px 6px',
+              borderRadius: '8px',
+              background: briefing.data_quality.sufficient ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+              color: briefing.data_quality.sufficient ? '#22c55e' : '#ef4444',
+            }}>
+              {briefing.data_quality.ok + (briefing.data_quality.warn || 0)}/{briefing.data_quality.total}
+              {(briefing.data_quality.stale > 0 || briefing.data_quality.missing > 0) &&
+                ` [${briefing.data_quality.stale + briefing.data_quality.missing}项异常]`}
+            </span>
+          )}
         </div>
         <button
           onClick={() => hasContent ? forceRefetch() : refetch()}
@@ -216,37 +228,66 @@ function AIBriefingCard() {
           </div>
         </div>
       )}
-      {hasContent && (
-        <div style={{ marginTop: '14px' }}>
-          <div
-            style={{
-              fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.85,
-              maxHeight: expanded ? 'none' : '160px',
-              overflow: 'hidden',
-              position: 'relative',
-            }}
-          >
-            <ReactMarkdown components={mdComponents}>{briefing.content}</ReactMarkdown>
-            {!expanded && (
+      {hasContent && (() => {
+        // Extract first-layer verdict for prominent display
+        const lines = (briefing.content as string).split('\n');
+        let verdict = '';
+        let inVerdict = false;
+        for (const line of lines) {
+          if (line.match(/^###?\s*一句话研判/)) { inVerdict = true; continue; }
+          if (inVerdict && line.startsWith('#')) break;
+          if (inVerdict && line.trim()) { verdict = line.trim(); break; }
+        }
+        const isBullish = verdict.includes('偏多');
+        const isBearish = verdict.includes('偏空');
+        const verdictColor = isBullish ? '#22c55e' : isBearish ? '#ef4444' : 'var(--text-secondary)';
+
+        return (
+          <div style={{ marginTop: '14px' }}>
+            {/* Verdict headline */}
+            {verdict && (
               <div style={{
-                position: 'absolute', bottom: 0, left: 0, right: 0, height: '50px',
-                background: 'linear-gradient(transparent, var(--bg-card) 70%)',
-                pointerEvents: 'none',
-              }} />
+                padding: '8px 14px', marginBottom: '10px',
+                background: isBullish ? 'rgba(34,197,94,0.06)' : isBearish ? 'rgba(239,68,68,0.06)' : 'var(--bg-elevated)',
+                border: `1px solid ${isBullish ? 'rgba(34,197,94,0.2)' : isBearish ? 'rgba(239,68,68,0.2)' : 'var(--border-subtle)'}`,
+                borderRadius: '8px',
+              }}>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: verdictColor, lineHeight: 1.6 }}>
+                  {verdict}
+                </span>
+              </div>
             )}
+            {/* Full content */}
+            <div
+              style={{
+                fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.85,
+                maxHeight: expanded ? 'none' : '120px',
+                overflow: 'hidden',
+                position: 'relative',
+              }}
+            >
+              <ReactMarkdown components={mdComponents}>{briefing.content}</ReactMarkdown>
+              {!expanded && (
+                <div style={{
+                  position: 'absolute', bottom: 0, left: 0, right: 0, height: '50px',
+                  background: 'linear-gradient(transparent, var(--bg-card) 70%)',
+                  pointerEvents: 'none',
+                }} />
+              )}
+            </div>
+            <button
+              onClick={() => setExpanded(!expanded)}
+              style={{
+                marginTop: '4px', fontSize: '11px', color: 'var(--accent)',
+                background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0',
+                fontWeight: 520,
+              }}
+            >
+              {expanded ? '收起' : '展开全文'}
+            </button>
           </div>
-          <button
-            onClick={() => setExpanded(!expanded)}
-            style={{
-              marginTop: '4px', fontSize: '11px', color: 'var(--accent)',
-              background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0',
-              fontWeight: 520,
-            }}
-          >
-            {expanded ? '收起' : '展开全文'}
-          </button>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

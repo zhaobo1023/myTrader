@@ -238,9 +238,111 @@ def fetch_limit_up_down(trade_date: str = None, env: str = 'online'):
                 seal_rate = 100.0 if limit_up > 0 else 0
             _save(date_str, 'seal_rate', round(seal_rate, 1), env=env)
 
+        # Persist individual stock details for briefing enrichment
+        _save_limit_stock_details(df_up, date_str, 'up', env=env)
+        _save_limit_stock_details(df_down, date_str, 'down', env=env)
+
         logger.info("Limit up: %d, Limit down: %d", limit_up, limit_down)
     except Exception as e:
         logger.error("fetch_limit_up_down failed: %s", e)
+
+
+def _save_limit_stock_details(df, trade_date: str, direction: str, env: str = 'online'):
+    """Persist limit-up/down stock details to trade_limit_stock_detail table."""
+    if df is None or df.empty:
+        return
+
+    # Ensure table exists (idempotent)
+    execute_update("""
+        CREATE TABLE IF NOT EXISTS trade_limit_stock_detail (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            trade_date DATE NOT NULL,
+            direction VARCHAR(10) NOT NULL,
+            stock_code VARCHAR(20) NOT NULL,
+            stock_name VARCHAR(50) NOT NULL,
+            industry VARCHAR(50),
+            change_pct DOUBLE,
+            amount DOUBLE,
+            consecutive INT DEFAULT 1,
+            first_limit_time VARCHAR(10),
+            UNIQUE KEY uk_date_dir_code (trade_date, direction, stock_code),
+            INDEX idx_limit_date (trade_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """, env=env)
+
+    # Map AKShare column names (may vary across versions)
+    col_map = {}
+    for c in df.columns:
+        cl = c.strip()
+        if cl == '代码':
+            col_map['code'] = c
+        elif cl == '名称':
+            col_map['name'] = c
+        elif cl in ('所属行业',):
+            col_map['industry'] = c
+        elif cl == '涨跌幅':
+            col_map['change_pct'] = c
+        elif cl == '成交额':
+            col_map['amount'] = c
+        elif cl in ('连板数', '连续跌停'):
+            col_map['consecutive'] = c
+        elif cl == '首次封板时间':
+            col_map['first_limit_time'] = c
+
+    if 'code' not in col_map or 'name' not in col_map:
+        logger.warning("Cannot find code/name columns in limit %s df, cols=%s", direction, list(df.columns))
+        return
+
+    rows = []
+    for _, row in df.iterrows():
+        code = str(row[col_map['code']]).strip()
+        name = str(row[col_map['name']]).strip()
+        industry = str(row.get(col_map.get('industry', ''), '')).strip() or None
+        try:
+            change_pct = float(row[col_map['change_pct']]) if 'change_pct' in col_map else None
+        except (ValueError, TypeError):
+            change_pct = None
+        try:
+            amount = float(row[col_map['amount']]) if 'amount' in col_map else None
+        except (ValueError, TypeError):
+            amount = None
+        try:
+            consecutive = int(row[col_map['consecutive']]) if 'consecutive' in col_map else 1
+        except (ValueError, TypeError):
+            consecutive = 1
+        first_time = str(row.get(col_map.get('first_limit_time', ''), '')).strip() or None
+
+        rows.append((trade_date, direction, code, name, industry,
+                      change_pct, amount, consecutive, first_time))
+
+    if not rows:
+        return
+
+    sql = """
+        INSERT INTO trade_limit_stock_detail
+            (trade_date, direction, stock_code, stock_name, industry,
+             change_pct, amount, consecutive, first_limit_time)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            stock_name = VALUES(stock_name),
+            industry = VALUES(industry),
+            change_pct = VALUES(change_pct),
+            amount = VALUES(amount),
+            consecutive = VALUES(consecutive),
+            first_limit_time = VALUES(first_limit_time)
+    """
+    from config.db import get_connection
+    conn = get_connection(env)
+    try:
+        cur = conn.cursor()
+        cur.executemany(sql, rows)
+        conn.commit()
+        cur.close()
+        logger.info("Saved %d limit-%s stock details for %s", len(rows), direction, trade_date)
+    except Exception as e:
+        logger.error("Failed to save limit-%s details: %s", direction, e)
+    finally:
+        conn.close()
 
 
 def fetch_margin_data(trade_date: str = None, env: str = 'online'):

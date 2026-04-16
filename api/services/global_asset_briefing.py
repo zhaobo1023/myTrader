@@ -1,16 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-Global Asset Briefing — LLM-generated market commentary.
+Global Asset Briefing v2 -- layered LLM-generated market commentary.
 
 Two daily sessions:
 - Morning (08:30): focus on overnight US/global markets before A-share open
 - Evening (18:00): incorporate A-share close, full-picture wrap-up
 
-Data is read from macro_data table. LLM generates a structured briefing.
-Results are cached in macro_data with indicator='briefing_morning'/'briefing_evening'.
+Data sources:
+1. macro_data table (global assets, bonds, FX, commodities)
+2. A-share dashboard signals (temperature/trend/sentiment/style/stock-bond/macro)
+3. ETF log bias (industry proxy via 12 tracked ETFs)
+4. Limit-up/down stock details (trade_limit_stock_detail)
+5. Fear & greed index (trade_fear_index)
+
+Results cached in trade_briefing table.
 """
 import json
 import logging
+from collections import defaultdict
 from datetime import date, timedelta
 from typing import Optional
 
@@ -20,67 +27,79 @@ from api.services.llm_client_factory import get_llm_client
 logger = logging.getLogger('myTrader.global_briefing')
 
 # ---------------------------------------------------------------------------
-# Prompt templates
+# Prompt templates (v2 -- layered structure)
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """你是一位专业的A股市场分析师。
-请基于以下A股大盘信号和全球资产数据进行简明解读。
+SYSTEM_PROMPT = """你是一位专业的A股投资顾问，为个人投资者提供每日市场研判。
 
-要求：
-- 使用简洁专业的中文，重点服务A股投资者
-- A股大盘信号（市场温度/趋势/情绪/风格/股债/宏观）是核心，全球资产是辅助参考
-- 标注关键风险信号和机会信号
-- 不使用任何emoji字符
-- 用纯文本标记如[风险]、[机会]、[关注]等
-- 输出格式为Markdown，控制在800字以内
+## 输出格式（强制5层结构，每层必须使用对应的Markdown标题）
+
+### 一句话研判
+一句话给出市场立场。格式: **偏多/偏空/中性（高/中/低置信）| 建议仓位 X 成**
+
+### 核心数据速览
+用要点列表列出3-5个最关键的数据变动（带具体数字），不要重复原始数据表。
+
+### 行业冷热
+基于ETF偏离度数据，指出哪些板块过热需警惕、哪些突破可关注、哪些滞涨需回避。
+用2-3句话概括，不要逐个ETF复述。
+
+### 异动与事件
+基于涨跌停明细和重大新闻，提炼2-3条最值得关注的个股或事件线索。
+标注连板王、行业聚集效应等。无明细数据时标注"[数据不足]"。
+
+### 风险提示
+列出1-2条当前最大风险，给出明确的仓位和风格建议。
 
 ## 规则（强制，不得违反）
-1. 对于标记为 [MISSING] 或 [STALE] 的指标，你必须声明"数据不可用"或"数据滞后（截至XX日）"，绝不可编造数值
+1. 对标记为 [MISSING] 或 [STALE] 的指标，声明"数据不可用"或"数据滞后"，绝不可编造数值
 2. 绝不可编造具体数字（成交量、涨跌家数、指数涨跌幅、资金流向）——如果数据中没有提供，就不要写
 3. 如果某个维度的所有核心指标均缺失，该维度输出"[数据不足]"
-4. 如果涨跌家数或涨停跌停数据缺失，不要用"个股分化"等模糊措辞替代，直接说明数据缺失
-5. AH股溢价指数是点位值（越高表示A股相对H股溢价越大），正常范围约10-15"""
+4. 不使用任何emoji字符，用纯文本标记如[风险]、[机会]、[关注]
+5. AH股溢价指数是点位值（越高表示A股相对H股溢价越大），正常范围约10-15
+6. 全文控制在600字以内，宁简勿繁"""
 
 MORNING_PROMPT = """## 盘前速递（{date}）
 
-以下是A股大盘信号和昨夜全球资产数据，请给出**开盘前**简明解读：
-
-### 一、A股大盘信号（前一交易日）
+### 数据区1: A股大盘信号（前一交易日）
 {dashboard_snapshot}
 
-### 二、全球资产（隔夜）
+### 数据区2: 全球资产（隔夜）
 {data_snapshot}
 
-请从以下维度解读：
-1. **A股市场状态**：基于温度/趋势/情绪信号，判断当前所处阶段
-2. **外围影响**：美股/美债/商品对A股今日可能的映射
-3. **风格与资金**：大小盘/成长价值偏好、北向资金方向
-4. **风险提示**：当前最需警惕的风险因素
-5. **操作建议**：今日整体偏多/偏空/中性，仓位建议
-"""
+### 数据区3: ETF行业偏离度
+{etf_log_bias_snapshot}
+
+### 数据区4: 涨跌停明细（前一交易日）
+{limit_stock_snapshot}
+
+### 数据区5: 恐贪指数
+{fear_greed_snapshot}
+
+请按5层结构输出盘前解读。"""
 
 EVENING_PROMPT = """## 收盘复盘（{date}）
 
-以下是今日A股大盘信号和全球资产数据，请给出**收盘后**全面复盘：
-
-### 一、A股大盘信号（今日）
+### 数据区1: A股大盘信号（今日）
 {dashboard_snapshot}
 
-### 二、全球资产
+### 数据区2: 全球资产
 {data_snapshot}
 
-请从以下维度解读：
-1. **今日行情回顾**：结合温度/趋势/情绪信号，概括今日市场特征
-2. **资金面分析**：北向资金、融资余额、成交量变化的含义
-3. **风格轮动**：大小盘/成长价值表现，轮动方向判断
-4. **股债性价比**：当前股债利差水平的配置含义
-5. **外围联动**：全球资产对明日A股的潜在影响
-6. **明日展望**：需关注的风险点和机会，仓位建议
-"""
+### 数据区3: ETF行业偏离度
+{etf_log_bias_snapshot}
+
+### 数据区4: 涨跌停明细（今日）
+{limit_stock_snapshot}
+
+### 数据区5: 恐贪指数
+{fear_greed_snapshot}
+
+请按5层结构输出收盘复盘。"""
 
 
 # ---------------------------------------------------------------------------
-# Data collection
+# Data collection — macro indicators
 # ---------------------------------------------------------------------------
 
 # Morning session focuses on global (overnight) data
@@ -139,7 +158,7 @@ def _collect_data_snapshot(
 
     Returns:
         (snapshot_text, freshness_stats) where freshness_stats =
-        {'total': int, 'ok': int, 'stale': int, 'missing': int}
+        {'total': int, 'ok': int, 'warn': int, 'stale': int, 'missing': int}
     """
     if target_date is None:
         target_date = date.today()
@@ -323,17 +342,174 @@ def _collect_dashboard_snapshot() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Data collection — ETF log bias (industry proxy)
+# ---------------------------------------------------------------------------
+
+ETF_GROUPS = {
+    '科技成长': ['159995.SZ', '515050.SH', '516160.SH', '515790.SH', '159941.SZ'],
+    '消费医药': ['512690.SH', '512010.SH'],
+    '周期金融': ['512880.SH', '515220.SH', '518880.SH'],
+    '宽基指数': ['510300.SH', '588000.SH'],
+}
+
+STATE_CN = {
+    'overheat': '过热', 'breakout': '突破', 'normal': '正常',
+    'stall': '滞涨', 'pullback': '回调', 'cooldown': '冷却',
+}
+
+
+def _collect_etf_log_bias_snapshot() -> str:
+    """Collect latest ETF log bias data grouped by sector."""
+    try:
+        from api.services.log_bias_service import get_latest
+        data = get_latest()
+    except Exception as e:
+        logger.warning('Failed to get ETF log bias: %s', e)
+        return '(ETF偏离度数据不可用)'
+
+    if not data:
+        return '(ETF偏离度数据不可用)'
+
+    # Build lookup
+    lookup = {d['ts_code']: d for d in data}
+    trade_date = data[0].get('trade_date', '?') if data else '?'
+
+    lines = ['数据日期: {}'.format(trade_date)]
+    lines.append('| 分组 | ETF | 偏离度(%) | 状态 |')
+    lines.append('|------|-----|-----------|------|')
+
+    for group_name, codes in ETF_GROUPS.items():
+        for code in codes:
+            d = lookup.get(code)
+            if not d:
+                continue
+            bias = d.get('log_bias')
+            bias_str = '{:+.1f}'.format(bias) if bias is not None else '--'
+            state = STATE_CN.get(d.get('signal_state', 'normal'), d.get('signal_state', '-'))
+            lines.append('| {} | {} | {} | {} |'.format(
+                group_name, d.get('name', code), bias_str, state))
+
+    return '\n'.join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Data collection — limit-up/down stock details
+# ---------------------------------------------------------------------------
+
+def _collect_limit_stock_snapshot(trade_date: str = None) -> str:
+    """Collect limit-up/down stock details grouped by industry."""
+    if trade_date is None:
+        # Use the latest available date from the detail table
+        rows = execute_query(
+            "SELECT MAX(trade_date) AS d FROM trade_limit_stock_detail",
+            env='online',
+        )
+        if rows and rows[0]['d']:
+            trade_date = str(rows[0]['d'])
+        else:
+            return '(涨跌停明细数据不可用)'
+
+    result_lines = ['数据日期: {}'.format(trade_date)]
+
+    for direction, label in [('up', '涨停'), ('down', '跌停')]:
+        rows = execute_query(
+            """SELECT stock_code, stock_name, industry, change_pct,
+                      consecutive, first_limit_time
+               FROM trade_limit_stock_detail
+               WHERE trade_date = %s AND direction = %s
+               ORDER BY consecutive DESC, amount DESC""",
+            (trade_date, direction),
+            env='online',
+        )
+        if not rows:
+            result_lines.append('{}: 无数据'.format(label))
+            continue
+
+        total = len(rows)
+        # Find leader (highest consecutive)
+        leader = rows[0]
+        leader_text = ''
+        if leader.get('consecutive', 1) >= 2:
+            leader_text = ' | 连板王: {}({}板)'.format(
+                leader['stock_name'], leader['consecutive'])
+
+        # Group by industry
+        by_industry = defaultdict(list)
+        for r in rows:
+            ind = r.get('industry') or '其他'
+            by_industry[ind].append(r['stock_name'])
+
+        # Top industries by count
+        sorted_inds = sorted(by_industry.items(), key=lambda x: -len(x[1]))
+        industry_parts = []
+        for ind_name, stocks in sorted_inds[:6]:
+            stock_names = ', '.join(stocks[:3])
+            if len(stocks) > 3:
+                stock_names += '等{}只'.format(len(stocks))
+            industry_parts.append('{}: {}'.format(ind_name, stock_names))
+
+        result_lines.append('{} {} 只{} | {}'.format(
+            label, total, leader_text, ' | '.join(industry_parts)))
+
+    return '\n'.join(result_lines)
+
+
+# ---------------------------------------------------------------------------
+# Data collection — fear & greed index
+# ---------------------------------------------------------------------------
+
+def _collect_fear_greed_snapshot() -> str:
+    """Collect latest fear & greed index data."""
+    try:
+        rows = execute_query(
+            """SELECT trade_date, fear_greed_score, market_regime,
+                      vix, vix_level, risk_alert
+               FROM trade_fear_index
+               ORDER BY trade_date DESC LIMIT 1""",
+            env='online',
+        )
+    except Exception as e:
+        logger.warning('Failed to get fear/greed index: %s', e)
+        return '(恐贪指数数据不可用)'
+
+    if not rows:
+        return '(恐贪指数数据不可用)'
+
+    r = rows[0]
+    regime_cn = {
+        'extreme_fear': '极度恐慌', 'fear': '恐慌', 'neutral': '中性',
+        'greed': '贪婪', 'extreme_greed': '极度贪婪',
+    }
+    score = r.get('fear_greed_score', '-')
+    regime = regime_cn.get(r.get('market_regime', ''), r.get('market_regime', '-'))
+    vix = r.get('vix', '-')
+    vix_level = r.get('vix_level', '-')
+    risk = r.get('risk_alert') or '无'
+    td = str(r['trade_date']) if r.get('trade_date') else '?'
+
+    return '日期: {} | 恐贪指数: {}/100 ({}) | VIX: {} ({}) | 风险提示: {}'.format(
+        td, score, regime, vix, vix_level, risk)
+
+
+# ---------------------------------------------------------------------------
 # Persistence helpers
 # ---------------------------------------------------------------------------
 
-def _load_briefing(session: str, brief_date: str) -> Optional[str]:
-    """Load cached briefing content from DB for the given session + date."""
+def _load_briefing(session: str, brief_date: str) -> Optional[dict]:
+    """Load cached briefing from DB for the given session + date."""
     rows = execute_query(
-        "SELECT content FROM trade_briefing WHERE session = %s AND brief_date = %s",
+        "SELECT content, structured_data FROM trade_briefing WHERE session = %s AND brief_date = %s",
         (session, brief_date),
     )
     if rows:
-        return rows[0]['content']
+        structured = None
+        raw = rows[0].get('structured_data')
+        if raw:
+            try:
+                structured = json.loads(raw) if isinstance(raw, str) else raw
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {'content': rows[0]['content'], 'structured_data': structured}
     return None
 
 
@@ -348,13 +524,17 @@ def _load_latest_briefing(session: str) -> Optional[dict]:
     return None
 
 
-def _save_briefing(session: str, brief_date: str, content: str) -> None:
+def _save_briefing(session: str, brief_date: str, content: str,
+                   structured_data: dict = None) -> None:
     """Persist generated briefing to DB (upsert by session + date)."""
+    sd_json = json.dumps(structured_data, ensure_ascii=False) if structured_data else None
     execute_update(
-        """INSERT INTO trade_briefing (session, brief_date, content)
-           VALUES (%s, %s, %s)
-           ON DUPLICATE KEY UPDATE content = VALUES(content), created_at = NOW()""",
-        (session, brief_date, content),
+        """INSERT INTO trade_briefing (session, brief_date, content, structured_data)
+           VALUES (%s, %s, %s, %s)
+           ON DUPLICATE KEY UPDATE content = VALUES(content),
+                                    structured_data = VALUES(structured_data),
+                                    created_at = NOW()""",
+        (session, brief_date, content, sd_json),
     )
     logger.info('[briefing] Saved %s briefing for %s to DB', session, brief_date)
 
@@ -399,14 +579,25 @@ async def generate_briefing(session: str = 'morning') -> dict:
 
     Returns:
         {'session': str, 'date': str, 'content': str, 'cached': bool,
-         'data_quality': dict}
+         'data_quality': dict, 'structured_data': dict}
     """
     today_str = date.today().strftime('%Y-%m-%d')
 
-    # Collect data
+    # --- 1. Collect macro data ---
     indicators = MORNING_INDICATORS if session == 'morning' else EVENING_INDICATORS
     snapshot, freshness_stats = _collect_data_snapshot(indicators)
+
+    # --- 2. Collect A-share dashboard ---
     dashboard_snapshot = _collect_dashboard_snapshot()
+
+    # --- 3. Collect ETF log bias ---
+    etf_log_bias_snapshot = _collect_etf_log_bias_snapshot()
+
+    # --- 4. Collect limit-up/down details ---
+    limit_stock_snapshot = _collect_limit_stock_snapshot()
+
+    # --- 5. Collect fear & greed ---
+    fear_greed_snapshot = _collect_fear_greed_snapshot()
 
     # Build data_quality info
     quality_ok, quality_msg = _check_overall_freshness(freshness_stats)
@@ -414,6 +605,15 @@ async def generate_briefing(session: str = 'morning') -> dict:
         **freshness_stats,
         'sufficient': quality_ok,
         'message': quality_msg,
+    }
+
+    # Build structured_data for persistence
+    structured_data = {
+        'version': 2,
+        'freshness': freshness_stats,
+        'etf_log_bias_text': etf_log_bias_snapshot,
+        'limit_stock_text': limit_stock_snapshot,
+        'fear_greed_text': fear_greed_snapshot,
     }
 
     # Abort if data quality is too poor
@@ -428,9 +628,23 @@ async def generate_briefing(session: str = 'morning') -> dict:
         }
 
     if session == 'morning':
-        prompt = MORNING_PROMPT.format(date=today_str, data_snapshot=snapshot, dashboard_snapshot=dashboard_snapshot)
+        prompt = MORNING_PROMPT.format(
+            date=today_str,
+            data_snapshot=snapshot,
+            dashboard_snapshot=dashboard_snapshot,
+            etf_log_bias_snapshot=etf_log_bias_snapshot,
+            limit_stock_snapshot=limit_stock_snapshot,
+            fear_greed_snapshot=fear_greed_snapshot,
+        )
     else:
-        prompt = EVENING_PROMPT.format(date=today_str, data_snapshot=snapshot, dashboard_snapshot=dashboard_snapshot)
+        prompt = EVENING_PROMPT.format(
+            date=today_str,
+            data_snapshot=snapshot,
+            dashboard_snapshot=dashboard_snapshot,
+            etf_log_bias_snapshot=etf_log_bias_snapshot,
+            limit_stock_snapshot=limit_stock_snapshot,
+            fear_greed_snapshot=fear_greed_snapshot,
+        )
 
     # Call LLM
     llm = get_llm_client()
@@ -438,14 +652,14 @@ async def generate_briefing(session: str = 'morning') -> dict:
         prompt=prompt,
         system_prompt=SYSTEM_PROMPT,
         temperature=0.4,
-        max_tokens=2000,
+        max_tokens=2500,
     )
 
     logger.info('[briefing] Generated %s briefing for %s (%d chars)', session, today_str, len(content))
 
     # Persist to DB
     try:
-        _save_briefing(session, today_str, content)
+        _save_briefing(session, today_str, content, structured_data=structured_data)
     except Exception as e:
         logger.warning('[briefing] Failed to save to DB: %s', e)
 
@@ -455,6 +669,7 @@ async def generate_briefing(session: str = 'morning') -> dict:
         'content': content,
         'cached': False,
         'data_quality': data_quality,
+        'structured_data': structured_data,
     }
 
 
@@ -482,8 +697,9 @@ async def get_latest_briefing(session: str = 'morning', force: bool = False) -> 
                 return {
                     'session': session,
                     'date': today_str,
-                    'content': cached,
+                    'content': cached['content'],
                     'cached': True,
+                    'structured_data': cached.get('structured_data'),
                 }
         except Exception as e:
             logger.warning('[briefing] Failed to load cached briefing: %s', e)
