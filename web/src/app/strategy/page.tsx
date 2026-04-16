@@ -224,8 +224,12 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
   const todayRun = card.today_run;
 
   const triggerMutation = useMutation({
-    mutationFn: (force: boolean = false): Promise<any> =>
-      apiClient.post(`/api/strategy/preset/${card.meta.key}/trigger?force=${force}`).then((r) => r.data),
+    mutationFn: ({ force = false, runDate }: { force?: boolean; runDate?: string } = {}): Promise<any> => {
+      const params = new URLSearchParams();
+      if (force) params.set('force', 'true');
+      if (runDate) params.set('run_date', runDate);
+      return apiClient.post(`/api/strategy/preset/${card.meta.key}/trigger?${params}`).then((r) => r.data);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['preset-strategies'] });
     },
@@ -267,7 +271,7 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
 
     if (!todayRun) {
       return (
-        <button data-track="strategy_trigger" onClick={() => triggerMutation.mutate(false)} style={btnStyle('accent')}>
+        <button data-track="strategy_trigger" onClick={() => triggerMutation.mutate({})} style={btnStyle('accent')}>
           触发执行
         </button>
       );
@@ -283,7 +287,7 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
           </button>
           <button
             data-track="strategy_force_trigger"
-            onClick={() => triggerMutation.mutate(true)}
+            onClick={() => triggerMutation.mutate({ force: true })}
             style={{
               ...btnStyle('gray'),
               fontSize: '12px',
@@ -308,7 +312,7 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
 
     if (status === 'failed') {
       return (
-        <button onClick={() => triggerMutation.mutate(false)} style={btnStyle('orange')}>
+        <button onClick={() => triggerMutation.mutate({})} style={btnStyle('orange')}>
           重新触发
         </button>
       );
@@ -476,22 +480,46 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                       </>
                     )}
                     <td style={{ padding: '8px 12px', textAlign: 'right' }}>
-                      {run.status === 'done' && (
-                        <button
-                          onClick={() => toggleExpand(run.id)}
-                          style={{
-                            fontSize: '11px',
-                            color: expandedRunId === run.id ? 'var(--text-muted)' : 'var(--accent)',
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            padding: '2px 6px',
-                            borderRadius: '4px',
-                          }}
-                        >
-                          {expandedRunId === run.id ? '收起' : '展开'}
-                        </button>
-                      )}
+                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                        {(run.status === 'done' || run.status === 'failed') && (
+                          <button
+                            onClick={() => {
+                              if (run.status === 'done') {
+                                if (!confirm(`确认重算 ${run.run_date} 的数据？`)) return;
+                              }
+                              triggerMutation.mutate({ force: true, runDate: run.run_date });
+                            }}
+                            disabled={triggerMutation.isPending}
+                            style={{
+                              fontSize: '11px',
+                              color: run.status === 'failed' ? '#e5534b' : 'var(--text-muted)',
+                              background: 'none',
+                              border: 'none',
+                              cursor: triggerMutation.isPending ? 'wait' : 'pointer',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                            }}
+                          >
+                            重算
+                          </button>
+                        )}
+                        {run.status === 'done' && (
+                          <button
+                            onClick={() => toggleExpand(run.id)}
+                            style={{
+                              fontSize: '11px',
+                              color: expandedRunId === run.id ? 'var(--text-muted)' : 'var(--accent)',
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                            }}
+                          >
+                            {expandedRunId === run.id ? '收起' : '展开'}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
 

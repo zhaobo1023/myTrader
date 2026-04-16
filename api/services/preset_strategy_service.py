@@ -163,12 +163,12 @@ def get_run_detail(run_id: int) -> Optional[dict]:
     return summary
 
 
-def trigger_strategy_run(strategy_key: str, force: bool = False) -> dict:
+def trigger_strategy_run(strategy_key: str, force: bool = False, run_date: str = None) -> dict:
     """
-    Trigger a new preset strategy run for the latest trade date.
+    Trigger a new preset strategy run for a given trade date.
 
     Rules:
-    - Uses latest trade date from database (not date.today())
+    - Uses run_date if provided, otherwise latest trade date from database
     - status pending/running (not timed out) -> 409 already in progress
     - status done -> 409 already done for this trade date (unless force=True)
     - status running but timed out -> mark failed, allow re-trigger
@@ -178,20 +178,30 @@ def trigger_strategy_run(strategy_key: str, force: bool = False) -> dict:
     Args:
         strategy_key: Strategy identifier (e.g., 'microcap_pure_mv')
         force: If True, allow re-running even if already done
+        run_date: Specific trade date (YYYY-MM-DD). If None, uses latest.
     """
     # Validate strategy key
     valid_keys = {s['key'] for s in PRESET_STRATEGIES}
     if strategy_key not in valid_keys:
         raise HTTPException(status_code=404, detail=f'Strategy {strategy_key!r} not found')
 
-    # Get latest trade date from database
-    trade_date_rows = execute_query(
-        "SELECT MAX(trade_date) AS max_date FROM trade_stock_daily",
-        env='online',
-    )
-    if not trade_date_rows or not trade_date_rows[0].get('max_date'):
-        raise HTTPException(status_code=500, detail='无法获取最新交易日数据')
-    trade_date_str = str(trade_date_rows[0]['max_date'])
+    if run_date:
+        # Validate format
+        try:
+            from datetime import datetime as _dt
+            _dt.strptime(run_date, '%Y-%m-%d')
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f'日期格式错误: {run_date}，应为 YYYY-MM-DD')
+        trade_date_str = run_date
+    else:
+        # Get latest trade date from database
+        trade_date_rows = execute_query(
+            "SELECT MAX(trade_date) AS max_date FROM trade_stock_daily",
+            env='online',
+        )
+        if not trade_date_rows or not trade_date_rows[0].get('max_date'):
+            raise HTTPException(status_code=500, detail='无法获取最新交易日数据')
+        trade_date_str = str(trade_date_rows[0]['max_date'])
 
     rows = execute_query(
         """

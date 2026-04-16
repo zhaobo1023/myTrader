@@ -141,9 +141,10 @@ async def list_preset_strategies():
 async def trigger_preset_strategy(
     key: str,
     force: bool = Query(False, description='Force re-run even if already done today'),
+    run_date: str = Query(None, description='Specific trade date to (re)run, e.g. 2026-04-15'),
 ):
-    """Trigger today's run for a preset strategy."""
-    return preset_strategy_service.trigger_strategy_run(key, force=force)
+    """Trigger a run for a preset strategy. Defaults to latest trade date."""
+    return preset_strategy_service.trigger_strategy_run(key, force=force, run_date=run_date)
 
 
 @router.get('/preset/{key}/runs/{run_id}', response_model=PresetRunDetail)
