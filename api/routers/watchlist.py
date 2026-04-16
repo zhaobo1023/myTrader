@@ -6,8 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 
 from api.dependencies import get_db
-from api.middleware.auth import get_current_user
-from api.models.user import User
 from api.models.watchlist import UserWatchlist
 from api.schemas.watchlist import WatchlistAddRequest, WatchlistItem, WatchlistResponse
 
@@ -17,13 +15,11 @@ router = APIRouter(prefix='/api/watchlist', tags=['watchlist'])
 
 @router.get('', response_model=WatchlistResponse)
 async def list_watchlist(
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get current user's watchlist"""
+    """Get shared watchlist (no auth required)"""
     result = await db.execute(
         select(UserWatchlist)
-        .where(UserWatchlist.user_id == current_user.id)
         .order_by(UserWatchlist.added_at.desc())
     )
     items = result.scalars().all()
@@ -66,16 +62,14 @@ async def add_to_watchlist(
 @router.delete('/{stock_code}', status_code=status.HTTP_204_NO_CONTENT)
 async def remove_from_watchlist(
     stock_code: str,
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Remove stock from watchlist"""
+    """Remove stock from watchlist (no auth required)"""
     result = await db.execute(
         delete(UserWatchlist).where(
-            UserWatchlist.user_id == current_user.id,
             UserWatchlist.stock_code == stock_code,
         )
     )
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail=f'{stock_code} not in watchlist')
-    logger.info('[WATCHLIST] user=%s removed stock=%s', current_user.id, stock_code)
+    logger.info('[WATCHLIST] removed stock=%s', stock_code)
