@@ -25,8 +25,12 @@ from config.db import execute_query, execute_update
 
 logger = logging.getLogger('myTrader.article_digest')
 
-# Default path for exported articles (on server)
-DEFAULT_EXPORT_DIR = '/root/app/output/article_export'
+# Default path for exported articles
+# Docker container maps ./output -> /app/output, server uses /root/app/output
+DEFAULT_EXPORT_DIR = os.getenv(
+    'ARTICLE_EXPORT_DIR',
+    '/app/output/article_export' if os.path.exists('/app/output') else '/root/app/output/article_export',
+)
 
 
 # ---------------------------------------------------------------------------
