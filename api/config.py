@@ -80,6 +80,13 @@ class Settings(BaseSettings):
     celery_broker_url: str = Field(default='redis://localhost:6379/1', alias='CELERY_BROKER_URL')
     celery_result_backend: str = Field(default='redis://localhost:6379/2', alias='CELERY_RESULT_BACKEND')
 
+    # ============================================================
+    # Feishu (Lark) App credentials for document publishing
+    # ============================================================
+    FEISHU_APP_ID: str = Field(default='', alias='FEISHU_APP_ID')
+    FEISHU_APP_SECRET: str = Field(default='', alias='FEISHU_APP_SECRET')
+    FEISHU_FOLDER_TOKEN: str = Field(default='', alias='FEISHU_FOLDER_TOKEN')
+
     @property
     def database_url(self) -> str:
         """Build SQLAlchemy async database URL based on current env"""

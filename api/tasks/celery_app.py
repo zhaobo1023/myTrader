@@ -275,9 +275,9 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=21, minute=30, day_of_week='1-5'),
     },
 
-    # 23:00 - 精选观点日报 (Cubox文章摘要 -> 汇总报告 -> 飞书)
+    # 21:30 - 精选观点日报 (wechat2rss文章摘要 -> 交叉验证报告 -> 飞书)
     'nightly-curated-digest': {
         'task': 'run_nightly_digest',
-        'schedule': crontab(hour=23, minute=0, day_of_week='1-5'),
+        'schedule': crontab(hour=21, minute=30, day_of_week='1-5'),
     },
 }
