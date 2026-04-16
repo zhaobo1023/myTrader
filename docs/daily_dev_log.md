@@ -2,6 +2,91 @@
 
 ---
 
+## 2026-04-16 (续) 精选观点日报 / Celery 统一调度 / 晨报复盘优化
+
+### 今日新增工作
+
+#### 5. 精选观点日报 (wechat2rss -> LLM -> 飞书)
+
+**背景：** 订阅了 29 个微信公众号，每日产出大量投资相关文章。需要自动筛选、提炼、生成高价值精选报告。
+
+**数据流：**
+```
+wechat2rss (res.db) -> export脚本 (规则预筛) -> JSON文件
+  -> Stage A: LLM粗筛 (分类+评级A/B/C/D+一句话) -> A/B级文章
+  -> Stage B: LLM深度提炼 (事实/观点分离, 结构化JSON) -> DB
+  -> Report: 交叉验证+去重+价值排序 -> 飞书文档(公开可读) + Bot卡片
+```
+
+| 组件 | 说明 |
+|------|------|
+| `scripts/export_wechat_articles.py` | 从 res.db 导出过去24h文章, 规则过滤(>1500字/标题黑名单/每源限3篇) |
+| `api/services/article_digest_service.py` | 两阶段 LLM 筛选 + 结构化报告生成 |
+| `api/tasks/data_pipeline_tasks.py` | Celery task wrapper, 包含 run_nightly_digest |
+| `api/services/feishu_doc_publisher.py` | 飞书文档发布, 自动设置互联网分享可见 |
+
+**报告结构（按内容维度分模块）：**
+- 宏观与政策 -- 宏观数据、地缘政治、贸易相关
+- 行业与公司 -- 行业趋势、公司基本面、财报数据
+- 市场策略 -- 择时、仓位、风格切换
+- 风险提示 -- 汇总去重
+- 编辑点评 -- 2-3句话主线判断
+- 推荐深入阅读 -- 1-2篇原文链接
+
+**首次运行结果：** 30篇文章 -> 7A+15B -> 22篇深度提取 -> 1份报告, 0错误
+
+---
+
+#### 6. Celery Beat 统一调度 (35 任务)
+
+**背景：** 项目存在两套调度系统 -- Celery Beat (20任务, 生产活跃) 和 YAML Scheduler (30+任务, 未激活)。统一到 Celery Beat 作为唯一生产调度入口。
+
+| 修复项 | 修复前 | 修复后 |
+|--------|--------|--------|
+| 恐慌指数过度执行 | 每小时 = 24次/天 | 3次/天 (08:00/12:00/18:30) |
+| 16:30 三任务冲突 | precheck + watchlist + sim_pool 同时 | 16:25/16:30/16:35 错开 |
+| 5个 adapter 函数缺失 | Celery引用但不存在 | run_data_gate/factor_calc/indicator_calc/integrity_check/tech_scan |
+| 15个 YAML 任务未纳入 | 只在 YAML 中定义 | 全部加入 beat_schedule |
+
+**依赖链（时间间隔保证）：**
+```
+data_gate (18:00) -> factor_calc (18:30) -> indicator_calc (19:30)
+  -> preset_strategies (20:10) -> theme_pool_score (20:40) -> dashboard_compute (21:00)
+```
+重任务间隔 30-40min, 轻任务间隔 5min, 避免 3.6GB 服务器 OOM。
+
+**详细文档：** `docs/celery_schedule_consolidated.md`
+
+---
+
+#### 7. 晨报/复盘 Prompt 优化
+
+| 改动 | 说明 |
+|------|------|
+| 拆分 SYSTEM_PROMPT | 晨报侧重"今日机会预判", 复盘侧重"盘面回顾+隔夜风险评估" |
+| 新增数据健康报告 | `api/services/daily_health_report.py`, 检查5张核心表数据质量 |
+| API 端点 | `POST /publish-briefing`, `GET/POST /data-health` |
+
+---
+
+### 涉及文件
+
+| 文件 | 类型 | 说明 |
+|------|------|------|
+| `api/services/article_digest_service.py` | 新建 | 两阶段 LLM 文章摘要 + 精选报告 |
+| `api/services/feishu_doc_publisher.py` | 新建 | 飞书文档发布(自动公开权限) |
+| `api/services/daily_health_report.py` | 新建 | 数据健康日报 |
+| `api/tasks/data_pipeline_tasks.py` | 新建 | 13个 Celery task wrapper |
+| `api/tasks/briefing_tasks.py` | 新建 | 晨报/复盘 Celery tasks |
+| `api/tasks/celery_app.py` | 重写 | 统一 35 任务 beat_schedule |
+| `scheduler/adapters.py` | 修改 | 新增 5 个 adapter 函数 |
+| `api/services/global_asset_briefing.py` | 修改 | 晨报/复盘 prompt 拆分 |
+| `api/routers/market.py` | 修改 | 新增 API 端点 |
+| `scripts/export_wechat_articles.py` | 新建 | wechat2rss 文章导出脚本 |
+| `docs/celery_schedule_consolidated.md` | 新建 | 调度整合文档 |
+
+---
+
 ## 2026-04-16 26 commits -- 认证移除 / 因子 OOM / 收盘简报分层 / 舆情研报 / CI/CD 修复 / API 502 排查
 
 ### 今日工作内容
