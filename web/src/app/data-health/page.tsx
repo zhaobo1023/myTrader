@@ -111,7 +111,7 @@ function DataCompletenessTab() {
       const res = await apiClient.get('/api/admin/data-health');
       return res.data;
     },
-    refetchInterval: 120000,
+    staleTime: 60 * 60 * 1000, // match server-side 1h cache
   });
 
   const grouped = data
@@ -249,7 +249,7 @@ function TaskRunStatusTab() {
       const res = await apiClient.get('/api/admin/task-runs', { params: { days: 7 } });
       return res.data;
     },
-    refetchInterval: 120000,
+    staleTime: 60 * 60 * 1000, // match server-side 1h cache
   });
 
   // Group tasks by task_group

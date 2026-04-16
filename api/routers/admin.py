@@ -355,9 +355,9 @@ async def get_data_health(
     ]
 
     from datetime import datetime as _dt
+    from api.dependencies import AsyncSessionLocal
 
-    result = []
-    for c in checks:
+    async def _run_check(c: dict) -> dict:
         item = {
             'key': c['key'],
             'label': c['label'],
@@ -370,39 +370,43 @@ async def get_data_health(
             'days_behind': None,
             'status': 'unknown',
         }
-        try:
-            r = await db.execute(text(c['sql_date']))
-            row = r.mappings().first()
-            if row and row['d']:
-                d = row['d']
-                latest_str = d.isoformat() if hasattr(d, 'isoformat') else str(d)[:10]
-                item['latest_date'] = latest_str
-                try:
-                    delta = (_dt.strptime(today, '%Y-%m-%d') - _dt.strptime(latest_str, '%Y-%m-%d')).days
-                    item['days_behind'] = delta
-                    if delta <= c['warn_days']:
-                        item['status'] = 'ok'
-                    elif delta <= c['warn_days'] * 2:
-                        item['status'] = 'warn'
-                    else:
-                        item['status'] = 'error'
-                except Exception:
-                    item['status'] = 'unknown'
-        except Exception as e:
-            item['status'] = 'error'
-            item['error'] = str(e)
+        # Each check gets its own session for true parallel execution
+        async with AsyncSessionLocal() as conn:
+            try:
+                r = await conn.execute(text(c['sql_date']))
+                row = r.mappings().first()
+                if row and row['d']:
+                    d = row['d']
+                    latest_str = d.isoformat() if hasattr(d, 'isoformat') else str(d)[:10]
+                    item['latest_date'] = latest_str
+                    try:
+                        delta = (_dt.strptime(today, '%Y-%m-%d') - _dt.strptime(latest_str, '%Y-%m-%d')).days
+                        item['days_behind'] = delta
+                        if delta <= c['warn_days']:
+                            item['status'] = 'ok'
+                        elif delta <= c['warn_days'] * 2:
+                            item['status'] = 'warn'
+                        else:
+                            item['status'] = 'error'
+                    except Exception:
+                        item['status'] = 'unknown'
+            except Exception as e:
+                item['status'] = 'error'
+                item['error'] = str(e)
 
-        try:
-            r2 = await db.execute(text(c['sql_count']))
-            row2 = r2.mappings().first()
-            if row2:
-                item['count'] = int(list(row2.values())[0] or 0)
-                if c.get('expected_count') and item['count'] is not None:
-                    item['completeness'] = min(100, round(item['count'] / c['expected_count'] * 100))
-        except Exception:
-            pass
+            try:
+                r2 = await conn.execute(text(c['sql_count']))
+                row2 = r2.mappings().first()
+                if row2:
+                    item['count'] = int(list(row2.values())[0] or 0)
+                    if c.get('expected_count') and item['count'] is not None:
+                        item['completeness'] = min(100, round(item['count'] / c['expected_count'] * 100))
+            except Exception:
+                pass
 
-        result.append(item)
+        return item
+
+    result = await asyncio.gather(*[_run_check(c) for c in checks])
 
     ok_count = sum(1 for r in result if r['status'] == 'ok')
     warn_count = sum(1 for r in result if r['status'] == 'warn')
