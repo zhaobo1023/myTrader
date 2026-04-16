@@ -107,3 +107,16 @@ async def get_global_briefing(
     """Get LLM-generated global asset briefing for today."""
     from api.services.global_asset_briefing import get_latest_briefing
     return await get_latest_briefing(session, force=force)
+
+
+@router.post('/digest-articles')
+async def digest_articles(
+    directory: str = Query(
+        default='/root/cubox',
+        description="Directory containing Cubox-exported Markdown files",
+    ),
+):
+    """Scan Cubox article directory, extract structured digests via LLM."""
+    from api.services.article_digest_service import digest_directory
+    results = await digest_directory(directory)
+    return {'processed': len(results), 'articles': results}

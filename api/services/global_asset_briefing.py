@@ -57,7 +57,8 @@ SYSTEM_PROMPT = """你是一位专业的A股投资顾问，为个人投资者提
 3. 如果某个维度的所有核心指标均缺失，该维度输出"[数据不足]"
 4. 不使用任何emoji字符，用纯文本标记如[风险]、[机会]、[关注]
 5. AH股溢价指数是点位值（越高表示A股相对H股溢价越大），正常范围约10-15
-6. 全文控制在600字以内，宁简勿繁"""
+6. 全文控制在600字以内，宁简勿繁
+7. 如提供了"市场参考线索"，可酌情融入对应层级（行业催化->行业冷热，风险->风险提示），但不可喧宾夺主，每条线索最多用半句话带过，标注来源"""
 
 MORNING_PROMPT = """## 盘前速递（{date}）
 
@@ -75,7 +76,7 @@ MORNING_PROMPT = """## 盘前速递（{date}）
 
 ### 数据区5: 恐贪指数
 {fear_greed_snapshot}
-
+{article_hints}
 请按5层结构输出盘前解读。"""
 
 EVENING_PROMPT = """## 收盘复盘（{date}）
@@ -94,7 +95,7 @@ EVENING_PROMPT = """## 收盘复盘（{date}）
 
 ### 数据区5: 恐贪指数
 {fear_greed_snapshot}
-
+{article_hints}
 请按5层结构输出收盘复盘。"""
 
 
@@ -492,6 +493,45 @@ def _collect_fear_greed_snapshot() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Data collection — external article hints (optional enrichment)
+# ---------------------------------------------------------------------------
+
+def _collect_article_hints(session: str = 'morning') -> str:
+    """
+    Collect one-liner hints from recently digested articles.
+
+    Returns a compact block for injection into the prompt, or empty string
+    if no relevant articles exist. Designed to enrich existing layers
+    without adding a new section.
+    """
+    try:
+        from api.services.article_digest_service import get_relevant_digests
+        digests = get_relevant_digests(session=session, lookback_days=1)
+    except Exception as e:
+        logger.debug('No article digests available: %s', e)
+        return ''
+
+    if not digests:
+        return ''
+
+    # Build compact hint lines: only one_liner + top key_view per article
+    hints = []
+    for d in digests[:4]:  # max 4 articles
+        source = d.get('source', '')
+        liner = d.get('one_liner', '')
+        if not liner:
+            continue
+        prefix = '[{}]'.format(source) if source else ''
+        hints.append('{} {}'.format(prefix, liner).strip())
+
+    if not hints:
+        return ''
+
+    return '\n\n### 市场参考线索（外部文章提炼，仅供辅助，不可主导判断）\n' + '\n'.join(
+        '- {}'.format(h) for h in hints)
+
+
+# ---------------------------------------------------------------------------
 # Persistence helpers
 # ---------------------------------------------------------------------------
 
@@ -599,6 +639,9 @@ async def generate_briefing(session: str = 'morning') -> dict:
     # --- 5. Collect fear & greed ---
     fear_greed_snapshot = _collect_fear_greed_snapshot()
 
+    # --- 6. Collect article hints (optional, non-blocking) ---
+    article_hints = _collect_article_hints(session)
+
     # Build data_quality info
     quality_ok, quality_msg = _check_overall_freshness(freshness_stats)
     data_quality = {
@@ -627,24 +670,16 @@ async def generate_briefing(session: str = 'morning') -> dict:
             'data_quality': data_quality,
         }
 
-    if session == 'morning':
-        prompt = MORNING_PROMPT.format(
-            date=today_str,
-            data_snapshot=snapshot,
-            dashboard_snapshot=dashboard_snapshot,
-            etf_log_bias_snapshot=etf_log_bias_snapshot,
-            limit_stock_snapshot=limit_stock_snapshot,
-            fear_greed_snapshot=fear_greed_snapshot,
-        )
-    else:
-        prompt = EVENING_PROMPT.format(
-            date=today_str,
-            data_snapshot=snapshot,
-            dashboard_snapshot=dashboard_snapshot,
-            etf_log_bias_snapshot=etf_log_bias_snapshot,
-            limit_stock_snapshot=limit_stock_snapshot,
-            fear_greed_snapshot=fear_greed_snapshot,
-        )
+    template = MORNING_PROMPT if session == 'morning' else EVENING_PROMPT
+    prompt = template.format(
+        date=today_str,
+        data_snapshot=snapshot,
+        dashboard_snapshot=dashboard_snapshot,
+        etf_log_bias_snapshot=etf_log_bias_snapshot,
+        limit_stock_snapshot=limit_stock_snapshot,
+        fear_greed_snapshot=fear_greed_snapshot,
+        article_hints=article_hints,
+    )
 
     # Call LLM
     llm = get_llm_client()
