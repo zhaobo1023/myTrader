@@ -1364,7 +1364,7 @@ interface WatchlistEntry {
   added_at: string;
 }
 
-function WatchlistBar({ onSelect }: { onSelect: (s: StockOption) => void }) {
+function WatchlistBar({ onSelect, version }: { onSelect: (s: StockOption) => void; version: number }) {
   const [items, setItems] = useState<WatchlistEntry[]>([]);
 
   const refresh = useCallback(() => {
@@ -1374,7 +1374,7 @@ function WatchlistBar({ onSelect }: { onSelect: (s: StockOption) => void }) {
       .catch(() => {});
   }, []);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { refresh(); }, [refresh, version]);
 
   const handleRemove = (e: React.MouseEvent, code: string) => {
     e.stopPropagation();
@@ -1445,12 +1445,14 @@ function useTriggerAnnualReportIngest(stock: StockOption | null) {
 export default function StockPage() {
   const [selectedStock, setSelectedStock] = useState<StockOption | null>(null);
   const [activeTab, setActiveTab] = useState<StockTab>('one-pager');
+  const [watchlistVersion, setWatchlistVersion] = useState(0);
 
   useTriggerAnnualReportIngest(selectedStock);
 
   const handleSelect = useCallback((s: StockOption) => {
     setSelectedStock(s);
     setActiveTab('one-pager');
+    setWatchlistVersion((v) => v + 1);
   }, []);
 
   const handleBack = useCallback(() => {
@@ -1475,7 +1477,7 @@ export default function StockPage() {
         />
       ) : (
         <>
-          <WatchlistBar onSelect={handleSelect} />
+          <WatchlistBar onSelect={handleSelect} version={watchlistVersion} />
           <StockCardGrid onSelect={handleSelect} />
         </>
       )}
