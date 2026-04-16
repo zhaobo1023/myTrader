@@ -16,6 +16,8 @@ interface HealthItem {
   count_label: string;
   latest_date: string | null;
   count: number | null;
+  expected_count: number | null;
+  completeness: number | null;
   days_behind: number | null;
   status: 'ok' | 'warn' | 'error' | 'unknown';
   error?: string;
@@ -167,13 +169,14 @@ function DataCompletenessTab() {
                 <th className="text-center px-3 py-2 font-medium">最新日期</th>
                 <th className="text-center px-3 py-2 font-medium">距今</th>
                 <th className="text-right px-3 py-2 font-medium">数量</th>
+                <th className="text-right px-3 py-2 font-medium w-24">完备度</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
               {Object.entries(grouped).map(([group, items]) => (
                 <Fragment key={`g-${group}`}>
                   <tr className="bg-gray-50/60">
-                    <td colSpan={5} className="px-3 py-1.5 text-gray-400 font-medium text-xs">
+                    <td colSpan={6} className="px-3 py-1.5 text-gray-400 font-medium text-xs">
                       {group}
                     </td>
                   </tr>
@@ -190,6 +193,35 @@ function DataCompletenessTab() {
                           <span title={item.count_label}>{item.count.toLocaleString()}</span>
                         ) : (
                           <span className="text-gray-300">-</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        {item.completeness !== null ? (
+                          <div className="flex items-center gap-1.5 justify-end">
+                            <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${
+                                  item.completeness >= 90
+                                    ? 'bg-green-500'
+                                    : item.completeness >= 60
+                                    ? 'bg-yellow-400'
+                                    : 'bg-red-400'
+                                }`}
+                                style={{ width: `${item.completeness}%` }}
+                              />
+                            </div>
+                            <span className={`text-xs tabular-nums ${
+                              item.completeness >= 90
+                                ? 'text-green-600'
+                                : item.completeness >= 60
+                                ? 'text-yellow-600'
+                                : 'text-red-500'
+                            }`}>
+                              {item.completeness}%
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-gray-300 text-xs block text-right">-</span>
                         )}
                       </td>
                     </tr>

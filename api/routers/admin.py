@@ -149,6 +149,7 @@ async def get_data_health(
             'sql_date': 'SELECT MAX(trade_date) as d FROM trade_stock_daily',
             'sql_count': 'SELECT COUNT(DISTINCT stock_code) as cnt FROM trade_stock_daily',
             'count_label': '股票数',
+            'expected_count': 5300,
             'warn_days': 2,
         },
         {
@@ -158,6 +159,7 @@ async def get_data_health(
             'sql_date': 'SELECT MAX(trade_date) as d FROM trade_stock_daily_basic',
             'sql_count': 'SELECT COUNT(DISTINCT stock_code) as cnt FROM trade_stock_daily_basic WHERE trade_date = (SELECT MAX(trade_date) FROM trade_stock_daily_basic)',
             'count_label': '股票数',
+            'expected_count': 5300,
             'warn_days': 2,
         },
         {
@@ -167,6 +169,7 @@ async def get_data_health(
             'sql_date': 'SELECT MAX(trade_date) as d FROM trade_etf_daily',
             'sql_count': 'SELECT COUNT(DISTINCT fund_code) as cnt FROM trade_etf_daily',
             'count_label': 'ETF数',
+            'expected_count': 600,
             'warn_days': 2,
         },
         {
@@ -176,6 +179,7 @@ async def get_data_health(
             'sql_date': 'SELECT MAX(trade_date) as d FROM trade_hk_daily',
             'sql_count': 'SELECT COUNT(DISTINCT stock_code) as cnt FROM trade_hk_daily WHERE trade_date = (SELECT MAX(trade_date) FROM trade_hk_daily)',
             'count_label': '股票数',
+            'expected_count': 2000,
             'warn_days': 3,
         },
         # --- 因子与指标 ---
@@ -186,6 +190,7 @@ async def get_data_health(
             'sql_date': 'SELECT MAX(trade_date) as d FROM trade_stock_rps',
             'sql_count': 'SELECT COUNT(DISTINCT stock_code) as cnt FROM trade_stock_rps WHERE trade_date = (SELECT MAX(trade_date) FROM trade_stock_rps)',
             'count_label': '股票数',
+            'expected_count': 5300,
             'warn_days': 3,
         },
         {
@@ -195,6 +200,7 @@ async def get_data_health(
             'sql_date': 'SELECT MAX(calc_date) as d FROM trade_stock_basic_factor',
             'sql_count': 'SELECT COUNT(DISTINCT stock_code) as cnt FROM trade_stock_basic_factor WHERE calc_date = (SELECT MAX(calc_date) FROM trade_stock_basic_factor)',
             'count_label': '股票数',
+            'expected_count': 5300,
             'warn_days': 3,
         },
         {
@@ -204,6 +210,7 @@ async def get_data_health(
             'sql_date': 'SELECT MAX(calc_date) as d FROM trade_stock_extended_factor',
             'sql_count': 'SELECT COUNT(DISTINCT stock_code) as cnt FROM trade_stock_extended_factor WHERE calc_date = (SELECT MAX(calc_date) FROM trade_stock_extended_factor)',
             'count_label': '股票数',
+            'expected_count': 5300,
             'warn_days': 3,
         },
         {
@@ -213,6 +220,7 @@ async def get_data_health(
             'sql_date': 'SELECT MAX(trade_date) as d FROM trade_log_bias_daily',
             'sql_count': 'SELECT COUNT(DISTINCT stock_code) as cnt FROM trade_log_bias_daily WHERE trade_date = (SELECT MAX(trade_date) FROM trade_log_bias_daily)',
             'count_label': '股票数',
+            'expected_count': 5300,
             'warn_days': 3,
         },
         # --- 财务数据 ---
@@ -223,6 +231,7 @@ async def get_data_health(
             'sql_date': 'SELECT MAX(report_date) as d FROM trade_stock_financial',
             'sql_count': 'SELECT COUNT(DISTINCT stock_code) as cnt FROM trade_stock_financial',
             'count_label': '股票数',
+            'expected_count': 5300,
             'warn_days': 90,
         },
         # --- 资金与情绪 ---
@@ -270,6 +279,7 @@ async def get_data_health(
             'sql_date': "SELECT MAX(date) as d FROM macro_data WHERE indicator = 'spy'",
             'sql_count': "SELECT COUNT(*) as cnt FROM macro_data WHERE indicator IN ('spy','qqq','dia') AND date = (SELECT MAX(date) FROM macro_data WHERE indicator = 'spy')",
             'count_label': '品种数',
+            'expected_count': 3,
             'warn_days': 3,
         },
         {
@@ -279,6 +289,7 @@ async def get_data_health(
             'sql_date': "SELECT MAX(date) as d FROM macro_data WHERE indicator = 'gold'",
             'sql_count': "SELECT COUNT(*) as cnt FROM macro_data WHERE indicator IN ('gold','wti_oil','btc') AND date = (SELECT MAX(date) FROM macro_data WHERE indicator = 'gold')",
             'count_label': '品种数',
+            'expected_count': 3,
             'warn_days': 3,
         },
         {
@@ -288,6 +299,7 @@ async def get_data_health(
             'sql_date': "SELECT MAX(date) as d FROM macro_data WHERE indicator = 'us_10y_bond'",
             'sql_count': "SELECT COUNT(*) as cnt FROM macro_data WHERE indicator IN ('us_2y_bond','us_10y_bond','us_30y_bond') AND date = (SELECT MAX(date) FROM macro_data WHERE indicator = 'us_10y_bond')",
             'count_label': '品种数',
+            'expected_count': 3,
             'warn_days': 3,
         },
         # --- 个股分析 ---
@@ -339,8 +351,10 @@ async def get_data_health(
             'label': c['label'],
             'group': c.get('group', ''),
             'count_label': c['count_label'],
+            'expected_count': c.get('expected_count'),
             'latest_date': None,
             'count': None,
+            'completeness': None,
             'days_behind': None,
             'status': 'unknown',
         }
@@ -371,6 +385,8 @@ async def get_data_health(
             row2 = r2.mappings().first()
             if row2:
                 item['count'] = int(list(row2.values())[0] or 0)
+                if c.get('expected_count') and item['count'] is not None:
+                    item['completeness'] = min(100, round(item['count'] / c['expected_count'] * 100))
         except Exception:
             pass
 
