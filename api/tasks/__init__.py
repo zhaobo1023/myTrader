@@ -17,6 +17,8 @@ from api.tasks import ingest_tasks
 from api.tasks import sim_pool_tasks
 from api.tasks import document_tasks
 from api.tasks import scheduler_tasks
+from api.tasks import briefing_tasks
+from api.tasks import data_pipeline_tasks
 
 __all__ = [
     'preset_strategies',
@@ -31,4 +33,6 @@ __all__ = [
     'sim_pool_tasks',
     'document_tasks',
     'scheduler_tasks',
+    'briefing_tasks',
+    'data_pipeline_tasks',
 ]

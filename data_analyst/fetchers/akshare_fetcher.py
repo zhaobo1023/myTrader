@@ -17,6 +17,7 @@ import os
 import time
 from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from typing import List, Optional, Dict
 
 import pandas as pd
@@ -189,6 +190,7 @@ def _fetch_hist_sina(stock_code: str, start_date: str, end_date: str) -> Optiona
 
 # 数据源失败计数，用于动态切换
 _eastmoney_failures = 0
+_eastmoney_lock = threading.Lock()
 _EASTMONEY_FAIL_THRESHOLD = 5
 
 
@@ -209,7 +211,8 @@ def download_and_save(stock_code: str, start_date: str) -> tuple:
             try:
                 df = _fetch_hist_eastmoney(stock_code, start_date, end_date)
             except Exception:
-                _eastmoney_failures += 1
+                with _eastmoney_lock:
+                    _eastmoney_failures += 1
                 df = None
 
         if df is None:
@@ -249,11 +252,13 @@ def download_and_save(stock_code: str, start_date: str) -> tuple:
 
         if rows:
             conn = get_connection()
-            cursor = conn.cursor()
-            cursor.executemany(INSERT_SQL, rows)
-            conn.commit()
-            cursor.close()
-            conn.close()
+            try:
+                cursor = conn.cursor()
+                cursor.executemany(INSERT_SQL, rows)
+                conn.commit()
+                cursor.close()
+            finally:
+                conn.close()
 
         return stock_code, len(rows), None
 
@@ -315,13 +320,13 @@ def main():
         for i, (code, start) in enumerate(tasks, 1):
             print(f"\n[{i}/{total}] {code} (从 {start} 开始)")
             _, count, err = download_and_save(code, start)
-            if count >= 0:
+            if err is not None:
+                print(f"  失败: {err}")
+                fail_list.append(code)
+            else:
                 print(f"  写入 {count} 条")
                 success_count += 1
                 total_rows += count
-            else:
-                print(f"  失败: {err}")
-                fail_list.append(code)
     else:
         print(f"\n并行下载（{NUM_WORKERS} 线程)...")
 
@@ -332,11 +337,11 @@ def main():
                 code, count, err = future.result()
                 done += 1
 
-                if count >= 0:
+                if err is not None:
+                    fail_list.append(code)
+                else:
                     success_count += 1
                     total_rows += count
-                else:
-                    fail_list.append(code)
 
                 elapsed = time.time() - start_time
                 speed = done / elapsed if elapsed > 0 else 0

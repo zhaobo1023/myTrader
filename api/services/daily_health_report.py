@@ -11,7 +11,7 @@ Focuses on actionable alerts: failed tasks, stale data, missing outputs.
 """
 import json
 import logging
-from datetime import date, timedelta
+from datetime import date
 
 from config.db import execute_query
 
@@ -220,9 +220,11 @@ def build_health_report(target_date: date = None) -> dict:
 def push_health_report(target_date: date = None) -> dict:
     """Build health report and push to Feishu bot as a card."""
     import httpx
+    from api.config import settings
     from api.services.feishu_doc_publisher import _headers, _OWNER_OPEN_ID
 
     report = build_health_report(target_date)
+    health_url = getattr(settings, 'DATA_HEALTH_URL', '') or 'http://123.56.3.1/data-health'
 
     # -- Build card content --
     color_map = {'ok': 'green', 'warn': 'orange', 'critical': 'red'}
@@ -305,7 +307,7 @@ def push_health_report(target_date: date = None) -> dict:
                     'tag': 'button',
                     'text': {'tag': 'plain_text', 'content': '查看详情'},
                     'type': 'default',
-                    'url': 'http://123.56.3.1/data-health',
+                    'url': health_url,
                 }],
             },
         ],

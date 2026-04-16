@@ -279,7 +279,7 @@ def _write_blocks(document_id: str, blocks: list) -> None:
 # Bot messaging -- send card to user
 # ---------------------------------------------------------------------------
 
-_OWNER_OPEN_ID = 'ou_7c69280ea70c162707fd22da09805cea'
+_OWNER_OPEN_ID = getattr(settings, 'FEISHU_OWNER_OPEN_ID', '') or 'ou_7c69280ea70c162707fd22da09805cea'
 
 
 def _extract_verdict(content: str) -> str:
@@ -287,6 +287,8 @@ def _extract_verdict(content: str) -> str:
     for line in content.split('\n'):
         line = line.strip()
         if line.startswith('**') and '|' in line:
+            if line.endswith('**'):
+                return line[2:-2].strip()
             return line.strip('* ')
     return ''
 

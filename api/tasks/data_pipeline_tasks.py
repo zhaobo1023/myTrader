@@ -147,9 +147,16 @@ def run_nightly_digest(self):
 
     # Step 0: Run export script on server (reads res.db -> JSON)
     try:
-        export_script = '/root/app/scripts/export_wechat_articles.py'
-        subprocess.run(['python3', export_script], check=True, timeout=60)
-        logger.info('[PIPELINE] Export script completed')
+        from api.config import settings
+        export_script = (
+            getattr(settings, 'ARTICLE_EXPORT_SCRIPT', '') or
+            '/root/app/scripts/export_wechat_articles.py'
+        )
+        proc = subprocess.run(
+            ['python3', export_script], check=True, timeout=60,
+            capture_output=True, text=True,
+        )
+        logger.info('[PIPELINE] Export script completed: %s', proc.stdout[:200] if proc.stdout else '')
     except Exception as e:
         logger.error('[PIPELINE] Export script failed: %s', e)
         return {'status': 'error', 'reason': 'export_failed', 'error': str(e)}

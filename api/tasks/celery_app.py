@@ -43,94 +43,6 @@ from celery.schedules import crontab
 
 celery_app.conf.beat_schedule = {
     # ============================================================
-    # 每日收盘后任务 (交易日 15:00-16:00 收盘)
-    # ============================================================
-
-    # 16:30 - 监控自选股
-    'daily-watchlist-scan': {
-        'task': 'watchlist_scan.scan_all_users',
-        'schedule': crontab(hour=16, minute=30, day_of_week='1-5'),
-    },
-
-    # 每小时 :15 - 宏观数据 + 全球资产增量拉取
-    'hourly-macro-fetch': {
-        'task': 'fetch_macro_data_hourly',
-        'schedule': crontab(minute=15),
-    },
-
-    # 18:00 - 等待数据就绪
-    'daily-data-gate': {
-        'task': 'scheduler.adapters.run_data_gate',
-        'schedule': crontab(hour=18, minute=0, day_of_week='1-5'),
-    },
-
-    # 18:30 - 因子计算
-    'daily-factor-calc': {
-        'task': 'scheduler.adapters.run_factor_calculation',
-        'schedule': crontab(hour=18, minute=30, day_of_week='1-5'),
-    },
-
-    # 19:00 - 技术指标 & RPS
-    'daily-indicator-calc': {
-        'task': 'scheduler.adapters.run_indicator_calculation',
-        'schedule': crontab(hour=19, minute=0, day_of_week='1-5'),
-    },
-
-    # 19:30 - 预设策略执行 (动量反转 + 微盘股)
-    'daily-preset-strategies': {
-        'task': 'run_preset_strategies_daily',
-        'schedule': crontab(hour=19, minute=30, day_of_week='1-5'),
-    },
-
-    # 20:00 - 主题池评分
-    'daily-theme-pool-score': {
-        'task': 'scheduler.adapters.run_theme_pool_score',
-        'schedule': crontab(hour=20, minute=0, day_of_week='1-5'),
-    },
-
-    # 18:30 - 个股新闻拉取 (已分析股票)
-    'daily-stock-news-fetch': {
-        'task': 'fetch_stock_news_daily',
-        'schedule': crontab(hour=18, minute=30, day_of_week='1-5'),
-    },
-
-    # ============================================================
-    # 舆情监控任务 (每小时)
-    # ============================================================
-    'hourly-fear-index-fetch': {
-        'task': 'fetch_fear_index',
-        'schedule': crontab(minute=0),  # Every hour
-    },
-
-    # ============================================================
-    # 晨报 / 复盘 / 数据健康
-    # ============================================================
-
-    # 08:30 - 晨报生成并发布到飞书
-    'daily-morning-briefing': {
-        'task': 'publish_morning_briefing',
-        'schedule': crontab(hour=8, minute=30, day_of_week='1-5'),
-    },
-
-    # 16:30 - 复盘数据预检（检查今日数据是否就绪）
-    'daily-evening-precheck': {
-        'task': 'precheck_evening_data',
-        'schedule': crontab(hour=16, minute=30, day_of_week='1-5'),
-    },
-
-    # 17:00 - 复盘生成并发布到飞书
-    'daily-evening-briefing': {
-        'task': 'publish_evening_briefing',
-        'schedule': crontab(hour=17, minute=0, day_of_week='1-5'),
-    },
-
-    # 21:00 - 数据健康日报推送到飞书
-    'daily-health-report': {
-        'task': 'push_daily_health_report',
-        'schedule': crontab(hour=21, minute=0, day_of_week='1-5'),
-    },
-
-    # ============================================================
     # 凌晨维护任务
     # ============================================================
 
@@ -159,19 +71,125 @@ celery_app.conf.beat_schedule = {
     },
 
     # ============================================================
-    # SimPool 模拟池任务
+    # 早间任务
     # ============================================================
 
-    # 09:35 - T+1 买入价格填充
+    # 08:30 - 晨报生成并发布到飞书
+    'daily-morning-briefing': {
+        'task': 'publish_morning_briefing',
+        'schedule': crontab(hour=8, minute=30, day_of_week='1-5'),
+    },
+
+    # 08:00 - 恐慌指数(盘前)
+    'fear-index-morning': {
+        'task': 'fetch_fear_index',
+        'schedule': crontab(hour=8, minute=0, day_of_week='1-5'),
+    },
+
+    # 09:35 - SimPool T+1买入价格填充
     'sim-pool-fill-entry-prices': {
         'task': 'tasks.fill_entry_prices',
         'schedule': crontab(hour=9, minute=35, day_of_week='1-5'),
     },
 
-    # 16:30 - 每日更新（价格/止盈止损/NAV/报告）
+    # ============================================================
+    # 盘中任务
+    # ============================================================
+
+    # 每小时 :15 - 宏观数据 + 全球资产增量拉取
+    'hourly-macro-fetch': {
+        'task': 'fetch_macro_data_hourly',
+        'schedule': crontab(minute=15),
+    },
+
+    # 12:00 - 恐慌指数(午间)
+    'fear-index-noon': {
+        'task': 'fetch_fear_index',
+        'schedule': crontab(hour=12, minute=0, day_of_week='1-5'),
+    },
+
+    # ============================================================
+    # 收盘后 -- 独立任务 (无依赖, 错开执行)
+    # ============================================================
+
+    # 16:25 - 复盘数据预检（检查今日数据是否就绪）
+    'daily-evening-precheck': {
+        'task': 'precheck_evening_data',
+        'schedule': crontab(hour=16, minute=25, day_of_week='1-5'),
+    },
+
+    # 16:30 - 监控自选股
+    'daily-watchlist-scan': {
+        'task': 'watchlist_scan.scan_all_users',
+        'schedule': crontab(hour=16, minute=30, day_of_week='1-5'),
+    },
+
+    # 16:35 - SimPool每日更新（价格/止盈止损/NAV/报告）
     'sim-pool-daily-update': {
         'task': 'tasks.daily_sim_pool_update',
-        'schedule': crontab(hour=16, minute=30, day_of_week='1-5'),
+        'schedule': crontab(hour=16, minute=35, day_of_week='1-5'),
+    },
+
+    # 17:00 - 复盘生成并发布到飞书
+    'daily-evening-briefing': {
+        'task': 'publish_evening_briefing',
+        'schedule': crontab(hour=17, minute=0, day_of_week='1-5'),
+    },
+
+    # 17:30 - 个股新闻拉取 (已分析股票)
+    'daily-stock-news-fetch': {
+        'task': 'fetch_stock_news_daily',
+        'schedule': crontab(hour=17, minute=30, day_of_week='1-5'),
+    },
+
+    # ============================================================
+    # 收盘后 -- 数据处理链 (时间间隔保证顺序, 避免OOM)
+    # ============================================================
+
+    # 18:00 - 数据就绪Gate (轮询等待日线数据写入完成)
+    'daily-data-gate': {
+        'task': 'scheduler.adapters.run_data_gate',
+        'schedule': crontab(hour=18, minute=0, day_of_week='1-5'),
+    },
+
+    # 18:30 - 因子计算 (basic + extended + valuation + quality)
+    'daily-factor-calc': {
+        'task': 'scheduler.adapters.run_factor_calculation',
+        'schedule': crontab(hour=18, minute=30, day_of_week='1-5'),
+    },
+
+    # 18:30 - 恐慌指数(盘后)
+    'fear-index-evening': {
+        'task': 'fetch_fear_index',
+        'schedule': crontab(hour=18, minute=30, day_of_week='1-5'),
+    },
+
+    # 19:30 - 技术指标 & RPS (因子计算完成后, 间隔60min)
+    'daily-indicator-calc': {
+        'task': 'scheduler.adapters.run_indicator_calculation',
+        'schedule': crontab(hour=19, minute=30, day_of_week='1-5'),
+    },
+
+    # 20:10 - 预设策略执行 (指标计算完成后, 间隔40min)
+    'daily-preset-strategies': {
+        'task': 'run_preset_strategies_daily',
+        'schedule': crontab(hour=20, minute=10, day_of_week='1-5'),
+    },
+
+    # 20:40 - 主题池评分
+    'daily-theme-pool-score': {
+        'task': 'scheduler.adapters.run_theme_pool_score',
+        'schedule': crontab(hour=20, minute=40, day_of_week='1-5'),
+    },
+
+    # ============================================================
+    # 晚间收尾
+    # ============================================================
+
+    # 21:30 - 数据健康日报推送到飞书
+    'daily-health-report': {
+        'task': 'push_daily_health_report',
+        'schedule': crontab(hour=21, minute=30, day_of_week='1-5'),
     },
 }
 celery_app.conf.timezone = 'Asia/Shanghai'

@@ -2,6 +2,310 @@
 
 ---
 
+## 2026-04-16 26 commits -- 认证移除 / 因子 OOM / 收盘简报分层 / 舆情研报 / CI/CD 修复 / API 502 排查
+
+### 今日工作内容
+
+#### 1. JWT 认证全局移除
+
+**背景：** 个人项目无需多用户鉴权，JWT 中间件导致前端频繁 401，阻碍开发调试。
+
+| 文件 | 改动 |
+|------|------|
+| `api/middleware/auth.py` | `get_current_user` 改为可选依赖，无 token 时返回 None 而非 401 |
+| `api/routers/watchlist.py` | 移除 GET/DELETE 端点的 auth 依赖 |
+| `api/main.py` | 全局禁用 JWT 鉴权 |
+
+**效果：** 所有 API 端点开放访问，前端不再出现 401 错误。
+
+---
+
+#### 2. 自选股搜索 + 关注栏
+
+| 功能 | 实现 |
+|------|------|
+| 搜索选股自动加入关注 | `POST /api/watchlist/auto-add`，搜索结果点击后自动关注 |
+| 个股页关注栏 | `/stock` 页面顶部展示关注列表，点击跳转，支持删除 |
+| 刷新同步 | 选择股票后刷新关注栏状态 |
+
+---
+
+#### 3. 因子计算 OOM 修复（两次迭代）
+
+**问题：** ECS 3.6G RAM + 4G Swap，因子计算全表扫描导致 OOM。
+
+**第一次修复 (5ae0070)：** 全表扫描改为增量批计算，按日期逐日计算仅缺失数据。
+
+**第二次修复 (4cc88b4)：** 辅助数据（stock_basic/daily_basic）也改为分批加载，每批 500 只；Celery 调度间隔从 15s 拉宽到 60s，避免多个因子任务并发 OOM。
+
+---
+
+#### 4. 收盘简报（Briefing）升级
+
+**Morning/Evening 分离：**
+- `global_asset_briefing.py` -- 拆分为 `MORNING_PROMPT`（盘前概览）和 `EVENING_PROMPT`（收盘复盘）
+- 盘前：全球资产隔夜表现 + 今日关注
+- 盘后：A股行情总结 + 板块热点 + 涨跌停分析
+
+**Briefing 结构升级为 5 层：**
+1. 全球资产隔夜概览
+2. A 股大盘表现（含成交额/涨跌家数/涨跌停）
+3. ETF 表现与资金流向
+4. 板块热点与涨跌停明细
+5. 明日关注
+
+**缓存优化：**
+- Redis 缓存，盘前简报 08:00-12:00 有效，盘后简报 16:00-23:59 有效
+- 前端 `useTimeAwareCache` hook 自动判断缓存有效性
+
+**数据校验增强：**
+- `freshness_guard` 检查数据新鲜度，核心指标缺失时拒绝生成
+- AH 溢价指数描述修正（点值 ~11，非百分比）
+
+---
+
+#### 5. 外部文章摘要服务 (Article Digest)
+
+新增 `article_digest_service.py`，抓取指定 URL 文章内容，LLM 生成中文摘要，写入飞书文档。
+
+- 支持批量 URL 列表
+- Celery 定时任务（每晚 21:00）
+- 飞书文档自动发布
+
+---
+
+#### 6. 夜间精选观点报告 (Nightly Curated Opinion)
+
+新增 `briefing_tasks.py` Celery 任务，每晚 21:30 生成精选市场观点报告：
+- 从多个信源抓取当日市场观点
+- LLM 筛选、分类、生成结构化报告
+- 写入飞书文档供次日晨读
+
+**Celery 调度整合：**
+- 将散落在各处的 Celery 配置整合到 `celery_app.py`
+- 统一调度：盘后扫描、简报生成、文章摘要、观点报告
+
+---
+
+#### 7. Celery 调度管道增强
+
+**新增数据管道：**
+- `data_pipeline_tasks.py` -- 每日 15:30 增量拉取 A 股日线价格数据
+
+**ETF Log Bias 触发优化：**
+- 强制重新触发机制（force re-trigger）
+- Sparkline 日期标签修正
+
+---
+
+#### 8. CI/CD 部署修复
+
+| 问题 | 修复 |
+|------|------|
+| SSH key 解析失败 | 替换 `appleboy/ssh-action` 为原生 `ssh` 命令 |
+| 部署后 Nginx 配置不生效 | 部署脚本末尾加 `docker restart nginx` |
+| PostHog 自托管占用过多资源 | 移除 PostHog，Celery 加入 CI/CD deploy |
+| test.yml 缺少 workflow_call trigger | 补充触发器 |
+
+---
+
+#### 9. 策略系统优化
+
+| 功能 | 说明 |
+|------|------|
+| 单行重算按钮 | 策略信号表格每行增加"重新计算"按钮，支持单独重算某只股票 |
+| 5 日出现次数修复 | `momentum_reversal` 的 `_get_recent_occurrence_counts` 修复 |
+| log_bias Celery 导入修复 | 修正 import 路径 |
+
+---
+
+#### 10. 数据完备度页面增强
+
+| 改进 | 说明 |
+|------|------|
+| 完整度百分比条 | 顶部显示总完整度进度条 |
+| Redis 缓存 | 查询结果缓存 1 小时，避免重复查库 |
+| 并行查询 | 16 个维度并行查询，修复 504 超时（原 30s -> 3s） |
+| 任务运行状态 Tab | 新增 Tab 展示 scheduler task runs 历史 |
+
+---
+
+#### 11. 数据健康微信 OG Image
+
+新增 OG Image 生成，在微信分享 `/data-health` 链接时展示预览卡片。
+
+---
+
+#### 12. API 502 线上故障排查与修复
+
+**现象：** `http://123.56.3.1/data-health` 和 `http://123.56.3.1/sentiment` 返回 502。
+
+**根因：** `api/routers/documents.py` 使用 `UploadFile = File(...)`，FastAPI 要求 `python-multipart` 包。Dockerfile 用 `requirements-prod.txt` 构建镜像，但该文件缺少 `python-multipart`，导致 API 进程启动时崩溃（RuntimeError），所有 `/api/*` 请求 502。
+
+**修复：**
+1. 临时：容器内 `pip install python-multipart` + 重启，服务恢复
+2. 根治：`requirements-prod.txt` 的 Web Framework 区段补上 `python-multipart>=0.0.6`
+
+**教训：** 项目维护两份依赖文件（`requirements.txt` 和 `requirements-prod.txt`），新增运行时依赖时容易遗漏。建议后续统一为一份或加 CI 校验。
+
+---
+
+### 今日 Git 提交（26 个，按时间顺序）
+
+```
+7d33846 fix: repair momentum_reversal 5-day occurrence count and log_bias celery import
+0dc5f27 fix: auto-add stock to watchlist on search select without auth
+7951bd5 feat: add task run log, freshness guard, and data-health task status tab
+0fc5c8e fix: remove auth from all watchlist endpoints (GET/DELETE)
+81ce626 feat: show watchlist bar on /stock page with click-to-view and remove
+21e9d8c fix: add workflow_call trigger to test.yml for reusable workflow
+95b2c4c fix: disable JWT auth globally -- all API endpoints open
+5ae0070 fix: replace full-table-scan with incremental batch calculation in all factor calculators
+e793ae2 feat: add completeness % bar to data-health page
+eabf7a1 perf: cache data-health results in Redis for 1 hour
+f07ef9a fix: parallelize data-health queries to fix 504 timeout
+481ee72 fix: refresh watchlist bar after selecting a stock from search
+b1b340d chore: remove self-hosted PostHog, add Celery to CI/CD deploy
+cec2783 fix: restart nginx in deploy to pick up config changes
+c682335 fix: localize briefing abort message and fix false-positive data check
+ca0cd92 ci: trigger deploy
+f11c723 ci: test new deploy key
+a42c690 fix: replace appleboy/ssh-action with native ssh to fix key parsing
+393de14 feat: auto-load AI briefing with time-aware caching
+e983680 fix: correct AH premium index description (point value ~11, not base=100)
+21fedc3 feat: upgrade briefing to layered 5-section structure with ETF/limit data
+55bc691 feat: add OG image for WeChat sharing card
+96e9742 feat: add article digest service for external content integration
+e0d553f feat: add per-row recalculate button for strategy runs
+19e3bcf feat: ETF log bias force re-trigger + sparkline date labels
+ddecbc3 feat: add daily stock price fetch to scheduler pipeline
+aea17d6 fix: akshare fallback to Sina source, fix factor_calculator import
+4cc88b4 fix: OOM prevention - batch-load auxiliary data in factor calculators + widen schedule gaps
+3cec0cb feat: add nightly curated opinion report pipeline + consolidate Celery schedule
+dab5b56 feat: differentiate morning/evening briefing prompts, resolve merge conflicts
+33c1404 fix: auto-detect article export dir for Docker vs bare-metal
+```
+
+### 待完成
+
+- [ ] `requirements-prod.txt` 与 `requirements.txt` 依赖一致性校验（CI 层面）
+- [ ] 飞书文档发布服务 (`feishu_doc_publisher.py`) 的 token 配置和端到端测试
+- [ ] 夜间观点报告的数据源和 prompt 调优
+- [ ] Briefing 数据校验 T1-T4（昨日改进方案中的 P0 任务）
+
+---
+
+### Code Review 修复 (aea17d6..33c1404, 5 commits)
+
+对今日 5 个提交做 code review, 发现并修复以下问题:
+
+#### P0 -- 运行时崩溃
+
+**1. article_digest_service DDL 列缺失**
+
+`article_digest_service.py` 的 INSERT 语句引用 `digest_date`, `grade`, `summary`, `used_in_report` 四个列, 但 migration DDL (`r1s2t3u4v5w6`) 中不存在这些列。运行时直接 SQL 报错。
+
+- **修复**: 更新 migration, 新增 `digest_date`, `grade`, `digest_json`, `summary`, `used_in_report` 列和索引
+- **文件**: `alembic/versions/r1s2t3u4v5w6_add_article_digest_table.py`
+
+**2. Celery 调度与文档严重不一致**
+
+`celery_app.py` 有重复的 `daily-evening-precheck` 和 `sim-pool-daily-update` 条目 (L49-53 与 L127-131, L61-65 与 L183-187)。恐慌指数仍为每小时执行 (24次/天), 时间间隔未按 OOM 优化方案调整。
+
+- **修复**: 重写 `celery_app.py`, 去重并按时间顺序整理; 恐慌指数改为 3次/天 (08:00/12:00/18:30); 因子->指标间隔拉到 60min; 健康报告改到 21:30
+- **文件**: `api/tasks/celery_app.py`, `docs/celery_schedule_consolidated.md`
+
+**3. Celery 任务模块未注册**
+
+`api/tasks/__init__.py` 缺少 `briefing_tasks` 和 `data_pipeline_tasks` 的导入, 导致这两个模块中的 17 个 Celery 任务不会被 `autodiscover_tasks` 发现。Beat 调度会报 `NotRegistered`。
+
+- **修复**: 在 `__init__.py` 中补充导入
+- **文件**: `api/tasks/__init__.py`
+
+#### P1 -- 安全/可靠性
+
+**4. 硬编码凭证泄露**
+
+`feishu_doc_publisher.py:282` 硬编码了飞书用户 Open ID 到 git 仓库。
+
+- **修复**: 改为从 `settings.FEISHU_OWNER_OPEN_ID` 读取, 保留默认值兼容
+- **文件**: `api/services/feishu_doc_publisher.py`, `api/config.py`
+
+**5. 硬编码服务器 IP 和脚本路径**
+
+`daily_health_report.py:308` 硬编码 `http://123.56.3.1/data-health`; `data_pipeline_tasks.py:150` 硬编码 `/root/app/scripts/export_wechat_articles.py`。
+
+- **修复**: 改为从 `settings.DATA_HEALTH_URL` / `settings.ARTICLE_EXPORT_SCRIPT` 读取, 保留默认值兼容
+- **文件**: `api/services/daily_health_report.py`, `api/tasks/data_pipeline_tasks.py`, `api/config.py`
+
+**6. akshare_fetcher 线程不安全**
+
+`_eastmoney_failures` 全局变量在 `ThreadPoolExecutor` 多线程并发修改, 无锁保护。
+
+- **修复**: 添加 `threading.Lock`, 修改计数时加锁
+- **文件**: `data_analyst/fetchers/akshare_fetcher.py`
+
+**7. akshare_fetcher 失败检测永远为 true**
+
+`download_and_save` 返回 `(code, count, err)`, count 是 `len(rows)` 始终 >= 0。`count >= 0` 永远为 True, fail_list 永远为空。
+
+- **修复**: 改为 `err is not None` 判断失败
+- **文件**: `data_analyst/fetchers/akshare_fetcher.py`
+
+**8. DB 连接泄漏**
+
+`download_and_save` 中 `executemany` 异常时 `cursor.close()` 和 `conn.close()` 不会执行。
+
+- **修复**: 用 `try/finally` 包裹
+- **文件**: `data_analyst/fetchers/akshare_fetcher.py`
+
+**9. API 端点缺少认证**
+
+`/publish-briefing`, `/data-health`, `/data-health/push` 可向飞书推送内容, 但无 `get_current_user` 认证。
+
+- **修复**: 三个端点均添加 `Depends(get_current_user)`
+- **文件**: `api/routers/market.py`
+
+#### P2 -- 代码质量
+
+**10. `_extract_verdict` 过度 strip**
+
+`line.strip('* ')` 会去掉所有首尾 `*` 和空格, 对 `*** text ***` 等内容会过度删除。
+
+- **修复**: 先检查 `startswith('**') and endswith('**')`, 再用 `line[2:-2].strip()`
+- **文件**: `api/services/feishu_doc_publisher.py`
+
+**11. subprocess 输出未捕获**
+
+`data_pipeline_tasks.py` 的 `subprocess.run()` 未设置 `capture_output=True`, 失败时丢失错误信息。
+
+- **修复**: 添加 `capture_output=True, text=True`, 记录 stdout
+- **文件**: `api/tasks/data_pipeline_tasks.py`
+
+**12. 未使用的 import**
+
+`daily_health_report.py` 导入了 `timedelta` 但未使用。
+
+- **修复**: 移除未使用 import
+- **文件**: `api/services/daily_health_report.py`
+
+#### 修改文件汇总
+
+| 文件 | 改动类型 |
+|------|---------|
+| `alembic/versions/r1s2t3u4v5w6_add_article_digest_table.py` | 新增 4 列 + 1 索引 |
+| `api/tasks/celery_app.py` | 重写, 去重 + 时间修正 |
+| `api/tasks/__init__.py` | 补充 2 个模块导入 |
+| `api/config.py` | 新增 3 个环境变量 |
+| `api/services/feishu_doc_publisher.py` | Open ID 改环境变量 + strip 修复 |
+| `api/services/daily_health_report.py` | IP 改环境变量 + 移除未用 import |
+| `api/tasks/data_pipeline_tasks.py` | 路径改环境变量 + capture_output |
+| `api/routers/market.py` | 3 端点添加认证 |
+| `data_analyst/fetchers/akshare_fetcher.py` | 线程锁 + 失败检测 + DB 泄漏修复 |
+| `docs/celery_schedule_consolidated.md` | 同步更新时间表 |
+
+---
+
 ## 2026-04-15 收盘复盘行情回顾 -- 数据质量与幻觉问题排查
 
 ### 问题背景

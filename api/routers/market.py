@@ -126,6 +126,7 @@ async def digest_articles(
 async def publish_briefing(
     session: str = Query(default='morning', description="'morning' or 'evening'"),
     force: bool = Query(default=False, description="Force regenerate briefing"),
+    current_user: User = Depends(get_current_user),
 ):
     """Publish briefing to Feishu document and return shareable link."""
     from api.services.feishu_doc_publisher import publish_latest_briefing
@@ -136,6 +137,7 @@ async def publish_briefing(
 @router.get('/data-health')
 async def get_data_health(
     date: str = Query(None, description="Target date YYYY-MM-DD (default: today)"),
+    current_user: User = Depends(get_current_user),
 ):
     """Get data health report for a given date."""
     from api.services.daily_health_report import build_health_report
@@ -147,6 +149,7 @@ async def get_data_health(
 @router.post('/data-health/push')
 async def push_data_health(
     date: str = Query(None, description="Target date YYYY-MM-DD (default: today)"),
+    current_user: User = Depends(get_current_user),
 ):
     """Build data health report and push to Feishu bot."""
     from api.services.daily_health_report import push_health_report

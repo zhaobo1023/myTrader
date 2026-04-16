@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     FEISHU_APP_ID: str = Field(default='', alias='FEISHU_APP_ID')
     FEISHU_APP_SECRET: str = Field(default='', alias='FEISHU_APP_SECRET')
     FEISHU_FOLDER_TOKEN: str = Field(default='', alias='FEISHU_FOLDER_TOKEN')
+    FEISHU_OWNER_OPEN_ID: str = Field(default='', alias='FEISHU_OWNER_OPEN_ID')
+    DATA_HEALTH_URL: str = Field(default='', alias='DATA_HEALTH_URL')
+    ARTICLE_EXPORT_SCRIPT: str = Field(default='', alias='ARTICLE_EXPORT_SCRIPT')
 
     @property
     def database_url(self) -> str:
