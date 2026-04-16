@@ -108,7 +108,8 @@ function AIBriefingCard() {
     enabled: false,
   });
 
-  const hasContent = briefing?.content && !isLoading;
+  const isAborted = briefing?.content?.startsWith('[速递中止]') || briefing?.content?.startsWith('[briefing aborted]');
+  const hasContent = briefing?.content && !isLoading && !isAborted;
   const sessionLabel = session === 'morning' ? '盘前速递' : '收盘复盘';
 
   return (
@@ -189,9 +190,24 @@ function AIBriefingCard() {
           正在综合分析 A 股大盘信号 + 全球资产数据...
         </div>
       )}
-      {error && !isLoading && !hasContent && (
+      {error && !isLoading && !hasContent && !isAborted && (
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0 0' }}>
           点击「生成解读」获取 AI 分析
+        </div>
+      )}
+      {isAborted && !isLoading && (
+        <div style={{
+          marginTop: '12px', padding: '10px 14px',
+          background: 'rgba(198,144,38,0.08)', border: '1px solid rgba(198,144,38,0.25)',
+          borderRadius: '8px', display: 'flex', alignItems: 'flex-start', gap: '8px',
+        }}>
+          <span style={{ fontSize: '14px', flexShrink: 0 }}>-</span>
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: 510, color: '#c69026', marginBottom: '2px' }}>数据暂不充足，无法生成速递</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              {briefing.content.replace('[速递中止] ', '').replace('[briefing aborted] ', '')}
+            </div>
+          </div>
         </div>
       )}
       {hasContent && (

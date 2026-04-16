@@ -87,7 +87,7 @@ EVENING_PROMPT = """## 收盘复盘（{date}）
 MORNING_INDICATORS = [
     'spy', 'qqq', 'dia', 'vix', 'gvz',
     'us_2y_bond', 'us_10y_bond', 'us_30y_bond', 'us_10y_2y_spread',
-    'gold', 'wti_oil', 'brent_oil', 'btc',
+    'gold', 'wti_oil', 'btc',
     'dxy', 'usdcny',
 ]
 
@@ -144,7 +144,7 @@ def _collect_data_snapshot(
     if target_date is None:
         target_date = date.today()
 
-    freshness_stats = {'total': len(indicators), 'ok': 0, 'stale': 0, 'missing': 0}
+    freshness_stats = {'total': len(indicators), 'ok': 0, 'warn': 0, 'stale': 0, 'missing': 0}
 
     if not indicators:
         return '(无数据)', freshness_stats
@@ -193,8 +193,11 @@ def _collect_data_snapshot(
             freshness_stats['ok'] += 1
         elif tag == '[MISSING]':
             freshness_stats['missing'] += 1
-        else:
+        elif '[STALE' in tag:
             freshness_stats['stale'] += 1
+        else:
+            # WARN (gap <= 3d, acceptable for weekends/holidays)
+            freshness_stats['warn'] += 1
 
         val_str = '{:.4g}'.format(latest_val) if latest_val is not None else '--'
         prev_str = '{:.4g}'.format(prev_val) if prev_val is not None else '--'
@@ -358,15 +361,17 @@ def _check_overall_freshness(freshness_stats: dict) -> tuple:
     """
     total = freshness_stats.get('total', 0)
     if total == 0:
-        return False, 'no indicators configured'
+        return False, '数据源未配置'
 
+    # Only count truly stale (gap>3d) and missing as "bad"; WARN (gap<=3d, e.g. weekends) is acceptable
     bad = freshness_stats.get('missing', 0) + freshness_stats.get('stale', 0)
-    if bad > total * 0.5:
+    if bad > total * 0.3:
         return False, (
-            'data insufficient: {} of {} indicators stale/missing '
-            '(ok={}, stale={}, missing={})'.format(
+            '数据不足：{}/{} 个指标严重过期或缺失'
+            '（正常={}, 偏旧={}, 过期={}, 缺失={}）'.format(
                 bad, total,
                 freshness_stats.get('ok', 0),
+                freshness_stats.get('warn', 0),
                 freshness_stats.get('stale', 0),
                 freshness_stats.get('missing', 0),
             )
@@ -406,7 +411,7 @@ async def generate_briefing(session: str = 'morning') -> dict:
         return {
             'session': session,
             'date': today_str,
-            'content': '[briefing aborted] {}'.format(quality_msg),
+            'content': '[速递中止] {}'.format(quality_msg),
             'cached': False,
             'data_quality': data_quality,
         }
