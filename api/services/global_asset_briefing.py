@@ -109,7 +109,7 @@ INDICATOR_NAMES = {
     'idx_all_a': '中证全A', 'idx_dividend': '中证红利',
     'north_flow': '北向资金(亿)', 'qvix': 'QVIX(中国波指)',
     'cn_10y_bond': '中国10Y国债(%)', 'pe_csi300': '沪深300 PE',
-    'ah_premium': 'AH溢价指数(base=100, >100 means A premium)',
+    'ah_premium': 'AH股溢价指数(点位, 越高表示A股相对H股溢价越大)',
 }
 
 
@@ -337,6 +337,17 @@ def _load_briefing(session: str, brief_date: str) -> Optional[str]:
     return None
 
 
+def _load_latest_briefing(session: str) -> Optional[dict]:
+    """Load the most recent briefing for the given session (any date)."""
+    rows = execute_query(
+        "SELECT content, brief_date FROM trade_briefing WHERE session = %s ORDER BY brief_date DESC LIMIT 1",
+        (session,),
+    )
+    if rows:
+        return {'content': rows[0]['content'], 'date': str(rows[0]['brief_date'])}
+    return None
+
+
 def _save_briefing(session: str, brief_date: str, content: str) -> None:
     """Persist generated briefing to DB (upsert by session + date)."""
     execute_update(
@@ -448,10 +459,21 @@ async def generate_briefing(session: str = 'morning') -> dict:
 
 
 async def get_latest_briefing(session: str = 'morning', force: bool = False) -> Optional[dict]:
-    """Get the latest briefing. Returns cached version if available, generates otherwise."""
-    today_str = date.today().strftime('%Y-%m-%d')
+    """Get the latest briefing. Returns cached version if available, generates otherwise.
 
-    # Try loading from DB unless force regenerate
+    Time-awareness:
+      - morning session is valid after 08:30
+      - evening session is valid after 18:00
+      If current time is before the session window AND no today's cache exists,
+      return the most recent historical briefing instead of generating a new one.
+    """
+    from datetime import datetime
+    now = datetime.now()
+    today_str = date.today().strftime('%Y-%m-%d')
+    session_cutoffs = {'morning': 8, 'evening': 18}
+    cutoff_hour = session_cutoffs.get(session, 8)
+
+    # Try loading today's cache from DB unless force regenerate
     if not force:
         try:
             cached = _load_briefing(session, today_str)
@@ -465,5 +487,21 @@ async def get_latest_briefing(session: str = 'morning', force: bool = False) -> 
                 }
         except Exception as e:
             logger.warning('[briefing] Failed to load cached briefing: %s', e)
+
+        # Before session time and no today's cache -- return most recent historical
+        if now.hour < cutoff_hour:
+            try:
+                latest = _load_latest_briefing(session)
+                if latest:
+                    logger.info('[briefing] Before %s:00, returning latest historical %s briefing from %s',
+                                cutoff_hour, session, latest['date'])
+                    return {
+                        'session': session,
+                        'date': latest['date'],
+                        'content': latest['content'],
+                        'cached': True,
+                    }
+            except Exception as e:
+                logger.warning('[briefing] Failed to load latest briefing: %s', e)
 
     return await generate_briefing(session)

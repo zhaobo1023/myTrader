@@ -105,12 +105,17 @@ function AIBriefingCard() {
     queryFn: () => apiClient.get('/api/market/global-briefing', { params: { session }, timeout: 60000 }).then((r) => r.data),
     staleTime: 10 * 60 * 1000,
     retry: 1,
-    enabled: false,
   });
+
+  const forceRefetch = () => {
+    return apiClient.get('/api/market/global-briefing', { params: { session, force: true }, timeout: 60000 })
+      .then(() => refetch());
+  };
 
   const isAborted = briefing?.content?.startsWith('[速递中止]') || briefing?.content?.startsWith('[briefing aborted]');
   const hasContent = briefing?.content && !isLoading && !isAborted;
   const sessionLabel = session === 'morning' ? '盘前速递' : '收盘复盘';
+  const isHistorical = briefing?.cached && briefing?.date !== new Date().toISOString().slice(0, 10);
 
   return (
     <div style={{
@@ -153,15 +158,16 @@ function AIBriefingCard() {
           {briefing?.cached && hasContent && (
             <span style={{
               fontSize: '9px', fontWeight: 500, padding: '1px 6px',
-              borderRadius: '8px', background: 'rgba(34,197,94,0.1)',
-              color: '#22c55e',
+              borderRadius: '8px',
+              background: isHistorical ? 'rgba(198,144,38,0.1)' : 'rgba(34,197,94,0.1)',
+              color: isHistorical ? '#c69026' : '#22c55e',
             }}>
-              cached
+              {isHistorical ? `${briefing.date}` : 'cached'}
             </span>
           )}
         </div>
         <button
-          onClick={() => refetch()}
+          onClick={() => hasContent ? forceRefetch() : refetch()}
           disabled={isLoading}
           style={{
             fontSize: '11px', padding: '4px 14px', borderRadius: '6px',
