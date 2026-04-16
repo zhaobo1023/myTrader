@@ -30,7 +30,7 @@ logger = logging.getLogger('myTrader.global_briefing')
 # Prompt templates (v2 -- layered structure)
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """你是一位专业的A股投资顾问，为个人投资者提供每日市场研判。
+_SYSTEM_BASE = """你是一位专业的A股投资顾问，为个人投资者提供每日市场研判。
 
 ## 输出格式（强制5层结构，每层必须使用对应的Markdown标题）
 
@@ -40,16 +40,7 @@ SYSTEM_PROMPT = """你是一位专业的A股投资顾问，为个人投资者提
 ### 核心数据速览
 用要点列表列出3-5个最关键的数据变动（带具体数字），不要重复原始数据表。
 
-### 行业冷热
-基于ETF偏离度数据，指出哪些板块过热需警惕、哪些突破可关注、哪些滞涨需回避。
-用2-3句话概括，不要逐个ETF复述。
-
-### 异动与事件
-基于涨跌停明细和重大新闻，提炼2-3条最值得关注的个股或事件线索。
-标注连板王、行业聚集效应等。无明细数据时标注"[数据不足]"。
-
-### 风险提示
-列出1-2条当前最大风险，给出明确的仓位和风格建议。
+{layer_instructions}
 
 ## 规则（强制，不得违反）
 1. 对标记为 [MISSING] 或 [STALE] 的指标，声明"数据不可用"或"数据滞后"，绝不可编造数值
@@ -60,7 +51,36 @@ SYSTEM_PROMPT = """你是一位专业的A股投资顾问，为个人投资者提
 6. 全文控制在600字以内，宁简勿繁
 7. 如提供了"市场参考线索"，可酌情融入对应层级（行业催化->行业冷热，风险->风险提示），但不可喧宾夺主，每条线索最多用半句话带过，标注来源"""
 
+_MORNING_LAYERS = """### 行业冷热（侧重: 今日机会预判）
+基于ETF偏离度，找出今天值得关注的方向：哪些板块处于突破临界点可布局？哪些隔夜有催化值得低吸？
+同时标注过热板块的追高风险。用2-3句话概括，不要逐个ETF复述。
+
+### 异动与事件（侧重: 盘前看点）
+基于前一日涨跌停明细和隔夜消息，提炼2-3条今日值得重点跟踪的方向。
+关注连板股的溢价机会、行业聚集效应是否延续、隔夜外盘映射哪些A股板块。
+
+### 风险提示（侧重: 今日操作注意事项）
+列出1-2条今天操作最需警惕的事项：高位板块是否有分歧风险？外盘利空是否会传导？
+给出明确的今日仓位和操作节奏建议（如"上午观察量能再决定加减仓"）。"""
+
+_EVENING_LAYERS = """### 行业冷热（侧重: 板块强弱复盘）
+基于ETF偏离度和今日涨跌停分布，复盘今天哪些板块走强/走弱，与昨日相比热度如何变化。
+判断当前主线是否延续、是否出现新的轮动方向。用2-3句话概括。
+
+### 异动与事件（侧重: 盘面回顾与明日线索）
+复盘今日盘面最显著的特征：连板股晋级/断板情况、板块资金流向、尾盘异动信号。
+提炼1-2条对明天有参考价值的线索。
+
+### 风险提示（侧重: 持仓过夜风险评估）
+基于今日盘面和盘后消息，评估持仓过夜的风险级别。
+关注尾盘跳水信号、盘后利空消息、外盘盘前动向，给出隔夜仓位建议。"""
+
+SYSTEM_PROMPT_MORNING = _SYSTEM_BASE.format(layer_instructions=_MORNING_LAYERS)
+SYSTEM_PROMPT_EVENING = _SYSTEM_BASE.format(layer_instructions=_EVENING_LAYERS)
+
 MORNING_PROMPT = """## 盘前速递（{date}）
+
+你的目标：帮助投资者在开盘前快速判断今日操作方向。重点是"今天该关注什么、该回避什么"。
 
 ### 数据区1: A股大盘信号（前一交易日）
 {dashboard_snapshot}
@@ -77,9 +97,11 @@ MORNING_PROMPT = """## 盘前速递（{date}）
 ### 数据区5: 恐贪指数
 {fear_greed_snapshot}
 {article_hints}
-请按5层结构输出盘前解读。"""
+请按5层结构输出盘前解读，侧重今日机会与风险预判。"""
 
 EVENING_PROMPT = """## 收盘复盘（{date}）
+
+你的目标：帮助投资者复盘今日盘面、评估持仓过夜风险、为明天做准备。重点是"今天发生了什么、明天怎么应对"。
 
 ### 数据区1: A股大盘信号（今日）
 {dashboard_snapshot}
@@ -96,7 +118,7 @@ EVENING_PROMPT = """## 收盘复盘（{date}）
 ### 数据区5: 恐贪指数
 {fear_greed_snapshot}
 {article_hints}
-请按5层结构输出收盘复盘。"""
+请按5层结构输出收盘复盘，侧重盘面回顾与隔夜风险评估。"""
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +693,7 @@ async def generate_briefing(session: str = 'morning') -> dict:
         }
 
     template = MORNING_PROMPT if session == 'morning' else EVENING_PROMPT
+    system_prompt = SYSTEM_PROMPT_MORNING if session == 'morning' else SYSTEM_PROMPT_EVENING
     prompt = template.format(
         date=today_str,
         data_snapshot=snapshot,
@@ -685,7 +708,7 @@ async def generate_briefing(session: str = 'morning') -> dict:
     llm = get_llm_client()
     content = await llm.call(
         prompt=prompt,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         temperature=0.4,
         max_tokens=2500,
     )

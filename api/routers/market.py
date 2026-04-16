@@ -153,17 +153,3 @@ async def push_data_health(
     from datetime import date as _date, datetime as _dt
     target = _dt.strptime(date, '%Y-%m-%d').date() if date else _date.today()
     return push_health_report(target)
-
-
-@router.post('/digest-articles')
-async def digest_articles(
-    directory: str = Query(
-        '/Users/zhaobo/Documents/notes/Cubox-new',
-        description="Cubox export directory path",
-    ),
-    date: str = Query(None, description="Target date YYYY-MM-DD (default: today)"),
-):
-    """Scan Cubox articles, extract digests, and generate curated report -> Feishu."""
-    from api.services.article_digest_service import run_nightly_digest_pipeline
-    result = await run_nightly_digest_pipeline(directory=directory, target_date=date)
-    return result
