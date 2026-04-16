@@ -8,7 +8,9 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.dependencies import get_db
+import redis.asyncio as aioredis
+
+from api.dependencies import get_db, get_redis
 from api.middleware.auth import require_admin
 from api.models.user import User
 
@@ -127,16 +129,26 @@ async def toggle_user_active(
 # Data health check endpoint
 # ============================================================
 
+_DATA_HEALTH_CACHE_KEY = 'admin:data_health'
+_DATA_HEALTH_CACHE_TTL = 3600  # 1 hour
+
+
 @router.get('/data-health')
 async def get_data_health(
     db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
 ):
     """
     Return latest update dates and record counts for key data dimensions.
-    No table names exposed - uses friendly descriptions.
+    Results are cached in Redis for 1 hour.
     """
+    import json
     from datetime import date as _date
     import asyncio
+
+    cached = await redis.get(_DATA_HEALTH_CACHE_KEY)
+    if cached:
+        return json.loads(cached)
 
     today = _date.today().isoformat()
 
@@ -396,7 +408,7 @@ async def get_data_health(
     warn_count = sum(1 for r in result if r['status'] == 'warn')
     error_count = sum(1 for r in result if r['status'] == 'error')
 
-    return {
+    payload = {
         'checked_at': today,
         'summary': {
             'ok': ok_count,
@@ -406,6 +418,8 @@ async def get_data_health(
         },
         'items': result,
     }
+    await redis.set(_DATA_HEALTH_CACHE_KEY, json.dumps(payload), ex=_DATA_HEALTH_CACHE_TTL)
+    return payload
 
 
 # ============================================================
