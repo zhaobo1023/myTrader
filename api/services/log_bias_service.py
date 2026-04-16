@@ -126,7 +126,7 @@ def get_run_status() -> Optional[dict]:
     return _fmt_run(rows[0])
 
 
-def trigger_run() -> dict:
+def trigger_run(force: bool = False) -> dict:
     """Trigger log bias daily calculation for the latest trade date."""
     _ensure_run_table()
 
@@ -148,10 +148,10 @@ def trigger_run() -> dict:
     if rows:
         row = rows[0]
         status = row['status']
-        if status == 'done':
+        if status == 'done' and not force:
             from fastapi import HTTPException
             raise HTTPException(status_code=409, detail=f'交易日 {trade_date} 已完成，不可重复触发')
-        if status in ('pending', 'running'):
+        if status in ('pending', 'running') and not force:
             triggered_at = row['triggered_at']
             if isinstance(triggered_at, str):
                 triggered_at = datetime.fromisoformat(triggered_at)

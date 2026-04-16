@@ -4,7 +4,7 @@ Industry router: SW rotation + ETF log bias
 """
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from api.services import sw_rotation_service
 from api.services import log_bias_service
@@ -64,9 +64,9 @@ async def get_log_bias_run_status():
 
 
 @router.post('/log-bias/trigger')
-async def trigger_log_bias():
+async def trigger_log_bias(force: bool = Query(False, description='Force re-run even if already done')):
     """Trigger today's ETF log bias daily calculation."""
-    return log_bias_service.trigger_run()
+    return log_bias_service.trigger_run(force=force)
 
 
 @router.get('/log-bias/history/{ts_code}')

@@ -489,31 +489,48 @@ function LogBiasSparkline({ data }: { data: HistoryRow[] }) {
   if (data.length < 2) return <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>数据不足</span>;
 
   const W = 480;
-  const H = 80;
-  const PAD = 4;
+  const H = 100;
+  const PAD_TOP = 4;
+  const PAD_BOTTOM = 18; // room for date labels
+  const PAD_X = 4;
 
   const values = data.map(d => d.log_bias ?? 0);
   const min = Math.min(...values);
   const max = Math.max(...values);
   const range = max - min || 1;
 
-  const toX = (i: number) => PAD + (i / (data.length - 1)) * (W - PAD * 2);
-  const toY = (v: number) => PAD + (1 - (v - min) / range) * (H - PAD * 2);
+  const toX = (i: number) => PAD_X + (i / (data.length - 1)) * (W - PAD_X * 2);
+  const toY = (v: number) => PAD_TOP + (1 - (v - min) / range) * (H - PAD_TOP - PAD_BOTTOM);
 
   const zeroY = toY(0);
+  const chartBottom = H - PAD_BOTTOM;
 
   // Build polyline points
   const points = data.map((d, i) => `${toX(i)},${toY(d.log_bias ?? 0)}`).join(' ');
 
-  // Signal dots
-  const dots = data.filter(d => d.signal_state !== 'normal').map((d, _, arr) => {
-    const idx = data.indexOf(d);
-    const meta = SIGNAL_META[d.signal_state] ?? SIGNAL_META.normal;
-    return { x: toX(idx), y: toY(d.log_bias ?? 0), color: meta.color, label: meta.label, date: d.trade_date };
-  });
+  // All data points with hover tooltip (date + value)
+  const allDots = data.map((d, i) => ({
+    x: toX(i), y: toY(d.log_bias ?? 0),
+    date: d.trade_date, value: d.log_bias ?? 0,
+    signal: d.signal_state,
+  }));
 
-  // Reference lines at ±5, ±15
+  // Signal dots (visible markers)
+  const signalDots = allDots.filter(d => d.signal !== 'normal').map(d => ({
+    ...d, color: (SIGNAL_META[d.signal] ?? SIGNAL_META.normal).color,
+    label: (SIGNAL_META[d.signal] ?? SIGNAL_META.normal).label,
+  }));
+
+  // Reference lines at +/-5, +/-15
   const refLines = [5, 15, -5, -15].map(v => ({ v, y: toY(v), dashed: Math.abs(v) === 15 }));
+
+  // Date labels on X axis: start, middle, end
+  const fmtDate = (d: string) => d.slice(5); // MM-DD
+  const dateTicks = [
+    { i: 0, label: fmtDate(data[0].trade_date) },
+    { i: Math.floor(data.length / 2), label: fmtDate(data[Math.floor(data.length / 2)].trade_date) },
+    { i: data.length - 1, label: fmtDate(data[data.length - 1].trade_date) },
+  ];
 
   return (
     <div>
@@ -521,26 +538,39 @@ function LogBiasSparkline({ data }: { data: HistoryRow[] }) {
         {/* reference lines */}
         {refLines.map(({ v, y, dashed }) => (
           <g key={v}>
-            <line x1={PAD} y1={y} x2={W - PAD} y2={y}
+            <line x1={PAD_X} y1={y} x2={W - PAD_X} y2={y}
               stroke={v > 0 ? '#27a644' : '#e5534b'}
               strokeWidth={0.8}
               strokeDasharray={dashed ? '4 3' : '2 2'}
               opacity={0.5} />
-            <text x={W - PAD + 2} y={y + 3} fontSize={8} fill={v > 0 ? '#27a644' : '#e5534b'} opacity={0.7}>{v}</text>
+            <text x={W - PAD_X + 2} y={y + 3} fontSize={8} fill={v > 0 ? '#27a644' : '#e5534b'} opacity={0.7}>{v}</text>
           </g>
         ))}
         {/* zero line */}
-        {zeroY >= PAD && zeroY <= H - PAD && (
-          <line x1={PAD} y1={zeroY} x2={W - PAD} y2={zeroY}
+        {zeroY >= PAD_TOP && zeroY <= chartBottom && (
+          <line x1={PAD_X} y1={zeroY} x2={W - PAD_X} y2={zeroY}
             stroke="var(--border-subtle)" strokeWidth={1} />
         )}
         {/* log_bias line */}
         <polyline points={points} fill="none" stroke="var(--accent)" strokeWidth={1.5} />
-        {/* signal dots */}
-        {dots.map((d, i) => (
-          <circle key={i} cx={d.x} cy={d.y} r={3} fill={d.color} stroke="#fff" strokeWidth={1}>
-            <title>{d.date} {d.label}</title>
+        {/* invisible hover targets for all points */}
+        {allDots.map((d, i) => (
+          <circle key={`h-${i}`} cx={d.x} cy={d.y} r={6} fill="transparent" stroke="none">
+            <title>{d.date}  {d.value.toFixed(2)}</title>
           </circle>
+        ))}
+        {/* visible signal dots */}
+        {signalDots.map((d, i) => (
+          <circle key={i} cx={d.x} cy={d.y} r={3} fill={d.color} stroke="#fff" strokeWidth={1}>
+            <title>{d.date}  {d.value.toFixed(2)}  {d.label}</title>
+          </circle>
+        ))}
+        {/* X axis date labels */}
+        {dateTicks.map(({ i, label }) => (
+          <text key={i} x={toX(i)} y={H - 2} fontSize={9} fill="var(--text-muted)"
+            textAnchor={i === 0 ? 'start' : i === data.length - 1 ? 'end' : 'middle'}>
+            {label}
+          </text>
         ))}
       </svg>
       <div style={{ display: 'flex', gap: '16px', marginTop: '6px', flexWrap: 'wrap' }}>
@@ -611,11 +641,12 @@ function LogBiasCard() {
     }
   }
 
-  async function handleTrigger() {
+  async function handleTrigger(force = false) {
+    if (force && !confirm('确认强制重新计算？')) return;
     setTriggering(true);
     setErrorMsg(null);
     try {
-      const res = await fetch(`${API_BASE}/api/industry/log-bias/trigger`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/api/industry/log-bias/trigger?force=${force}`, { method: 'POST' });
       if (!res.ok) {
         const j = await res.json();
         setErrorMsg(j.detail || '触发失败');
@@ -631,17 +662,19 @@ function LogBiasCard() {
   const today = new Date().toISOString().split('T')[0];
   const isToday = runStatus.run_date === today;
 
+  const isDone = status === 'done' && isToday;
+  const isRunning = (status === 'running' || status === 'pending') && isToday;
+  const isFailed = status === 'failed' && isToday;
+
   let btnLabel = '触发计算';
   let btnDisabled = triggering;
   let btnColor = 'var(--accent)';
-  if (status && isToday) {
-    if (status === 'done') {
-      btnLabel = '今日已完成'; btnColor = '#27a644'; btnDisabled = true;
-    } else if (status === 'running' || status === 'pending') {
-      btnLabel = '计算中...'; btnColor = 'var(--text-muted)'; btnDisabled = true;
-    } else if (status === 'failed') {
-      btnLabel = '重新触发'; btnColor = '#c69026';
-    }
+  if (isDone) {
+    btnLabel = '今日已完成'; btnColor = '#27a644'; btnDisabled = true;
+  } else if (isRunning) {
+    btnLabel = '计算中...'; btnColor = 'var(--text-muted)'; btnDisabled = true;
+  } else if (isFailed) {
+    btnLabel = '重新触发'; btnColor = '#c69026';
   }
 
   const signalOrder = ['overheat', 'breakout', 'pullback', 'stall', 'normal'];
@@ -717,6 +750,19 @@ function LogBiasCard() {
           >
             {triggering ? '触发中...' : btnLabel}
           </button>
+          {isDone && (
+            <button
+              onClick={e => { e.stopPropagation(); handleTrigger(true); }}
+              disabled={triggering}
+              style={{
+                padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 510,
+                background: 'transparent', border: '1px solid var(--text-muted)',
+                color: 'var(--text-muted)', cursor: triggering ? 'wait' : 'pointer',
+              }}
+            >
+              强制重算
+            </button>
+          )}
           <span style={{ fontSize: '16px', color: 'var(--text-muted)', lineHeight: 1 }}>
             {expanded ? '▲' : '▼'}
           </span>
