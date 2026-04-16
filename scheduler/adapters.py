@@ -5,6 +5,7 @@ Adapter functions for modules that don't have a simple zero-argument entry point
 Each adapter provides a `dry_run` parameter. When dry_run=True, only prints
 what would happen without actually executing.
 """
+import gc
 import logging
 
 logger = logging.getLogger(__name__)
@@ -382,12 +383,14 @@ def run_factor_calculation(dry_run: bool = False, env: str = 'online'):
         from data_analyst.factors.basic_factor_calculator import calculate_and_save_factors
         calculate_and_save_factors()
         logger.info("[OK] basic factors done")
+    gc.collect()
 
     # Extended factors
     with TaskLogger('calc_extended_factor', 'factor', env=env):
         from data_analyst.factors.extended_factor_calculator import main as ext_main
         ext_main()
         logger.info("[OK] extended factors done")
+    gc.collect()
 
     # Valuation factors
     try:
@@ -397,6 +400,7 @@ def run_factor_calculation(dry_run: bool = False, env: str = 'online'):
             logger.info("[OK] valuation factors done")
     except Exception as e:
         logger.warning("[WARN] valuation factors failed (non-critical): %s", e)
+    gc.collect()
 
     # Quality factors
     try:
@@ -406,6 +410,7 @@ def run_factor_calculation(dry_run: bool = False, env: str = 'online'):
             logger.info("[OK] quality factors done")
     except Exception as e:
         logger.warning("[WARN] quality factors failed (non-critical): %s", e)
+    gc.collect()
 
     # Technical factors
     try:
@@ -415,6 +420,7 @@ def run_factor_calculation(dry_run: bool = False, env: str = 'online'):
             logger.info("[OK] technical factors done")
     except Exception as e:
         logger.warning("[WARN] technical factors failed (non-critical): %s", e)
+    gc.collect()
 
 
 def run_indicator_calculation(dry_run: bool = False, env: str = 'online'):

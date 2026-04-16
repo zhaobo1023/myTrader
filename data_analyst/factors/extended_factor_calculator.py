@@ -15,6 +15,7 @@
 """
 import sys
 import os
+import gc
 import pandas as pd
 import numpy as np
 from datetime import date, timedelta
@@ -403,7 +404,7 @@ def save_factors_batch(factors_data):
 
 
 def main():
-    """主函数 - 按股票分批回填扩展因子"""
+    """主函数 - 按股票分批回填扩展因子（财务数据按批加载，避免 OOM）"""
     import argparse as _ap
     parser = _ap.ArgumentParser(description='扩展因子计算')
     parser.add_argument('--start', type=str, default=None, help='回填起始日期 YYYY-MM-DD')
@@ -435,14 +436,8 @@ def main():
     total_stocks = len(all_codes)
     logger.info(f"  共 {total_stocks} 只股票")
 
-    # 3. 加载财务数据 (一次性加载，避免重复查询)
-    logger.info(f"\n[3] 加载财务数据...")
-    t0 = time()
-    all_financial_data = load_financial_data(all_codes)
-    logger.info(f"  加载完成: {len(all_financial_data)} 只股票有财务数据, 耗时 {time()-t0:.1f}s")
-
-    # 4. 分批处理
-    logger.info(f"\n[4] 开始分批处理 (每批 {BATCH_SIZE} 只股票)...")
+    # 3. 分批处理（财务数据 + 日线数据同时按批加载）
+    logger.info(f"\n[3] 开始分批处理 (每批 {BATCH_SIZE} 只股票)...")
     total_records = 0
     total_time_start = time()
 
@@ -453,12 +448,19 @@ def main():
 
         logger.info(f"\n--- 批次 {batch_num}/{total_batches} ({len(batch_codes)} 只股票) ---")
 
+        # 加载财务数据（仅当前批次）
+        t0 = time()
+        batch_financial = load_financial_data(batch_codes)
+        logger.info(f"  财务数据: {len(batch_financial)} 只股票, {time()-t0:.1f}s")
+
         # 加载日线数据
         t0 = time()
         stock_data = load_stock_daily_data(batch_codes, DATA_START_DATE, END_DATE)
-        logger.info(f"  日线数据加载完成: {len(stock_data)} 只股票, 耗时 {time()-t0:.1f}s")
+        logger.info(f"  日线数据: {len(stock_data)} 只股票, {time()-t0:.1f}s")
 
         if not stock_data:
+            del batch_financial
+            gc.collect()
             continue
 
         # 计算因子
@@ -470,14 +472,13 @@ def main():
                 price_factors = calc_price_volume_factors(df)
 
                 # 计算财务因子
-                financial_df = all_financial_data.get(code)
+                financial_df = batch_financial.get(code)
                 financial_factors = calc_financial_factors(df, financial_df) if financial_df is not None else None
 
                 # 合并因子
                 merged_factors = merge_and_prepare_factors(price_factors, financial_factors, code)
 
                 if merged_factors is not None and not merged_factors.empty:
-                    # 只保留目标日期范围内的因子
                     start_dt = pd.to_datetime(START_DATE)
                     end_dt = pd.to_datetime(END_DATE)
                     mask = (merged_factors.index >= start_dt) & (merged_factors.index <= end_dt)
@@ -496,6 +497,10 @@ def main():
             total_records += saved
             logger.info(f"  数据保存完成: {saved} 条记录, 耗时 {time()-t0:.1f}s")
 
+        # 释放内存
+        del batch_financial, stock_data, factors_data
+        gc.collect()
+
         # 显示总进度
         elapsed = time() - total_time_start
         processed = min(batch_idx + BATCH_SIZE, total_stocks)
@@ -506,8 +511,8 @@ def main():
         logger.info(f"  >>> 已保存: {total_records:,} 条记录")
         logger.info(f"  >>> 预计剩余时间: {eta:.1f} 分钟")
 
-    # 5. 验证结果
-    logger.info(f"\n[5] 验证结果...")
+    # 4. 验证结果
+    logger.info(f"\n[4] 验证结果...")
     sql = "SELECT COUNT(*) as cnt FROM trade_stock_extended_factor"
     result = execute_query(sql)
     total = result[0]['cnt'] if result else 0
@@ -527,7 +532,7 @@ def main():
 
     total_elapsed = time() - total_time_start
     logger.info(f"\n" + "=" * 60)
-    logger.info(f"✅ 扩展因子计算完成!")
+    logger.info(f"扩展因子计算完成!")
     logger.info(f"  总耗时: {total_elapsed/60:.1f} 分钟")
     logger.info(f"  总记录数: {total_records:,}")
     logger.info("=" * 60)

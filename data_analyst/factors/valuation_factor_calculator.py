@@ -18,6 +18,7 @@
 """
 import sys
 import os
+import gc
 import pandas as pd
 import numpy as np
 from datetime import date, timedelta
@@ -307,7 +308,7 @@ def save_factors_batch(factors_data):
 
 
 def main():
-    """主函数 - 按股票分批回填估值因子"""
+    """主函数 - 按股票分批回填估值因子（基本面数据按批加载，避免 OOM）"""
     logger.info("=" * 60)
     logger.info("估值因子计算程序")
     logger.info(f"回填范围: {START_DATE} ~ {END_DATE}")
@@ -324,14 +325,8 @@ def main():
     total_stocks = len(all_codes)
     logger.info(f"  共 {total_stocks} 只股票")
 
-    # 3. 加载每日基本面数据 (一次性加载，避免重复查询)
-    logger.info(f"\n[3] 加载每日基本面数据...")
-    t0 = time()
-    all_basic_data = load_daily_basic_data(all_codes, DATA_START_DATE, END_DATE)
-    logger.info(f"  加载完成: {len(all_basic_data)} 只股票有基本面数据, 耗时 {time()-t0:.1f}s")
-
-    # 4. 分批处理
-    logger.info(f"\n[4] 开始分批处理 (每批 {BATCH_SIZE} 只股票)...")
+    # 3. 分批处理（基本面数据 + 日线数据同时按批加载）
+    logger.info(f"\n[3] 开始分批处理 (每批 {BATCH_SIZE} 只股票)...")
     total_records = 0
     total_time_start = time()
 
@@ -342,12 +337,19 @@ def main():
 
         logger.info(f"\n--- 批次 {batch_num}/{total_batches} ({len(batch_codes)} 只股票) ---")
 
+        # 加载基本面数据（仅当前批次）
+        t0 = time()
+        batch_basic = load_daily_basic_data(batch_codes, DATA_START_DATE, END_DATE)
+        logger.info(f"  基本面数据: {len(batch_basic)} 只股票, {time()-t0:.1f}s")
+
         # 加载日线数据
         t0 = time()
         stock_data = load_stock_daily_data(batch_codes, DATA_START_DATE, END_DATE)
-        logger.info(f"  日线数据加载完成: {len(stock_data)} 只股票, 耗时 {time()-t0:.1f}s")
+        logger.info(f"  日线数据: {len(stock_data)} 只股票, {time()-t0:.1f}s")
 
         if not stock_data:
+            del batch_basic
+            gc.collect()
             continue
 
         # 计算因子
@@ -355,16 +357,13 @@ def main():
         factors_data = {}
         for code, df in stock_data.items():
             try:
-                # 获取基本面数据
-                basic_df = all_basic_data.get(code)
+                basic_df = batch_basic.get(code)
                 if basic_df is None or len(basic_df) == 0:
                     continue
 
-                # 计算估值因子
                 valuation_factors = calc_valuation_factors(df, basic_df)
 
                 if valuation_factors is not None and not valuation_factors.empty:
-                    # 只保留目标日期范围内的因子
                     start_dt = pd.to_datetime(START_DATE)
                     end_dt = pd.to_datetime(END_DATE)
                     mask = (valuation_factors.index >= start_dt) & (valuation_factors.index <= end_dt)
@@ -383,6 +382,10 @@ def main():
             total_records += saved
             logger.info(f"  数据保存完成: {saved} 条记录, 耗时 {time()-t0:.1f}s")
 
+        # 释放内存
+        del batch_basic, stock_data, factors_data
+        gc.collect()
+
         # 显示总进度
         elapsed = time() - total_time_start
         processed = min(batch_idx + BATCH_SIZE, total_stocks)
@@ -393,8 +396,8 @@ def main():
         logger.info(f"  >>> 已保存: {total_records:,} 条记录")
         logger.info(f"  >>> 预计剩余时间: {eta:.1f} 分钟")
 
-    # 5. 验证结果
-    logger.info(f"\n[5] 验证结果...")
+    # 4. 验证结果
+    logger.info(f"\n[4] 验证结果...")
     sql = "SELECT COUNT(*) as cnt FROM trade_stock_valuation_factor"
     result = execute_query(sql)
     total = result[0]['cnt'] if result else 0
