@@ -286,52 +286,21 @@ def save_factors_batch(all_factors: dict, batch_size: int = 5000) -> int:
 # 主流程
 # ============================================================
 
-def calculate_and_save_factors(calc_date=None, start_date='2023-01-01'):
-    """计算并保存单日因子"""
-    logger.info("=" * 60)
-    logger.info("基础因子计算入库程序")
-    logger.info("=" * 60)
+def calculate_and_save_factors(calc_date=None, start_date=None):
+    """
+    计算并保存单日因子 (增量模式: 分批加载, 只计算目标日期)
 
-    create_factor_table()
-
+    Args:
+        calc_date: 目标日期, 默认今天
+        start_date: K线加载起始日期. 默认自动计算(目标日期前120自然日,
+                    足够 mom_60 等滚动窗口)
+    """
     if calc_date is None:
         calc_date = date.today()
-    end_date = calc_date.strftime('%Y-%m-%d')
+    end_str = calc_date.strftime('%Y-%m-%d') if hasattr(calc_date, 'strftime') else str(calc_date)
 
-    logger.info(f"\n[1] 加载K线数据 ({start_date} ~ {end_date})...")
-    t0 = time()
-    all_data = load_daily_data(start_date, end_date)
-    logger.info(f"  加载完成: {len(all_data)} 只股票, 耗时 {time()-t0:.1f}s")
-
-    if not all_data:
-        logger.error("  未加载到数据")
-        return
-
-    logger.info(f"\n[2] 计算基础因子...")
-    t0 = time()
-    all_factors = calc_all_factors_batch(all_data)
-    logger.info(f"  计算完成: {len(all_factors)} 只股票, 耗时 {time()-t0:.1f}s")
-
-    if not all_factors:
-        logger.error("  因子计算失败")
-        return
-
-    # 只保留 calc_date 的因子
-    target_date = calc_date.strftime('%Y-%m-%d')
-    single_day_factors = {}
-    for code, factors_df in all_factors.items():
-        if target_date in factors_df.index.strftime('%Y-%m-%d').tolist():
-            idx = factors_df.index[factors_df.index.strftime('%Y-%m-%d') == target_date][0]
-            single_day_factors[code] = factors_df.loc[[idx]]
-
-    logger.info(f"\n[3] 保存到数据库 (calc_date={calc_date})...")
-    t0 = time()
-    count = save_factors_batch(single_day_factors)
-    logger.info(f"  保存完成: {count} 条记录, 耗时 {time()-t0:.1f}s")
-
-    logger.info("\n" + "=" * 60)
-    logger.info("✅ 基础因子计算入库完成!")
-    logger.info("=" * 60)
+    # 增量: 只回填目标日期一天, 用 backfill 的分批模式
+    backfill_factors(start_date=end_str, end_date=end_str, batch_size=200)
 
 
 def backfill_factors(start_date='2024-01-01', end_date=None, batch_size=500):

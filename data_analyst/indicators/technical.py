@@ -344,19 +344,22 @@ class TechnicalIndicatorCalculator:
 
         Args:
             stock_code: 股票代码
-            start_date: 开始日期（可选）
+            start_date: 开始日期（可选, 默认回溯500自然日,
+                        足够MA250等长周期指标的滚动窗口）
         """
+        # 默认回溯500自然日(约250交易日), 覆盖MA250等长周期指标
+        if start_date is None:
+            from datetime import date, timedelta
+            start_date = (date.today() - timedelta(days=500)).strftime('%Y-%m-%d')
+
         # 从数据库读取K线数据
         sql = """
         SELECT trade_date, open_price, high_price, low_price, close_price, volume, turnover_rate
         FROM trade_stock_daily
         WHERE stock_code = %s
+          AND trade_date >= %s
         """
-        params = [stock_code]
-
-        if start_date:
-            sql += " AND trade_date >= %s"
-            params.append(start_date)
+        params = [stock_code, start_date]
 
         sql += " ORDER BY trade_date ASC"
 

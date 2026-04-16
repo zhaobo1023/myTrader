@@ -179,13 +179,14 @@ def batch_calc_factors(all_data):
 # 主流程
 # ============================================================
 
-def calculate_factors_for_date(calc_date=None, start_date='2024-01-01'):
+def calculate_factors_for_date(calc_date=None, start_date=None):
     """
     计算指定日期的因子
 
     Args:
         calc_date: 计算日期， 默认今天
-        start_date: K线数据起始日期
+        start_date: K线数据起始日期. 默认自动计算(calc_date 前180自然日,
+                    足够 momentum_60d 等滚动窗口)
     """
     if not HAS_TALIB:
         logger.error("TA-Lib 未安装，无法计算因子")
@@ -199,6 +200,10 @@ def calculate_factors_for_date(calc_date=None, start_date='2024-01-01'):
     if calc_date is None:
         calc_date = date.today()
     end_date = calc_date.strftime('%Y-%m-%d')
+
+    # 自动计算 start_date: 需要 ~60 交易日历史, 取 180 自然日余量
+    if start_date is None:
+        start_date = (calc_date - timedelta(days=180)).strftime('%Y-%m-%d')
 
     # 检查是否已有当天数据
     logger.info("检查已有数据...")

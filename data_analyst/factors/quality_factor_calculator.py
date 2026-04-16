@@ -34,9 +34,10 @@ logger = logging.getLogger(__name__)
 
 # 配置
 BATCH_SIZE = 500  # 每批处理的股票数量
-START_DATE = '2024-01-01'
+START_DATE = date.today().strftime('%Y-%m-%d')  # 默认只算今天
 END_DATE = date.today().strftime('%Y-%m-%d')
-DATA_START_DATE = '2023-01-01'  # 需要更早的数据来计算因子
+# 质量因子需要日线+财务数据, 180自然日足够覆盖滚动窗口
+DATA_START_DATE = (date.today() - timedelta(days=180)).strftime('%Y-%m-%d')
 
 
 def get_all_stock_codes():
