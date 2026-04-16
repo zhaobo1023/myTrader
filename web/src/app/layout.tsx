@@ -16,8 +16,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'myTrader - Personal Quantitative Trading Platform',
-  description: 'Personal investment research and trading platform',
+  title: 'myTrader - AI 量化投研平台',
+  description: '智能选股 / AI 研报 / 因子分析 / 风险管理',
+  openGraph: {
+    title: 'myTrader - AI 量化投研平台',
+    description: '智能选股 / AI 研报 / 因子分析 / 风险管理',
+    siteName: 'myTrader',
+    locale: 'zh_CN',
+    type: 'website',
+  },
 };
 
 export const viewport = {
