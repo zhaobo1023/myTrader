@@ -26,70 +26,75 @@ jobs:
             echo "web=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.ECS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "|1|PrZdNdJy02iSNuVyeFJWBv6//og=|rUrOItst+FBnMBeHbbMGGe6Z6OI= ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINoWrSbNmRu+3/wvdDYkDTZaL8H6rPGABNFf9yb5ydSx" >> ~/.ssh/known_hosts
+          echo "|1|RTUwyY3qyB9Olewk1MYPpNkqDeA=|sXyQOhVRzSY6YrsIDWufFFl8lrE= ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDAfAJG6YqzNPyhB1VlzKRXFXGXmUre5j3Gm/FC7tECtE266Nybb2uCkFOJkmwt0NU9tEkVHEQjAVxvZdcWUhlAlRnN3C5fCWek9RAgNiswJpAyreEUxhMUVLbXpFoXtQGFemHClfuxHy46pLhKYDcZUio0Oyr1kjvADQEElDFRI8aERriXar2Bh2O513nAOPIwT/35B+ZJ3Igj53fqV4UFkWLwiGUVcwWo0w7B+vPus1Hnz8p0hatJwxYDTxrRtUAILjLgvFqwk9h/60fMKLjTRTby2PHtrtJqla2NrJfBge3WgzF2RNZ6iHplNFnoPiYE4wLzq2HGsWA5PdEp1Epz" >> ~/.ssh/known_hosts
+
       - name: Deploy to ECS via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.ECS_HOST }}
-          username: ${{ secrets.ECS_USER }}
-          key: ${{ secrets.ECS_SSH_KEY }}
-          command_timeout: 10m
-          envs: WEB_CHANGED,POSTHOG_KEY,POSTHOG_HOST
-          script: |
-            set -e
-            cd /root/app
-
-            # ── 1. Pull latest code ──────────────────────────────────────
-            echo "[1/4] Pulling latest code..."
-            git fetch origin
-            git reset --hard origin/main
-
-            # ── 2. Restart API + Celery + Nginx (volume-mounted, no rebuild needed)
-            echo "[2/4] Restarting API, Celery & Nginx containers..."
-            docker restart mytrader-nginx mytrader-api app-celery-worker-1 app-celery-beat-1
-            for i in $(seq 1 20); do
-              sleep 2
-              STATUS=$(docker inspect --format='{{.State.Health.Status}}' mytrader-api 2>/dev/null || echo "none")
-              if [ "$STATUS" = "healthy" ]; then
-                echo "  API healthy after ${i}x2s"
-                break
-              fi
-              if [ "$i" = "20" ]; then
-                echo "[ERROR] API did not become healthy in 40s"
-                docker logs --tail 30 mytrader-api
-                exit 1
-              fi
-            done
-
-            # ── 3. Rebuild & restart Web only when web/ files changed ────
-            echo "[3/4] Checking frontend changes (WEB_CHANGED=$WEB_CHANGED)..."
-            if [ "$WEB_CHANGED" = "true" ]; then
-              echo "  web/ changed — rebuilding image..."
-              # Pass PostHog key as build arg so Next.js bakes it into the static bundle
-              docker build --no-cache \
-                --build-arg NEXT_PUBLIC_POSTHOG_KEY="$POSTHOG_KEY" \
-                --build-arg NEXT_PUBLIC_POSTHOG_HOST="$POSTHOG_HOST" \
-                -t mytrader-web:latest ./web
-              docker stop mytrader-web && docker rm mytrader-web
-              docker run -d \
-                --name mytrader-web \
-                --network app_mytrader-network \
-                -p 127.0.0.1:3000:3000 \
-                -e NEXT_PUBLIC_API_BASE_URL=http://123.56.3.1:8000 \
-                -e NEXT_PUBLIC_POSTHOG_KEY="$POSTHOG_KEY" \
-                -e NEXT_PUBLIC_POSTHOG_HOST="$POSTHOG_HOST" \
-                --restart unless-stopped \
-                mytrader-web:latest
-              echo "  Web container restarted with new image."
-            else
-              echo "  No web/ changes — skipping frontend rebuild."
-            fi
-
-            # ── 4. Health check ──────────────────────────────────────────
-            echo "[4/4] Final health check..."
-            curl -sf http://localhost:8000/health \
-              || { echo "[ERROR] API health check failed"; exit 1; }
-            echo "[SUCCESS] Deploy completed."
         env:
           WEB_CHANGED: ${{ steps.changes.outputs.web }}
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
           POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes \
+            ${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST }} \
+            WEB_CHANGED=$WEB_CHANGED POSTHOG_KEY="$POSTHOG_KEY" POSTHOG_HOST="$POSTHOG_HOST" \
+            'bash -s' << 'ENDSSH'
+          set -e
+          cd /root/app
+
+          # ── 1. Pull latest code ──────────────────────────────────────
+          echo "[1/4] Pulling latest code..."
+          git fetch origin
+          git reset --hard origin/main
+
+          # ── 2. Restart API + Celery + Nginx (volume-mounted, no rebuild needed)
+          echo "[2/4] Restarting API, Celery & Nginx containers..."
+          docker restart mytrader-nginx mytrader-api app-celery-worker-1 app-celery-beat-1
+          for i in $(seq 1 20); do
+            sleep 2
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' mytrader-api 2>/dev/null || echo "none")
+            if [ "$STATUS" = "healthy" ]; then
+              echo "  API healthy after ${i}x2s"
+              break
+            fi
+            if [ "$i" = "20" ]; then
+              echo "[ERROR] API did not become healthy in 40s"
+              docker logs --tail 30 mytrader-api
+              exit 1
+            fi
+          done
+
+          # ── 3. Rebuild & restart Web only when web/ files changed ────
+          echo "[3/4] Checking frontend changes (WEB_CHANGED=$WEB_CHANGED)..."
+          if [ "$WEB_CHANGED" = "true" ]; then
+            echo "  web/ changed — rebuilding image..."
+            docker build --no-cache \
+              --build-arg NEXT_PUBLIC_POSTHOG_KEY="$POSTHOG_KEY" \
+              --build-arg NEXT_PUBLIC_POSTHOG_HOST="$POSTHOG_HOST" \
+              -t mytrader-web:latest ./web
+            docker stop mytrader-web && docker rm mytrader-web
+            docker run -d \
+              --name mytrader-web \
+              --network app_mytrader-network \
+              -p 127.0.0.1:3000:3000 \
+              -e NEXT_PUBLIC_API_BASE_URL=http://123.56.3.1:8000 \
+              -e NEXT_PUBLIC_POSTHOG_KEY="$POSTHOG_KEY" \
+              -e NEXT_PUBLIC_POSTHOG_HOST="$POSTHOG_HOST" \
+              --restart unless-stopped \
+              mytrader-web:latest
+            echo "  Web container restarted with new image."
+          else
+            echo "  No web/ changes — skipping frontend rebuild."
+          fi
+
+          # ── 4. Health check ──────────────────────────────────────────
+          echo "[4/4] Final health check..."
+          curl -sf http://localhost:8000/health \
+            || { echo "[ERROR] API health check failed"; exit 1; }
+          echo "[SUCCESS] Deploy completed."
+          ENDSSH
