@@ -43,9 +43,9 @@ jobs:
             git fetch origin
             git reset --hard origin/main
 
-            # ── 2. Restart API (volume-mounted, no rebuild needed) ───────
-            echo "[2/4] Restarting API container..."
-            docker restart mytrader-api
+            # ── 2. Restart API + Celery (volume-mounted, no rebuild needed)
+            echo "[2/4] Restarting API & Celery containers..."
+            docker restart mytrader-api app-celery-worker-1 app-celery-beat-1
             for i in $(seq 1 20); do
               sleep 2
               STATUS=$(docker inspect --format='{{.State.Health.Status}}' mytrader-api 2>/dev/null || echo "none")
