@@ -10,6 +10,9 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: mytrader-api
+    command: >
+      sh -c "pip install python-multipart 2>/dev/null;
+      uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 2"
     ports:
       - "0.0.0.0:8000:8000"  # 绑定到所有网卡，外部可直接访问
     volumes:
