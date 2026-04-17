@@ -31,6 +31,8 @@ from api.routers.portfolio_mgmt import router as portfolio_mgmt_router
 from api.routers.theme_pool import router as theme_pool_router
 from api.routers.candidate_pool import router as candidate_pool_router
 from api.routers.sim_pool import router as sim_pool_router
+from api.routers.positions import router as positions_router
+from api.routers.inbox import router as inbox_router
 
 logger = logging.getLogger('myTrader.api')
 
@@ -76,7 +78,7 @@ app = FastAPI(
 # ============================================================
 # CORS - 限制允许的来源以防止 CSRF 攻击
 # ============================================================
-allow_origins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://123.56.3.1']
+allow_origins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://123.56.3.1', 'https://mytrader.cc', 'https://www.mytrader.cc']
 if settings.api_debug:
     # 开发模式允许本地开发服务器
     allow_origins.extend(['http://localhost:3001', 'http://127.0.0.1:3001'])
@@ -134,6 +136,8 @@ app.include_router(portfolio_mgmt_router)
 app.include_router(theme_pool_router)
 app.include_router(candidate_pool_router)
 app.include_router(sim_pool_router)
+app.include_router(positions_router)
+app.include_router(inbox_router)
 app.include_router(documents_router)
 
 

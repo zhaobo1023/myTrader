@@ -64,8 +64,7 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx_logs:/var/log/nginx
-      # SSL 证书目录（HTTPS 配置后启用）
-      # - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       api:
         condition: service_healthy
