@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import apiClient from '@/lib/api-client';
 import AppShell from '@/components/layout/AppShell';
@@ -99,6 +99,10 @@ function AIBriefingCard() {
     return new Date().getHours() < 15 ? 'morning' : 'evening';
   });
   const [expanded, setExpanded] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const queryClient = useQueryClient();
 
   const { data: briefing, isLoading, error, refetch } = useQuery({
     queryKey: ['globalBriefing', session],
@@ -107,15 +111,69 @@ function AIBriefingCard() {
     retry: 1,
   });
 
-  const forceRefetch = () => {
-    return apiClient.get('/api/market/global-briefing', { params: { session, force: true }, timeout: 60000 })
-      .then(() => refetch());
-  };
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  }, []);
+
+  // Clean up polling on unmount
+  useEffect(() => stopPolling, [stopPolling]);
+
+  const forceRefetch = useCallback(async () => {
+    setGenerating(true);
+    setGenError(null);
+    try {
+      const { data } = await apiClient.post('/api/market/global-briefing/submit', null, {
+        params: { session },
+      });
+
+      // If server returned cached result directly
+      if (data.status === 'cached') {
+        setGenerating(false);
+        queryClient.setQueryData(['globalBriefing', session], data);
+        return;
+      }
+
+      const taskId = data.task_id;
+
+      // Start polling every 3s
+      stopPolling();
+      pollingRef.current = setInterval(async () => {
+        try {
+          const { data: statusData } = await apiClient.get('/api/market/global-briefing/status', {
+            params: { task_id: taskId },
+          });
+
+          if (statusData.status === 'done') {
+            stopPolling();
+            setGenerating(false);
+            // Refetch to get fresh data from the normal endpoint
+            refetch();
+          } else if (statusData.status === 'failed') {
+            stopPolling();
+            setGenerating(false);
+            setGenError(statusData.error || '生成失败，请稍后重试');
+          }
+          // pending/running — keep polling
+        } catch {
+          stopPolling();
+          setGenerating(false);
+          setGenError('状态查询失败，请稍后重试');
+        }
+      }, 3000);
+    } catch {
+      setGenerating(false);
+      setGenError('提交失败，请稍后重试');
+    }
+  }, [session, stopPolling, refetch, queryClient]);
 
   const isAborted = briefing?.content?.startsWith('[速递中止]') || briefing?.content?.startsWith('[briefing aborted]');
   const hasContent = briefing?.content && !isLoading && !isAborted;
   const sessionLabel = session === 'morning' ? '盘前速递' : '收盘复盘';
   const isHistorical = briefing?.cached && briefing?.date !== new Date().toISOString().slice(0, 10);
+  const showLoading = isLoading || generating;
 
   return (
     <div style={{
@@ -180,22 +238,22 @@ function AIBriefingCard() {
         </div>
         <button
           onClick={() => hasContent ? forceRefetch() : refetch()}
-          disabled={isLoading}
+          disabled={showLoading}
           style={{
             fontSize: '11px', padding: '4px 14px', borderRadius: '6px',
             border: '1px solid var(--accent)40',
-            background: isLoading ? 'var(--bg-card)' : 'var(--accent)10',
-            color: 'var(--accent)', cursor: isLoading ? 'wait' : 'pointer',
-            fontWeight: 520, opacity: isLoading ? 0.6 : 1,
+            background: showLoading ? 'var(--bg-card)' : 'var(--accent)10',
+            color: 'var(--accent)', cursor: showLoading ? 'wait' : 'pointer',
+            fontWeight: 520, opacity: showLoading ? 0.6 : 1,
             transition: 'all 0.15s',
           }}
         >
-          {isLoading ? 'AI 分析中...' : hasContent ? '重新生成' : '生成解读'}
+          {showLoading ? 'AI 分析中...' : hasContent ? '重新生成' : '生成解读'}
         </button>
       </div>
 
       {/* Content */}
-      {isLoading && (
+      {showLoading && (
         <div style={{
           fontSize: '12px', color: 'var(--text-muted)', padding: '16px 0 4px',
           fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '8px',
@@ -208,7 +266,16 @@ function AIBriefingCard() {
           正在综合分析 A 股大盘信号 + 全球资产数据...
         </div>
       )}
-      {error && !isLoading && !hasContent && !isAborted && (
+      {genError && !showLoading && (
+        <div style={{
+          marginTop: '8px', padding: '8px 12px',
+          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
+          borderRadius: '8px', fontSize: '12px', color: '#ef4444',
+        }}>
+          {genError}
+        </div>
+      )}
+      {error && !showLoading && !hasContent && !isAborted && (
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0 0' }}>
           点击「生成解读」获取 AI 分析
         </div>

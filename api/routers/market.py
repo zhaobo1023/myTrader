@@ -109,6 +109,100 @@ async def get_global_briefing(
     return await get_latest_briefing(session, force=force)
 
 
+# In-memory dedup for running briefing tasks: session -> task_id
+_briefing_running_tasks: dict[str, str] = {}
+
+
+@router.post('/global-briefing/submit')
+async def submit_briefing(
+    session: str = Query(default='morning', description="'morning' or 'evening'"),
+):
+    """
+    Submit async briefing generation task.
+
+    Returns:
+      {status: "cached", session, date, content, ...}  — today's cache exists
+      {status: "running", task_id}                      — task already in progress
+      {status: "submitted", task_id}                    — new task dispatched
+    """
+    import uuid
+    from datetime import date as _date
+    from api.services.global_asset_briefing import get_latest_briefing
+
+    # 1. Check today's cache (non-force)
+    cached = await get_latest_briefing(session, force=False)
+    if cached and cached.get('content') and cached.get('cached'):
+        return {**cached, 'status': 'cached'}
+
+    # 2. Check if a task is already running for this session
+    existing_task_id = _briefing_running_tasks.get(session)
+    if existing_task_id:
+        from api.tasks.celery_app import celery_app as _celery
+        result = _celery.AsyncResult(existing_task_id)
+        if result.state in ('PENDING', 'STARTED', 'RETRY'):
+            return {'status': 'running', 'task_id': existing_task_id, 'session': session}
+        # Previous task finished or failed — allow new submission
+        _briefing_running_tasks.pop(session, None)
+
+    # 3. Dispatch new Celery task
+    from api.tasks.briefing_tasks import generate_briefing_async
+
+    task_id = str(uuid.uuid4())
+    generate_briefing_async.apply_async(
+        args=[task_id, session],
+        task_id=task_id,
+    )
+    _briefing_running_tasks[session] = task_id
+
+    logger.info('[briefing/submit] dispatched task_id=%s session=%s', task_id, session)
+    return {'status': 'submitted', 'task_id': task_id, 'session': session}
+
+
+@router.get('/global-briefing/status')
+async def get_briefing_status(
+    task_id: str = Query(..., description='Celery task UUID'),
+):
+    """
+    Poll briefing task status.
+
+    Returns:
+      {task_id, status: "pending"|"running"|"done"|"failed", briefing?: {...}}
+    """
+    from api.tasks.celery_app import celery_app as _celery
+
+    result = _celery.AsyncResult(task_id)
+
+    state_map = {
+        'PENDING': 'pending',
+        'STARTED': 'running',
+        'RETRY': 'running',
+        'SUCCESS': 'done',
+        'FAILURE': 'failed',
+        'REVOKED': 'failed',
+    }
+    status = state_map.get(result.state, 'pending')
+
+    resp: dict = {'task_id': task_id, 'status': status}
+
+    if status == 'done':
+        # Task finished — read fresh briefing from DB
+        task_result = result.result or {}
+        session = task_result.get('session', 'morning')
+        from api.services.global_asset_briefing import get_latest_briefing
+        briefing = await get_latest_briefing(session, force=False)
+        resp['briefing'] = briefing
+        # Clean up dedup map
+        _briefing_running_tasks.pop(session, None)
+    elif status == 'failed':
+        resp['error'] = str(result.result)[:500] if result.result else 'Unknown error'
+        # Clean up dedup map
+        for s, tid in list(_briefing_running_tasks.items()):
+            if tid == task_id:
+                _briefing_running_tasks.pop(s, None)
+
+    return resp
+
+
 @router.post('/digest-articles')
 async def digest_articles(
     directory: str = Query(

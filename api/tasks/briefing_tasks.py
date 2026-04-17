@@ -15,6 +15,22 @@ from api.tasks.celery_app import celery_app
 logger = logging.getLogger('myTrader.briefing_tasks')
 
 
+@celery_app.task(bind=True, name='generate_briefing_async')
+def generate_briefing_async(self, task_id: str, session: str):
+    """按需生成 briefing（不发飞书），结果写入 trade_briefing 表。"""
+    import asyncio
+    from api.services.global_asset_briefing import generate_briefing
+
+    logger.info('[BRIEFING] Async generate start: task_id=%s session=%s', task_id, session)
+    try:
+        result = asyncio.run(generate_briefing(session))
+        logger.info('[BRIEFING] Async generate done: task_id=%s', task_id)
+        return {'task_id': task_id, 'status': 'done', 'session': session}
+    except Exception as e:
+        logger.exception('[BRIEFING] Async generate failed: task_id=%s error=%s', task_id, e)
+        raise
+
+
 @celery_app.task(bind=True, name='publish_morning_briefing')
 def publish_morning_briefing(self):
     """Generate and publish morning briefing to Feishu."""
