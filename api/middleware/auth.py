@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Auth middleware - JWT bearer token validation + user lookup.
+
+Set AUTH_ENABLED=false in .env to bypass auth (returns mock admin user).
 """
+import os
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
@@ -13,15 +16,38 @@ from api.dependencies import get_db
 from api.models.user import User, UserRole
 from api.core.security import decode_token
 
-_bearer_scheme = HTTPBearer()
+_bearer_scheme = HTTPBearer(auto_error=False)
 _bearer_scheme_optional = HTTPBearer(auto_error=False)
+
+AUTH_ENABLED = os.getenv('AUTH_ENABLED', 'true').lower() in ('true', '1', 'yes')
+
+
+def _mock_admin_user() -> User:
+    """Return a mock admin user when auth is disabled."""
+    user = User.__new__(User)
+    user.id = 1
+    user.username = 'admin'
+    user.display_name = 'Admin'
+    user.email = None
+    user.role = UserRole.ADMIN
+    user.tier = 'PRO'
+    user.is_active = True
+    return user
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """Validate JWT and return the authenticated user. Raises 401 on failure."""
+    if not AUTH_ENABLED:
+        return _mock_admin_user()
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail='Not authenticated',
+        )
     payload = decode_token(credentials.credentials)
     if payload is None or payload.get('type') != 'access':
         raise HTTPException(
@@ -50,6 +76,8 @@ async def get_optional_user(
     db: AsyncSession = Depends(get_db),
 ) -> Optional[User]:
     """Return the authenticated user if a valid token is present, else None."""
+    if not AUTH_ENABLED:
+        return _mock_admin_user()
     if credentials is None:
         return None
     payload = decode_token(credentials.credentials)
