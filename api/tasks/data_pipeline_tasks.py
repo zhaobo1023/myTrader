@@ -150,7 +150,7 @@ def run_nightly_digest(self):
         from api.config import settings
         export_script = (
             getattr(settings, 'ARTICLE_EXPORT_SCRIPT', '') or
-            '/root/app/scripts/export_wechat_articles.py'
+            '/app/scripts/export_wechat_articles.py'
         )
         proc = subprocess.run(
             ['python3', export_script], check=True, timeout=60,
@@ -161,8 +161,11 @@ def run_nightly_digest(self):
         logger.error('[PIPELINE] Export script failed: %s', e)
         return {'status': 'error', 'reason': 'export_failed', 'error': str(e)}
 
-    # Step 1+2+3: Two-stage digest + report
+    # Step 1+2+3: Two-stage digest + categorized reports
     from api.services.article_digest_service import run_nightly_digest_pipeline
     result = asyncio.run(run_nightly_digest_pipeline())
-    logger.info('[PIPELINE] run_nightly_digest done: %s', result.get('status'))
+    reports = result.get('reports', [])
+    logger.info('[PIPELINE] run_nightly_digest done: status=%s, reports=%d (%s)',
+                result.get('status'), len(reports),
+                ', '.join('{}: {}articles'.format(r['category'], r['article_count']) for r in reports))
     return result

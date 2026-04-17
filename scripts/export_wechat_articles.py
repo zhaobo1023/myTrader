@@ -11,8 +11,9 @@ import re
 import sqlite3
 from datetime import datetime, timedelta
 
-DB_PATH = '/root/wechat2rss/data/res.db'
-OUTPUT_DIR = '/root/app/output/article_export'
+DB_PATH = os.environ.get('WECHAT_RSS_DB', '/root/wechat2rss/data/res.db')
+OUTPUT_DIR = os.environ.get('ARTICLE_EXPORT_DIR', os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'output', 'article_export'))
 
 TITLE_BLACKLIST = [
     r'^[【\[].*?[】\]].*(?:福利|恭喜|红包)',
