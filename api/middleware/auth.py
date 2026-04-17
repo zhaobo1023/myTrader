@@ -28,9 +28,16 @@ class _MockUser:
     username = 'admin'
     display_name = 'Admin'
     email = None
+    hashed_password = ''
     role = UserRole.ADMIN
     tier = 'PRO'
     is_active = True
+    invited_by = None
+    created_at = None
+    updated_at = None
+    subscription = None
+    usage_logs = []
+    api_keys = []
 
 
 def _mock_admin_user():
