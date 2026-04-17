@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+from typing import Optional
 
 # HTTP timeout for LLM calls in seconds. Override with LLM_HTTP_TIMEOUT env var.
 _LLM_HTTP_TIMEOUT = float(os.getenv('LLM_HTTP_TIMEOUT', '90'))
@@ -124,7 +125,7 @@ class LLMClientFactory:
         return resp.choices[0].message.content or ''
 
 
-def get_llm_client(alias: str | None = None) -> LLMClientFactory:
+def get_llm_client(alias: Optional[str] = None) -> LLMClientFactory:
     """Return a factory for the given alias (or LLM_MODEL_ALIAS env var)."""
     resolved = alias or os.getenv('LLM_MODEL_ALIAS', _DEFAULT_ALIAS)
     return LLMClientFactory(resolved)
