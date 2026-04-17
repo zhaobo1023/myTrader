@@ -216,10 +216,10 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=21, minute=30, day_of_week='1-5'),
     },
 
-    # 23:00 - 公众号文章导出 + LLM摘要 + 飞书推送
+    # 22:00 - 公众号文章导出 + LLM摘要 + 飞书推送
     'nightly-article-digest': {
         'task': 'run_nightly_digest',
-        'schedule': crontab(hour=23, minute=0),
+        'schedule': crontab(hour=22, minute=0),
     },
 }
 celery_app.conf.timezone = 'Asia/Shanghai'
