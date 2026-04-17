@@ -2,6 +2,47 @@
 
 ---
 
+## 2026-04-17 (续) Briefing 生成改为 Celery 异步队列
+
+### Briefing 异步化
+
+**问题：** `GET /api/market/global-briefing?force=true` 同步调用 LLM 生成（~16s），前端等待响应期间阻塞 API worker，且用户体验差（长时间白屏等待）。
+
+**方案：** 改为 Celery 异步任务 + 前端轮询。
+
+**改动：**
+
+1. **新增 Celery task** (`api/tasks/briefing_tasks.py`)
+   - `generate_briefing_async(task_id, session)` — 按需生成 briefing 写入 DB，不发飞书
+
+2. **新增 API 端点** (`api/routers/market.py`)
+   - `POST /global-briefing/submit` — 提交异步任务，有缓存直接返回 `{status: "cached"}`，否则派发 Celery task 返回 `{task_id, status: "submitted"}`。内存 dict 去重防止重复提交
+   - `GET /global-briefing/status?task_id=xxx` — 轮询 Celery AsyncResult，映射状态为 `pending|running|done|failed`，done 时附带完整 briefing 内容
+   - 原有 `GET /global-briefing` 不变，向后兼容
+
+3. **前端改造** (`web/src/app/sentiment/page.tsx`)
+   - "重新生成" 按钮改为调用 `POST /submit`，拿到 task_id 后每 3s 轮询 `/status`
+   - 新增 `generating` 状态和 `genError` 错误提示
+   - 轮询到 done 时 refetch 刷新内容，failed 时显示红色错误提示
+   - 组件卸载时自动清理 interval
+
+**验证：**
+- `POST /submit` 有缓存时返回 `{status: "cached"}` ✓
+- Celery task 执行成功（~16s），日志完整 ✓
+- `GET /status` 返回 `{status: "done", briefing: {...}}` ✓
+- 原有 `GET /global-briefing` 正常返回 ✓
+- 前端页面加载正常（HTTP 200）✓
+
+### 文件变更
+
+| 文件 | 改动 |
+|------|------|
+| `api/tasks/briefing_tasks.py` | +generate_briefing_async task |
+| `api/routers/market.py` | +POST /submit, +GET /status, +内存去重 dict |
+| `web/src/app/sentiment/page.tsx` | 重新生成改为 submit+poll 模式 |
+
+---
+
 ## 2026-04-17 公众号精选报告三合一 / 晨报排障 / Celery Worker 重启
 
 ### 1. 公众号精选报告三合一
