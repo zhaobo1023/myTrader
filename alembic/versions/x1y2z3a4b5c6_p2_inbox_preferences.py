@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """P2: inbox_messages table + notification_config daily report columns
 
-Revision ID: u1v2w3x4y5z6
-Revises: t1u2v3w4x5y6
+Revision ID: x1y2z3a4b5c6
+Revises: w1x2y3z4a5b6
 Create Date: 2026-04-17
 """
 from typing import Sequence, Union
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = 'u1v2w3x4y5z6'
-down_revision: Union[str, Sequence[str], None] = 't1u2v3w4x5y6'
+revision: str = 'x1y2z3a4b5c6'
+down_revision: Union[str, Sequence[str], None] = 'w1x2y3z4a5b6'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

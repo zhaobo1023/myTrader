@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """P1: user_positions table + watchlist multi-tenancy fix
 
-Revision ID: t1u2v3w4x5y6
-Revises: s1t2u3v4w5x6
+Revision ID: w1x2y3z4a5b6
+Revises: v1w2x3y4z5a6
 Create Date: 2026-04-17
 """
 from typing import Sequence, Union
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = 't1u2v3w4x5y6'
-down_revision: Union[str, Sequence[str], None] = 's1t2u3v4w5x6'
+revision: str = 'w1x2y3z4a5b6'
+down_revision: Union[str, Sequence[str], None] = 'v1w2x3y4z5a6'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
