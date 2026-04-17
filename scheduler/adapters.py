@@ -387,9 +387,15 @@ def run_factor_calculation(dry_run: bool = False, env: str = 'online'):
 
     # Extended factors
     with TaskLogger('calc_extended_factor', 'factor', env=env):
-        from data_analyst.factors.extended_factor_calculator import main as ext_main
-        ext_main()
-        logger.info("[OK] extended factors done")
+        import sys
+        saved_argv = sys.argv
+        sys.argv = ['extended_factor_calculator']
+        try:
+            from data_analyst.factors.extended_factor_calculator import main as ext_main
+            ext_main()
+            logger.info("[OK] extended factors done")
+        finally:
+            sys.argv = saved_argv
     gc.collect()
 
     # Valuation factors

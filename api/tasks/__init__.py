@@ -19,6 +19,7 @@ from api.tasks import document_tasks
 from api.tasks import scheduler_tasks
 from api.tasks import briefing_tasks
 from api.tasks import data_pipeline_tasks
+from api.tasks import macro_fetch
 
 __all__ = [
     'preset_strategies',
@@ -35,4 +36,5 @@ __all__ = [
     'scheduler_tasks',
     'briefing_tasks',
     'data_pipeline_tasks',
+    'macro_fetch',
 ]

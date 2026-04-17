@@ -372,6 +372,11 @@ class TechnicalIndicatorCalculator:
         # 转换为DataFrame
         df = pd.DataFrame(rows)
 
+        # MySQL Decimal -> float (Decimal cannot do arithmetic with float/numpy)
+        for col in ['open_price', 'high_price', 'low_price', 'close_price', 'volume', 'turnover_rate']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
         # 计算所有指标
         df_with_indicators = self.calculate_all_indicators(df)
 

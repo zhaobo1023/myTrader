@@ -35,9 +35,9 @@ _HEALTH_CHECKS = [
     ('briefing', '晨报/复盘', '输出', "SELECT MAX(brief_date) as d FROM trade_briefing", 1),
     ('moneyflow', '资金流向', '补充', "SELECT MAX(trade_date) as d FROM trade_stock_moneyflow", 2),
     ('margin', '融资融券', '补充', "SELECT MAX(trade_date) as d FROM trade_margin_trade", 2),
-    ('north', '北向持仓', '补充', "SELECT MAX(trade_date) as d FROM trade_north_holding", 2),
+    ('north', '北向持仓', '补充', "SELECT MAX(hold_date) as d FROM trade_north_holding", 2),
     ('theme_score', '主题池评分', '策略', "SELECT MAX(score_date) as d FROM theme_pool_scores", 2),
-    ('concept_map', '概念板块', '策略', "SELECT MAX(trade_date) as d FROM stock_concept_map", 7),
+    ('concept_map', '概念板块', '策略', "SELECT MAX(updated_at) as d FROM stock_concept_map", 7),
 ]
 
 
