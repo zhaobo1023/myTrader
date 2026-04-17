@@ -22,17 +22,20 @@ _bearer_scheme_optional = HTTPBearer(auto_error=False)
 AUTH_ENABLED = os.getenv('AUTH_ENABLED', 'true').lower() in ('true', '1', 'yes')
 
 
-def _mock_admin_user() -> User:
+class _MockUser:
+    """Lightweight mock user when auth is disabled. Avoids SQLAlchemy instrumentation."""
+    id = 1
+    username = 'admin'
+    display_name = 'Admin'
+    email = None
+    role = UserRole.ADMIN
+    tier = 'PRO'
+    is_active = True
+
+
+def _mock_admin_user():
     """Return a mock admin user when auth is disabled."""
-    user = User.__new__(User)
-    user.id = 1
-    user.username = 'admin'
-    user.display_name = 'Admin'
-    user.email = None
-    user.role = UserRole.ADMIN
-    user.tier = 'PRO'
-    user.is_active = True
-    return user
+    return _MockUser()
 
 
 async def get_current_user(
