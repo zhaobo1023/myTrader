@@ -19,14 +19,18 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// [AUTH-DISABLED] 401 redirect disabled during dev — re-enable before prod
+// Redirect to login on 401 Unauthorized
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    // if (error.response?.status === 401 && typeof window !== 'undefined') {
-    //   localStorage.removeItem('access_token');
-    //   window.location.href = '/login';
-    // }
+    if (error.response?.status === 401 && typeof window !== 'undefined') {
+      // Skip redirect if already on auth pages
+      const path = window.location.pathname;
+      if (path !== '/login' && path !== '/register') {
+        localStorage.removeItem('access_token');
+        window.location.href = '/login';
+      }
+    }
     return Promise.reject(error);
   }
 );
@@ -340,3 +344,74 @@ export interface MarketDashboardData {
   signal_log: SignalLogEntry[];
   error?: string;
 }
+
+// ============================================================
+// Positions API
+// ============================================================
+
+export interface PositionItem {
+  id: number;
+  stock_code: string;
+  stock_name: string | null;
+  level: string | null;
+  shares: number | null;
+  cost_price: number | null;
+  account: string | null;
+  note: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export const positionsApi = {
+  list: (params?: { level?: string; active_only?: boolean }) =>
+    apiClient.get<{ items: PositionItem[]; total: number }>('/api/positions', { params }),
+  create: (data: { stock_code: string; stock_name?: string; level?: string; shares?: number; cost_price?: number; account?: string; note?: string }) =>
+    apiClient.post<PositionItem>('/api/positions', data),
+  update: (id: number, data: { stock_name?: string; level?: string; shares?: number; cost_price?: number; account?: string; note?: string }) =>
+    apiClient.put<PositionItem>(`/api/positions/${id}`, data),
+  remove: (id: number) =>
+    apiClient.delete(`/api/positions/${id}`),
+  importBatch: (items: Array<{ stock_code: string; stock_name?: string; level?: string; shares?: number; cost_price?: number; account?: string; note?: string }>) =>
+    apiClient.post<{ created: number; skipped: number }>('/api/positions/import', { items }),
+};
+
+// ============================================================
+// Inbox API
+// ============================================================
+
+export interface InboxMessageItem {
+  id: number;
+  message_type: string;
+  title: string;
+  content: string | null;
+  metadata_json: string | null;
+  is_read: boolean;
+  created_at: string;
+}
+
+export const inboxApi = {
+  list: (params?: { message_type?: string; is_read?: boolean; page?: number; page_size?: number }) =>
+    apiClient.get<{ items: InboxMessageItem[]; total: number; unread_count: number }>('/api/inbox', { params }),
+  get: (id: number) =>
+    apiClient.get<InboxMessageItem>(`/api/inbox/${id}`),
+  markRead: (id: number) =>
+    apiClient.patch(`/api/inbox/${id}/read`),
+  markAllRead: () =>
+    apiClient.post('/api/inbox/mark-all-read'),
+  remove: (id: number) =>
+    apiClient.delete(`/api/inbox/${id}`),
+  unreadCount: () =>
+    apiClient.get<{ unread_count: number }>('/api/inbox/unread-count'),
+};
+
+// ============================================================
+// User API
+// ============================================================
+
+export const userApi = {
+  updateProfile: (data: { display_name?: string; email?: string }) =>
+    apiClient.put('/api/auth/me', data),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    apiClient.post('/api/auth/change-password', { current_password: currentPassword, new_password: newPassword }),
+};

@@ -13,6 +13,8 @@ import redis.asyncio as aioredis
 from api.dependencies import get_db, get_redis
 from api.middleware.auth import require_admin
 from api.models.user import User
+from api.models.invite_code import InviteCode
+from api.schemas.invite_code import InviteCodeCreate, InviteCodeResponse
 
 logger = logging.getLogger('myTrader.api')
 router = APIRouter(prefix='/api/admin', tags=['admin'])
@@ -30,7 +32,7 @@ async def list_users(
         offset = (page - 1) * page_size
         users_result = await db.execute(
             text(
-                "SELECT id, email, tier, role, is_active, created_at "
+                "SELECT id, username, display_name, email, tier, role, is_active, created_at "
                 "FROM users ORDER BY id LIMIT :limit OFFSET :offset"
             ),
             {"limit": page_size, "offset": offset},
@@ -126,6 +128,94 @@ async def toggle_user_active(
 
 
 # ============================================================
+# Invite code management
+# ============================================================
+
+@router.post('/invite-codes', response_model=list[InviteCodeResponse])
+async def create_invite_codes(
+    req: InviteCodeCreate,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate invitation codes (admin only)."""
+    import secrets
+    from datetime import datetime, timedelta
+
+    codes = []
+    for _ in range(req.count):
+        code = secrets.token_urlsafe(16)[:16].upper()
+        invite = InviteCode(
+            code=code,
+            created_by=current_user.id,
+            max_uses=req.max_uses,
+            expires_at=(
+                datetime.utcnow() + timedelta(days=req.expires_in_days)
+                if req.expires_in_days else None
+            ),
+        )
+        db.add(invite)
+        codes.append(invite)
+
+    await db.flush()
+    for c in codes:
+        await db.refresh(c)
+
+    return [
+        InviteCodeResponse(
+            code=c.code,
+            max_uses=c.max_uses,
+            use_count=c.use_count,
+            is_active=c.is_active,
+            expires_at=c.expires_at.isoformat() if c.expires_at else None,
+            created_at=c.created_at.isoformat(),
+        )
+        for c in codes
+    ]
+
+
+@router.get('/invite-codes', response_model=list[InviteCodeResponse])
+async def list_invite_codes(
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all invitation codes with usage info."""
+    from sqlalchemy import select
+    result = await db.execute(
+        select(InviteCode).order_by(InviteCode.created_at.desc())
+    )
+    codes = result.scalars().all()
+    return [
+        InviteCodeResponse(
+            code=c.code,
+            max_uses=c.max_uses,
+            use_count=c.use_count,
+            is_active=c.is_active,
+            expires_at=c.expires_at.isoformat() if c.expires_at else None,
+            created_at=c.created_at.isoformat(),
+        )
+        for c in codes
+    ]
+
+
+@router.delete('/invite-codes/{code}')
+async def deactivate_invite_code(
+    code: str,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Deactivate an invitation code."""
+    from sqlalchemy import select
+    result = await db.execute(
+        select(InviteCode).where(InviteCode.code == code)
+    )
+    invite = result.scalar_one_or_none()
+    if not invite:
+        raise HTTPException(status_code=404, detail='Invite code not found')
+    invite.is_active = False
+    return {'message': f'Invite code {code} deactivated'}
+
+
+# ============================================================
 # Data health check endpoint
 # ============================================================
 
@@ -135,6 +225,7 @@ _DATA_HEALTH_CACHE_TTL = 3600  # 1 hour
 
 @router.get('/data-health')
 async def get_data_health(
+    current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     redis: aioredis.Redis = Depends(get_redis),
 ):

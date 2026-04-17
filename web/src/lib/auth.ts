@@ -2,7 +2,9 @@ import apiClient from './api-client';
 
 export interface AuthUser {
   id: number;
-  email: string;
+  username: string;
+  display_name: string | null;
+  email: string | null;
   tier: string;
   role: string;
   is_active: boolean;
@@ -16,9 +18,9 @@ interface TokenResponse {
   token_type: string;
 }
 
-export async function login(email: string, password: string): Promise<AuthUser> {
+export async function login(username: string, password: string): Promise<AuthUser> {
   const { data } = await apiClient.post<TokenResponse>('/api/auth/login', {
-    email,
+    username,
     password,
   });
   localStorage.setItem('access_token', data.access_token);
@@ -26,10 +28,17 @@ export async function login(email: string, password: string): Promise<AuthUser> 
   return getMe();
 }
 
-export async function register(email: string, password: string): Promise<AuthUser> {
+export async function register(
+  username: string,
+  password: string,
+  inviteCode: string,
+  displayName?: string,
+): Promise<AuthUser> {
   const { data } = await apiClient.post<TokenResponse>('/api/auth/register', {
-    email,
+    username,
     password,
+    invite_code: inviteCode,
+    display_name: displayName || undefined,
   });
   localStorage.setItem('access_token', data.access_token);
   localStorage.setItem('refresh_token', data.refresh_token);

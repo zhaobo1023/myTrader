@@ -6,7 +6,7 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, Integer, String, DateTime, Enum, Boolean,
+    Column, Integer, String, DateTime, Enum, Boolean, ForeignKey,
 )
 from sqlalchemy.orm import relationship
 
@@ -27,11 +27,14 @@ class User(Base):
     __tablename__ = 'users'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    email = Column(String(255), unique=True, nullable=False, index=True)
+    username = Column(String(50), unique=True, nullable=False, index=True)
+    display_name = Column(String(100), nullable=True)
+    email = Column(String(255), unique=True, nullable=True, index=True)
     hashed_password = Column(String(255), nullable=False)
     tier = Column(Enum(UserTier), default=UserTier.FREE, nullable=False)
     role = Column(Enum(UserRole), default=UserRole.USER, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    invited_by = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -41,4 +44,4 @@ class User(Base):
     api_keys = relationship('ApiKey', back_populates='user')
 
     def __repr__(self):
-        return f'<User id={self.id} email={self.email} tier={self.tier}>'
+        return f'<User id={self.id} username={self.username} tier={self.tier}>'

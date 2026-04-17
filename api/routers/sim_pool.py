@@ -5,10 +5,12 @@ import logging
 from datetime import date
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from api.services.sim_pool_service import SimPoolService
+from api.models.user import User
+from api.middleware.auth import get_current_user
 
 logger = logging.getLogger('myTrader.api')
 router = APIRouter(prefix='/api/sim-pool', tags=['sim-pool'])
@@ -53,7 +55,7 @@ def list_pools(
 
 
 @router.post('', response_model=CreatePoolResponse, summary="Create a new sim pool")
-def create_pool(body: CreatePoolRequest):
+def create_pool(body: CreatePoolRequest, current_user: User = Depends(get_current_user)):
     """
     Trigger async pool creation:
     1. Dispatch Celery task to run strategy screening + create pool
@@ -68,7 +70,7 @@ def create_pool(body: CreatePoolRequest):
             strategy_type=body.strategy_type,
             signal_date=body.signal_date,
             config_dict=body.config,
-            user_id=0,  # TODO: inject from JWT when auth added
+            user_id=current_user.id,
         )
     except Exception as e:
         logger.exception('[SimPool] create_pool failed: %s', e)

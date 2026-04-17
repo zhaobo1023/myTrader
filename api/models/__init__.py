@@ -19,6 +19,9 @@ from api.models.candidate_pool import (
     CandidatePoolStock, CandidateMonitorDaily,
     CandidateStatus, AlertLevel,
 )
+from api.models.invite_code import InviteCode
+from api.models.user_position import UserPosition
+from api.models.inbox_message import InboxMessage
 
 __all__ = [
     'User', 'UserTier', 'UserRole',
@@ -34,4 +37,7 @@ __all__ = [
     'ThemeStatus', 'HumanStatus',
     'CandidatePoolStock', 'CandidateMonitorDaily',
     'CandidateStatus', 'AlertLevel',
+    'InviteCode',
+    'UserPosition',
+    'InboxMessage',
 ]

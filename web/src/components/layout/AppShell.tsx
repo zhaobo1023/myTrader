@@ -105,6 +105,26 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
+    href: '/positions',
+    label: '持仓',
+    labelEn: 'Positions',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+      </svg>
+    ),
+  },
+  {
+    href: '/inbox',
+    label: '信箱',
+    labelEn: 'Inbox',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>
+      </svg>
+    ),
+  },
+  {
     href: '/data-health',
     label: '数据完备度',
     labelEn: 'Data Health',
@@ -112,6 +132,16 @@ const NAV_ITEMS: NavItem[] = [
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
         <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
         <circle cx="12" cy="12" r="1"/>
+      </svg>
+    ),
+  },
+  {
+    href: '/settings',
+    label: '设置',
+    labelEn: 'Settings',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
       </svg>
     ),
   },
@@ -305,7 +335,7 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: '12px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {user.email}
+                  {user.display_name || user.username}
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>{user.tier}</div>
               </div>
@@ -319,7 +349,7 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
               </button>
             </div>
           ) : (
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>dev mode</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>开发模式</span>
           )}
         </div>
       )}

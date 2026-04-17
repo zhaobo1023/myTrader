@@ -35,7 +35,7 @@ def _row_to_dict(row) -> dict:
     return d
 
 
-def list_stocks(user_id: int = 0) -> List[dict]:
+def list_stocks(user_id: int) -> List[dict]:
     """Return all portfolio stocks for user, joined with latest market cap."""
     sql = """
         SELECT
@@ -77,7 +77,7 @@ def list_stocks(user_id: int = 0) -> List[dict]:
     return [_row_to_dict(r) for r in rows]
 
 
-def get_stock(stock_code: str, user_id: int = 0) -> Optional[dict]:
+def get_stock(stock_code: str, user_id: int) -> Optional[dict]:
     """Get a single portfolio stock by code."""
     sql = """
         SELECT
@@ -97,7 +97,7 @@ def get_stock(stock_code: str, user_id: int = 0) -> Optional[dict]:
     return _row_to_dict(rows[0]) if rows else None
 
 
-def upsert_stock(data: dict, user_id: int = 0) -> dict:
+def upsert_stock(data: dict, user_id: int) -> dict:
     """Insert or update a portfolio stock. Returns the resulting record."""
     sql = """
         INSERT INTO portfolio_stock
@@ -157,7 +157,7 @@ def upsert_stock(data: dict, user_id: int = 0) -> dict:
     return get_stock(data['stock_code'], user_id) or {}
 
 
-def delete_stock(stock_code: str, user_id: int = 0) -> bool:
+def delete_stock(stock_code: str, user_id: int) -> bool:
     """Delete a stock from portfolio. Returns True if found and deleted."""
     check_sql = "SELECT id FROM portfolio_stock WHERE user_id = %s AND stock_code = %s"
     rows = list(execute_query(check_sql, (user_id, stock_code)))
@@ -170,7 +170,7 @@ def delete_stock(stock_code: str, user_id: int = 0) -> bool:
     return True
 
 
-def get_latest_optimizer_run(user_id: int = 0) -> Optional[dict]:
+def get_latest_optimizer_run(user_id: int) -> Optional[dict]:
     """Get most recent optimizer run for user."""
     sql = """
         SELECT id, run_at, result_json, metrics_json
@@ -187,7 +187,7 @@ def get_latest_optimizer_run(user_id: int = 0) -> Optional[dict]:
     return r
 
 
-def list_optimizer_runs(user_id: int = 0, limit: int = 10) -> List[dict]:
+def list_optimizer_runs(user_id: int, limit: int = 10) -> List[dict]:
     """List recent optimizer runs."""
     sql = """
         SELECT id, run_at, metrics_json
@@ -209,7 +209,7 @@ def save_optimizer_run(
     input_snapshot: list,
     result: dict,
     metrics: dict,
-    user_id: int = 0,
+    user_id: int,
 ) -> int:
     """Persist optimizer run, return new row id."""
     sql = """
@@ -589,7 +589,7 @@ def run_optimizer(stocks_with_returns: List[dict]) -> dict:
 # High-level orchestration
 # ---------------------------------------------------------------------------
 
-def get_enriched_stocks(user_id: int = 0) -> List[dict]:
+def get_enriched_stocks(user_id: int) -> List[dict]:
     """
     Returns stocks with all computed fields appended:
     tgt_26, tgt_27, return_27, growth_27, market_factors, adj_return, suggested_pct.
@@ -617,7 +617,7 @@ def get_enriched_stocks(user_id: int = 0) -> List[dict]:
     return enriched
 
 
-def get_portfolio_overview(user_id: int = 0) -> dict:
+def get_portfolio_overview(user_id: int) -> dict:
     """Compute overview metrics for Tab 1."""
     stocks = get_enriched_stocks(user_id)
     latest_run = get_latest_optimizer_run(user_id)
@@ -680,7 +680,7 @@ def get_portfolio_overview(user_id: int = 0) -> dict:
     }
 
 
-def run_full_optimize(user_id: int = 0) -> dict:
+def run_full_optimize(user_id: int) -> dict:
     """
     Run the optimizer on all portfolio stocks, persist result, return full response.
     """

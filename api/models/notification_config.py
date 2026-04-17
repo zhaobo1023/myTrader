@@ -22,5 +22,13 @@ class UserNotificationConfig(Base):
     score_threshold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # Daily report preferences
+    email_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    daily_report_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    daily_report_time: Mapped[Optional[str]] = mapped_column(String(5), nullable=True, default='17:00')
+    report_include_watchlist: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    report_include_positions: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)

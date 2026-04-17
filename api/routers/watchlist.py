@@ -7,6 +7,8 @@ from sqlalchemy import select, delete
 
 from api.dependencies import get_db
 from api.models.watchlist import UserWatchlist
+from api.models.user import User
+from api.middleware.auth import get_current_user
 from api.schemas.watchlist import WatchlistAddRequest, WatchlistItem, WatchlistResponse
 
 logger = logging.getLogger('myTrader.api')
@@ -15,11 +17,13 @@ router = APIRouter(prefix='/api/watchlist', tags=['watchlist'])
 
 @router.get('', response_model=WatchlistResponse)
 async def list_watchlist(
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get shared watchlist (no auth required)"""
+    """Get user's watchlist."""
     result = await db.execute(
         select(UserWatchlist)
+        .where(UserWatchlist.user_id == current_user.id)
         .order_by(UserWatchlist.added_at.desc())
     )
     items = result.scalars().all()
@@ -32,11 +36,13 @@ async def list_watchlist(
 @router.post('', response_model=WatchlistItem, status_code=status.HTTP_201_CREATED)
 async def add_to_watchlist(
     req: WatchlistAddRequest,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Add stock to watchlist (no auth required, shared watchlist)"""
+    """Add stock to user's watchlist."""
     existing = await db.execute(
         select(UserWatchlist).where(
+            UserWatchlist.user_id == current_user.id,
             UserWatchlist.stock_code == req.stock_code,
         )
     )
@@ -47,7 +53,7 @@ async def add_to_watchlist(
         )
 
     item = UserWatchlist(
-        user_id=0,
+        user_id=current_user.id,
         stock_code=req.stock_code,
         stock_name=req.stock_name,
         note=req.note,
@@ -55,21 +61,23 @@ async def add_to_watchlist(
     db.add(item)
     await db.flush()
     await db.refresh(item)
-    logger.info('[WATCHLIST] added stock=%s', req.stock_code)
+    logger.info('[WATCHLIST] user=%s added stock=%s', current_user.id, req.stock_code)
     return WatchlistItem.model_validate(item)
 
 
 @router.delete('/{stock_code}', status_code=status.HTTP_204_NO_CONTENT)
 async def remove_from_watchlist(
     stock_code: str,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Remove stock from watchlist (no auth required)"""
+    """Remove stock from user's watchlist."""
     result = await db.execute(
         delete(UserWatchlist).where(
+            UserWatchlist.user_id == current_user.id,
             UserWatchlist.stock_code == stock_code,
         )
     )
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail=f'{stock_code} not in watchlist')
-    logger.info('[WATCHLIST] removed stock=%s', stock_code)
+    logger.info('[WATCHLIST] user=%s removed stock=%s', current_user.id, stock_code)

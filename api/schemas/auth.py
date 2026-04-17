@@ -7,13 +7,14 @@ from pydantic import BaseModel, EmailStr, Field
 
 
 class RegisterRequest(BaseModel):
-    email: EmailStr
+    username: str = Field(min_length=2, max_length=50, pattern=r'^[\w\u4e00-\u9fff]+$')
     password: str = Field(min_length=6, max_length=128)
-    name: Optional[str] = None
+    invite_code: str = Field(min_length=1, max_length=32)
+    display_name: Optional[str] = Field(default=None, max_length=100)
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    username: str
     password: str
 
 
@@ -27,9 +28,21 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class UpdateProfileRequest(BaseModel):
+    display_name: Optional[str] = Field(default=None, max_length=100)
+    email: Optional[EmailStr] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=6, max_length=128)
+
+
 class UserResponse(BaseModel):
     id: int
-    email: str
+    username: str
+    display_name: Optional[str] = None
+    email: Optional[str] = None
     tier: str
     role: str
     is_active: bool

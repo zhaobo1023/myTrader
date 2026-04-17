@@ -25,9 +25,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   logout: () => {
     authLogout();
     set({ user: null });
-    // [AUTH-DISABLED] redirect disabled during dev — re-enable before prod
-    // if (typeof window !== 'undefined') {
-    //   window.location.href = '/login';
-    // }
+    if (typeof window !== 'undefined') {
+      window.location.href = '/login';
+    }
   },
 }));
