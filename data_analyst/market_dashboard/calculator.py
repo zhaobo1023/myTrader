@@ -104,21 +104,41 @@ def calc_temperature() -> dict:
 
         # 1) Market volume
         vol_series = _load_macro('market_volume', days=60)
+        volume_anomaly = False
         if not vol_series.empty:
             cur_vol = float(vol_series.iloc[-1])
             prev_vol = float(vol_series.iloc[-2]) if len(vol_series) >= 2 else None
             ma20 = float(vol_series.tail(20).mean()) if len(vol_series) >= 5 else None
             vol_ratio = cur_vol / ma20 if ma20 and ma20 > 0 else None
 
-            result['indicators']['volume'] = {
-                'value': _safe_round(cur_vol / 1e8, 0),  # convert to yi
-                'unit': 'yi',
-                'change': _pct_change_str(cur_vol, prev_vol),
-            }
-            result['indicators']['volume_ratio_ma20'] = {
-                'value': _safe_round(vol_ratio, 2),
-                'signal': _signal(vol_ratio or 1.0, C.VOLUME_RATIO_THRESHOLDS, C.VOLUME_RATIO_LEVELS),
-            }
+            # Anomaly detection: if current volume is < 10% of MA20,
+            # the data point is likely corrupt (e.g. shares stored as yuan)
+            if vol_ratio is not None and vol_ratio < 0.1:
+                logger.warning(
+                    "[ANOMALY] market_volume %.0f is <10%% of MA20 %.0f (ratio=%.4f), marking anomalous",
+                    cur_vol, ma20, vol_ratio,
+                )
+                volume_anomaly = True
+                result['indicators']['volume'] = {
+                    'value': _safe_round(cur_vol / 1e8, 0),
+                    'unit': 'yi',
+                    'anomaly': '[ANOMALY: volume far below MA20, data likely corrupt]',
+                }
+                result['indicators']['volume_ratio_ma20'] = {
+                    'value': None,
+                    'signal': 'anomaly',
+                    'anomaly': '[ANOMALY]',
+                }
+            else:
+                result['indicators']['volume'] = {
+                    'value': _safe_round(cur_vol / 1e8, 0),  # convert to yi
+                    'unit': 'yi',
+                    'change': _pct_change_str(cur_vol, prev_vol),
+                }
+                result['indicators']['volume_ratio_ma20'] = {
+                    'value': _safe_round(vol_ratio, 2),
+                    'signal': _signal(vol_ratio or 1.0, C.VOLUME_RATIO_THRESHOLDS, C.VOLUME_RATIO_LEVELS),
+                }
             # Series for sparkline: last 20 days volume
             result['volume_series'] = [
                 {'date': d.strftime('%Y-%m-%d'), 'value': _safe_round(float(v) / 1e8, 0)}
@@ -131,7 +151,7 @@ def calc_temperature() -> dict:
 
         # 2) Turnover rate - compute from macro_data market_volume instead of
         #    trade_stock_daily (which is too large for real-time query)
-        if not vol_series.empty and len(vol_series) >= 20:
+        if not vol_series.empty and len(vol_series) >= 20 and not volume_anomaly:
             window = vol_series.tail(252) if len(vol_series) >= 252 else vol_series
             cur_vol_val = float(vol_series.iloc[-1])
             pct_rank = round(float((window < cur_vol_val).mean() * 100), 1) if len(window) > 10 else None

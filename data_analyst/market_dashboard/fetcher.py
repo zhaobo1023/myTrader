@@ -48,13 +48,31 @@ def _to_compact(d: str) -> str:
     return _normalize_date(d).replace('-', '')
 
 
+# Minimum sane values for indicators that have known reasonable ranges.
+# market_volume in yuan: A-share daily turnover is never below 100 yi (1e10).
+_INDICATOR_MIN = {
+    'market_volume': 1e10,
+}
+
+
 def _save(trade_date: str, indicator: str, value, env: str = 'online'):
     """Upsert a single indicator value into macro_data."""
     if value is None:
         return
     trade_date = _normalize_date(trade_date)
+    fval = float(value)
+
+    # Sanity check: reject values below known minimum thresholds
+    min_val = _INDICATOR_MIN.get(indicator)
+    if min_val is not None and fval < min_val:
+        logger.warning(
+            "[REJECT] %s %s = %.0f below minimum %.0f, not saving",
+            trade_date, indicator, fval, min_val,
+        )
+        return
+
     try:
-        execute_update(UPSERT_SQL, (trade_date, indicator, float(value)), env=env)
+        execute_update(UPSERT_SQL, (trade_date, indicator, fval), env=env)
         logger.info("[OK] %s %s = %s", trade_date, indicator, value)
     except Exception as e:
         logger.error("[FAIL] %s %s: %s", trade_date, indicator, e)
@@ -64,9 +82,10 @@ def fetch_market_volume(trade_date: str = None, env: str = 'online'):
     """
     Fetch total A-share market turnover amount (both exchanges, in yuan).
 
-    Uses:
-      1. SSE (stock_sse_deal_daily) + SZSE (stock_szse_summary) for exact amount
-      2. Fallback: SH + SZ index volume (shares, less accurate)
+    Uses (in order):
+      1. SSE + SZSE exchange official summary (most accurate)
+      2. DB aggregation: SUM(amount) from trade_stock_daily (high precision)
+      3. Fallback: SH index volume (shares, not yuan - low precision)
 
     Stores as `market_volume` in yuan (e.g. 2.15e12 for 2.15 wan-yi).
     """
@@ -115,7 +134,29 @@ def fetch_market_volume(trade_date: str = None, env: str = 'online'):
     except Exception as e:
         logger.warning("exchange summary fetch failed, trying fallback: %s", e)
 
-    # --- Method 2: Fallback - SH + SZ index volume (shares, not yuan) ---
+    # --- Method 2: DB aggregation from trade_stock_daily ---
+    try:
+        rows = execute_query(
+            "SELECT SUM(amount) as total FROM trade_stock_daily "
+            "WHERE trade_date = %s AND amount > 0",
+            (trade_date,), env=env
+        )
+        if rows and rows[0]['total']:
+            total = float(rows[0]['total'])
+            if total > 1e10:  # sanity: at least 100 yi
+                trade_date = _normalize_date(trade_date)
+                _save(trade_date, 'market_volume', total, env=env)
+                logger.info("[DB_AGG] %s market_volume = %.0f (%.2f wan-yi)",
+                            trade_date, total, total / 1e12)
+                return total
+    except Exception as e:
+        logger.warning("DB aggregation for market_volume failed: %s", e)
+
+    # --- Method 3: Fallback - SH index volume (shares, NOT yuan) ---
+    # This returns share count, not turnover amount. The magnitude differs
+    # by ~1000x (hundreds of billions of shares vs trillions of yuan).
+    # Storing shares as market_volume would corrupt downstream calculations
+    # (volume_ratio, temperature score, briefing text).  Skip and warn.
     try:
         df = ak.stock_zh_index_daily(symbol="sh000001")
         if df is not None and not df.empty:
@@ -126,12 +167,12 @@ def fetch_market_volume(trade_date: str = None, env: str = 'online'):
                 trade_date = str(row.iloc[0]['date'])
 
             volume = float(row.iloc[0]['volume'])
-            # Note: this is shares not yuan, stored with '_shares' suffix
-            _save(trade_date, 'market_volume', volume, env=env)
-            logger.warning("[FALLBACK] %s market_volume = %.0f (shares, not yuan)", trade_date, volume)
-            return volume
+            logger.warning(
+                "[SKIP] %s market_volume fallback skipped: volume=%.0f is shares not yuan",
+                trade_date, volume,
+            )
     except Exception as e:
-        logger.error("fetch_market_volume failed: %s", e)
+        logger.error("fetch_market_volume all methods failed: %s", e)
     return None
 
 
@@ -457,6 +498,23 @@ def fetch_all(trade_date: str = None, env: str = 'online'):
     logger.info("=== Market Dashboard Fetch Complete ===")
 
 
+def cleanup_bad_volume(env: str = 'online'):
+    """Remove market_volume rows with implausible values (shares stored as yuan).
+
+    Any market_volume < 1e10 (100 yi yuan) is almost certainly bad data
+    (e.g. share count mistakenly stored as yuan turnover).
+    """
+    try:
+        execute_update(
+            "DELETE FROM macro_data WHERE indicator = 'market_volume' AND value < %s",
+            (1e10,),
+            env=env,
+        )
+        logger.info("[CLEANUP] Deleted market_volume rows with value < 1e10")
+    except Exception as e:
+        logger.error("[CLEANUP] Failed: %s", e)
+
+
 if __name__ == '__main__':
     import argparse
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
@@ -464,6 +522,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Fetch market dashboard indicators')
     parser.add_argument('--date', help='Trade date (YYYY-MM-DD)')
     parser.add_argument('--env', default='online', help='DB environment')
+    parser.add_argument('--cleanup', action='store_true', help='Clean up bad market_volume data')
     args = parser.parse_args()
 
-    fetch_all(trade_date=args.date, env=args.env)
+    if args.cleanup:
+        cleanup_bad_volume(env=args.env)
+    else:
+        fetch_all(trade_date=args.date, env=args.env)
