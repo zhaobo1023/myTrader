@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-04-17 公众号精选报告三合一 / 晨报排障 / Celery Worker 重启
+
+### 1. 公众号精选报告三合一
+
+**问题：** 之前 nightly_digest 管道按 macro/broker/other 三个类别分别生成三篇独立报告发到飞书，导致跨篇重复严重（同一事件在多篇中反复叙述）、结构模板化（三篇共6段风险提示+6条推荐阅读）、信息密度低。
+
+**改动：**
+- 新增 `_REPORT_SYSTEM_COMBINED` prompt，按信息维度组织（宏观与政策 -> 行业与公司 -> 市场情绪与事件 -> 综合研判 -> 风险清单 -> 推荐原文），全局去重，2000字以内
+- 新增 `_generate_combined_report()` 函数，将三类文章拼成一个 prompt 一次调用 LLM
+- 修改 `generate_categorized_reports()` 主逻辑，从循环三次改为一次综合生成
+- 旧 prompt 和函数保留不删，可回退
+
+**效果：** 22篇文章 -> 1篇2233字综合报告（原先三篇合计约2800字），信息密度明显提升，风险和推荐各只出一次。
+
+### 2. 报告持久化 (trade_article_report)
+
+新建 `trade_article_report` 表，每次生成的报告自动写入 DB（report_date + report_type 唯一键，支持 upsert）。含 content/article_count/document_id/doc_url 字段。migration: `t1u2v3w4x5y6`。
+
+### 3. 晨报未推送排障
+
+**现象：** 今日 08:44 晨报内容已生成并存入 trade_briefing 表，但飞书未收到。
+
+**根因：** Celery Worker 容器内代码已更新（含 briefing_tasks.py），但 worker 进程未重启，导致 `publish_morning_briefing` task 未注册。Beat 调度后 worker 报 `Received unregistered task`。
+
+**修复：** `docker restart app-celery-worker-1`，重启后手动触发 `publish_latest_briefing('morning', force=True)` 补发。
+
+### 4. Python 3.9 兼容性修复
+
+`api/services/llm_client_factory.py` 中 `str | None` 类型注解在 Python 3.9 下报错（需 3.10+），改为 `Optional[str]`。
+
+### 文件变更
+
+| 文件 | 改动 |
+|------|------|
+| `api/services/article_digest_service.py` | +combined prompt, +_generate_combined_report(), +DB persist, 改 generate_categorized_reports() |
+| `api/services/llm_client_factory.py` | fix: `str\|None` -> `Optional[str]` |
+| `alembic/versions/t1u2v3w4x5y6_...py` | 新增 trade_article_report 表 migration |
+
+---
+
 ## 2026-04-16 (续) 精选观点日报 / Celery 统一调度 / 晨报复盘优化
 
 ### 今日新增工作
