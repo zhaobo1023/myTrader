@@ -215,5 +215,11 @@ celery_app.conf.beat_schedule = {
         'task': 'push_daily_health_report',
         'schedule': crontab(hour=21, minute=30, day_of_week='1-5'),
     },
+
+    # 23:00 - 公众号文章导出 + LLM摘要 + 飞书推送
+    'nightly-article-digest': {
+        'task': 'run_nightly_digest',
+        'schedule': crontab(hour=23, minute=0),
+    },
 }
 celery_app.conf.timezone = 'Asia/Shanghai'
