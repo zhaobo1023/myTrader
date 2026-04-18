@@ -24,6 +24,15 @@ TITLE_BLACKLIST = [
 MIN_CONTENT_LEN = 1500
 MAX_PER_FEED = 3
 
+# 新闻快讯类公众号: 文章短但信息密度高，降低字数门槛、提高条数上限
+NEWS_FEEDS = {
+    '财联社', '界面新闻', '华尔街见闻',
+    '第一财经', '证券时报', '中国证券报',
+    '上海证券报', '经济观察报',
+}
+NEWS_MIN_CONTENT_LEN = 300
+NEWS_MAX_PER_FEED = 8
+
 
 def is_blacklisted(title):
     for pat in TITLE_BLACKLIST:
@@ -65,6 +74,9 @@ def main():
 
     for fid, arts in feed_articles.items():
         feed_name = feeds.get(fid, 'unknown')
+        is_news = feed_name in NEWS_FEEDS
+        min_len = NEWS_MIN_CONTENT_LEN if is_news else MIN_CONTENT_LEN
+        max_per = NEWS_MAX_PER_FEED if is_news else MAX_PER_FEED
         arts.sort(key=lambda x: len(x.get('content') or ''), reverse=True)
         kept = 0
 
@@ -72,13 +84,13 @@ def main():
             content = a.get('content') or ''
             title = a.get('title') or ''
 
-            if len(content) < MIN_CONTENT_LEN:
+            if len(content) < min_len:
                 stats['filtered_short'] += 1
                 continue
             if is_blacklisted(title):
                 stats['filtered_blacklist'] += 1
                 continue
-            if kept >= MAX_PER_FEED:
+            if kept >= max_per:
                 stats['filtered_limit'] += 1
                 continue
 

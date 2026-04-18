@@ -50,6 +50,15 @@ FEED_CATEGORY_MAP: dict[str, str] = {
     '华泰证券': PUSH_CATEGORY_BROKER,
     '国泰海通证券研究': PUSH_CATEGORY_BROKER,
     '招商证券策略研究': PUSH_CATEGORY_BROKER,
+    # -- news (财经新闻快讯) --
+    '财联社': PUSH_CATEGORY_MACRO,
+    '界面新闻': PUSH_CATEGORY_OTHER,
+    '华尔街见闻': PUSH_CATEGORY_MACRO,
+    '第一财经': PUSH_CATEGORY_MACRO,
+    '证券时报': PUSH_CATEGORY_BROKER,
+    '中国证券报': PUSH_CATEGORY_BROKER,
+    '上海证券报': PUSH_CATEGORY_BROKER,
+    '经济观察报': PUSH_CATEGORY_MACRO,
     # -- other: 未列出的默认归入 other --
 }
 
