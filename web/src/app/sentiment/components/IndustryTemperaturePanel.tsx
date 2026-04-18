@@ -476,7 +476,7 @@ function SwRotationCard() {
       } else {
         await loadRuns();
         const poll = setInterval(async () => {
-          const r2 = await fetch(\`\${API_BASE}/api/industry/sw-rotation/runs?limit=5\`);
+          const r2 = await fetch(`\${API_BASE}/api/industry/sw-rotation/runs?limit=5`);
           const j2 = await r2.json();
           const latest = (j2.data || [])[0];
           setRuns(j2.data || []);
