@@ -464,7 +464,7 @@ export default function CandidatePoolContent() {
       <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
         <div>
           <h2 style={{ fontSize: '16px', fontWeight: 580, color: 'var(--text-primary)', margin: '0 0 4px' }}>
-            观察池
+            候选观察
           </h2>
           <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
             从行业或策略加入的候选股票，每日盘后自动监控技术面
@@ -557,7 +557,7 @@ export default function CandidatePoolContent() {
           background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px',
           color: 'var(--text-muted)', fontSize: '13px',
         }}>
-          观察池为空，从「行业」或「策略」页面添加股票
+          候选观察为空，从「行业」或「策略」页面添加股票
         </div>
       ) : (
         <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px', overflow: 'hidden' }}>

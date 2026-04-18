@@ -12,7 +12,7 @@ type Tab = 'positions' | 'sim' | 'candidate';
 const TABS: { key: Tab; label: string }[] = [
   { key: 'positions', label: '实盘持仓' },
   { key: 'sim', label: '模拟池' },
-  { key: 'candidate', label: '观察池' },
+  { key: 'candidate', label: '候选观察' },
 ];
 
 function PortfolioInner() {
