@@ -82,12 +82,12 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
             detail='Username already taken',
         )
 
-    # Create user
+    # Create user - invite code users get PRO tier
     user = User(
         username=req.username,
         display_name=req.display_name,
         hashed_password=hash_password(req.password),
-        tier=UserTier.FREE,
+        tier=UserTier.PRO,  # Invite code users get PRO tier
         role=UserRole.USER,
         invited_by=invite.created_by,
     )
