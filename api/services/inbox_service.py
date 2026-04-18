@@ -48,13 +48,19 @@ def get_unread_count(user_id: int, env: str = 'online') -> int:
 def create_system_broadcast(
     title: str,
     content: str,
+    message_type: str = 'system',
+    metadata: Optional[dict] = None,
     env: str = 'online',
 ) -> int:
-    """Send a system message to all active users."""
+    """Send a message to all active users.
+
+    Args:
+        message_type: One of 'system', 'daily_report', 'alert', 'strategy_signal'.
+    """
     users = execute_query("SELECT id FROM users WHERE is_active = 1", env=env)
     count = 0
     for user in users:
-        create_message(user['id'], 'system', title, content, env=env)
+        create_message(user['id'], message_type, title, content, metadata=metadata, env=env)
         count += 1
-    logger.info('[INBOX] broadcast system message to %s users', count)
+    logger.info('[INBOX] broadcast %s message to %s users', message_type, count)
     return count
