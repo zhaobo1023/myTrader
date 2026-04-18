@@ -265,7 +265,7 @@ function SignalBadge({ label, count, color }: { label: string; count: number; co
 }
 
 const SIGNAL_DEFS: Record<string, { label: string; bg: string; color: string; tip: string }> = {
-  AUTH_REMOVED_marker_1,
+  '过热':   { label: '过热',     bg: '#e5534b', color: '#fff', tip: '长期分位>85，年线历史极高位，注意止盈' },
   '降温':   { label: '高位降温', bg: '#e67e22', color: '#fff', tip: '上周过热，本周跌破阈值，趋势可能反转' },
   '长强短弱': { label: '高位退潮', bg: '#c69026', color: '#fff', tip: '年线强但月线动能已失，减仓信号' },
   '连续上升': { label: '持续上升', bg: '#2980b9', color: '#fff', tip: '近3周连续上升>=5分位，趋势跟随' },
