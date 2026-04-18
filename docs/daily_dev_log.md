@@ -2,6 +2,155 @@
 
 ---
 
+## 2026-04-19 Agent 交易助手 (P0-P6 全量实现)
+
+### 背景
+
+为 myTrader 平台引入内嵌 AI 交易助手。评估 NanoBot 后决定自建，设计文档见 `docs/agent_assistant_design.md`，任务拆解见 `docs/agent_assistant_tasks.md`（38 个任务，7 个阶段）。
+
+### 实现内容
+
+#### P0: 基础设施
+- `api/models/agent.py` -- ORM 模型：`AgentConversation`（UUID 主键）、`AgentMessage`（BigInteger，SQLite 兼容）
+- `alembic/versions/y1z2a3b4c5d6` -- 数据库迁移，创建两张表及索引
+- `api/services/agent/schemas.py` -- `ToolDef`、`AgentContext`、`ToolCallResult`、`ToolCallTimer`
+- `api/services/agent/prompts.py` -- 系统 prompt 构建，含页面上下文感知（market/dashboard/analysis 等）
+- `api/services/agent/tool_registry.py` -- `ToolRegistry` 单例 + `@builtin_tool` 装饰器，支持 tier 过滤
+- `api/services/agent/conversation.py` -- `ConversationStore`，Redis 缓存（2h TTL）+ MySQL 持久化
+
+#### P1: 内置工具（10 个）
+- `query_portfolio` -- 查询用户持仓
+- `get_stock_indicators` -- 技术指标（MA/MACD/RSI/RPS）
+- `search_knowledge` -- RAG 知识库检索
+- `query_database` -- Text2SQL 自然语言查询（含 SELECT-only 安全过滤）
+- `get_fear_index` -- VIX/OVX/GVZ/US10Y 恐慌指数
+- `search_news` -- 新闻舆情搜索
+- `get_hot_sectors` -- 申万行业轮动
+- `add_watchlist` -- 添加关注（action 类，需前端确认）
+- `add_position` -- 添加模拟持仓（action 类，pro tier）
+- `run_tech_scan` -- 技术面扫描（analysis 类，pro tier）
+
+#### P2: ReAct 循环 + API
+- `api/services/agent/llm_chat.py` -- `AgentLLMClient`，DashScope Qwen 流式 function calling，增量 tool_calls 组装
+- `api/services/agent/orchestrator.py` -- `AgentOrchestrator`，最大 10 轮 ReAct 循环，SSE 事件流（thinking/tool_call/tool_result/token/action/done/error）
+- `api/routers/agent.py` -- REST + SSE API（/api/agent/chat、conversations CRUD、tools、mcp/servers）
+- `api/schemas/agent.py` -- Pydantic 请求/响应模型
+
+#### P4: 投资大师插件系统
+- `api/services/agent/plugin_loader.py` -- `PluginLoader`，扫描 `plugins/` 目录，支持 `prompt_skill`（纯 YAML）和 `code_skill`（Python 入口）
+- `plugins/masters/buffett/` -- 巴菲特五步分析框架（护城河/财务质量/管理层/估值/结论）
+- `plugins/masters/graham/` -- 格雷厄姆量化标准（PE<15/PB<1.5/股息/流动性/格雷厄姆公式）
+- `plugins/masters/peter_lynch/` -- 彼得·林奇六类股票 + PEG 分析
+- `plugins/masters/livermore/` -- 利弗莫尔趋势交易 + 关键点位
+- `plugins/masters/munger/` -- 芒格逆向思维 + 能力圈
+
+#### P5: 前端浮动面板
+- `web/src/lib/agent-store.ts` -- Zustand 全局状态，conversationId 持久化至 localStorage
+- `web/src/hooks/useAgentChat.ts` -- SSE 通信 hook，5 分钟超时，AbortController 取消
+- `web/src/components/agent/FloatingButton.tsx` -- 右下角 48px 圆形按钮，z-index 9990
+- `web/src/components/agent/ChatPanel.tsx` -- 400x600 浮动面板 / 全屏（50% 宽）两种模式
+- `web/src/components/agent/MessageList.tsx` -- 消息气泡，流式光标动画
+- `web/src/components/agent/ToolCallCard.tsx` -- 可折叠工具调用卡片，显示参数/结果/耗时
+- `web/src/components/agent/ActionConfirm.tsx` -- 操作确认组件（add_watchlist/navigate）
+- `web/src/components/agent/QuickActions.tsx` -- 页面感知快捷操作（market/dashboard/analysis 等）
+- `web/src/components/agent/FloatingAssistant.tsx` -- Cmd+/ 快捷键，pathname 变化时更新页面上下文
+- `AppShell.tsx` -- 已登录用户注入 `<FloatingAssistant />`
+
+#### P6: MCP 集成
+- `api/services/agent/mcp_client.py` -- `MCPToolSource`，支持 stdio/SSE 双传输，动态工具发现，工具代理调用
+- `ToolRegistry.load_mcp_tools(server_name)` -- 按 server 前缀精准更新，不重复注册其他 server 工具
+- `ToolRegistry.unregister_by_prefix()` -- 断开 server 时批量清理
+- MCP 管理 API（admin only）：注册/列表/断开/重连
+
+### Code Review 修复（同日）
+- **Orchestrator 持久化 Bug** -- 改为每 iteration 立即持久化 assistant + tool result 消息，修复多轮工具调用时上下文乱序和重复保存问题
+- `asyncio.get_event_loop()` -> `get_running_loop()`（Python 3.12 废弃）
+- `datetime.utcnow()` -> `datetime.now(timezone.utc)` （Python 3.12 废弃）
+- 清理未使用 import：`ToolCallTimer`（tool_registry.py）、`asyncio`（mcp_client.py）
+- `load_mcp_tools` 新增 `server_name` 参数，避免重复注册其他 server 工具
+- 前端文本统一为中文（"交易助手"/"发送"/"思考中..."/"参数"/"结果"等）
+
+### 测试
+- 138 个单元测试全部通过（P0-P6 全覆盖）
+- 测试文件：`tests/unit/api/test_agent_*.py`（11 个文件）
+
+### 部署
+- 数据库迁移：`alembic upgrade head`（在服务器容器内执行）
+- 前端重新构建并部署（`docker build` + `docker run`）
+
+---
+
+## 2026-04-19 周末夜报 + 信箱推送 + Markdown 渲染
+
+### 夜报周末模式
+
+**需求：** 周六日也发送夜报，但不结合交易行情，仅从公众号文章中提炼有价值内容。
+
+**改动：**
+
+1. **周末专用 prompt** (`api/services/article_digest_service.py`)
+   - 新增 `_REPORT_SYSTEM_WEEKEND` prompt -- 明确标注"今天是周末，市场休市"，不引用盘面走势、当日行情、资金动向
+   - 模块结构调整为：深度研究与洞察 / 宏观与政策回顾 / 行业与公司 / 思考与启发 / 推荐原文
+   - 新增 `_is_weekend(target_date)` 函数判断周六日
+   - `_generate_combined_report()` 周末自动切换 prompt，标题从"每日投资精选"变为"周末精选"
+
+2. **夜报调度** -- 无需改动，`celery beat` 中 `nightly-article-digest` 已经是 `crontab(hour=22, minute=0)` 无 `day_of_week` 限制，周末自动执行
+
+### 夜报推送到信箱
+
+**需求：** 报告同时推送到飞书和 mytrader.cc/inbox。
+
+**改动：**
+
+1. **inbox_service 扩展** (`api/services/inbox_service.py`)
+   - `create_system_broadcast()` 新增 `message_type` 参数（默认 `'system'`，向后兼容）和 `metadata` 参数
+   - 夜报使用 `message_type='daily_report'`，前端信箱可按"日报"筛选
+
+2. **报告推送** (`api/services/article_digest_service.py`)
+   - `_generate_combined_report()` 发布飞书后，调用 `create_system_broadcast()` 推送到所有活跃用户信箱
+   - `metadata` 附带 `doc_url` 和 `article_count`
+   - 内容末尾附加飞书原文链接
+
+### 新闻类公众号适配
+
+**问题：** 财联社、界面新闻等新闻类公众号发文频繁但每篇较短，被 1500 字最低门槛和每源 3 条上限过滤。
+
+**改动：** (`scripts/export_wechat_articles.py`)
+- 新增 `NEWS_FEEDS` 集合（财联社/界面新闻/华尔街见闻/第一财经/证券时报/中国证券报/上海证券报/经济观察报）
+- 新闻源最低字数 300 字（默认 1500），每源上限 8 条（默认 3）
+- `FEED_CATEGORY_MAP` 补充 8 家新闻类公众号分类
+
+**效果：** 导出文章从 9 篇提升到 45 篇，A/B 级从 9 篇提升到 14 篇
+
+### 信箱 Markdown 渲染
+
+**问题：** 信箱详情页 `whiteSpace: 'pre-wrap'` 直接渲染原始文本，Markdown 语法（`###`/`**粗体**`/`- 列表`）原样显示，阅读不友好。
+
+**改动：** (`web/src/app/inbox/page.tsx`)
+- 引入 `react-markdown`（已安装），替换纯文本渲染
+- 定义 `mdComponents` 样式组件：标题带左侧蓝色竖线、粗体高亮、列表缩进、引用块背景色、链接可点击跳转新窗口、分割线等
+- 同时修复 `AppShell.tsx` 中 `FloatingAssistant` 构建报错（`user` 变量不在作用域内）
+
+### 部署验证
+
+- 手动触发 `run_nightly_digest` 任务，全流程跑通
+- 导出 45 篇 -> Stage A 分类 (A=2, B=12, C=12, D=11) -> Stage B 深度提取 14 篇 -> 生成"周末精选 2026-04-18"报告
+- 飞书文档创建成功，bot 卡片发送成功
+- 信箱推送成功（daily_report 类型，2 个活跃用户）
+- 前端 Markdown 渲染部署成功
+
+### 涉及文件
+
+| 文件 | 改动 |
+|------|------|
+| `api/services/article_digest_service.py` | 周末 prompt + 信箱推送 + 新闻类 FEED_CATEGORY_MAP |
+| `api/services/inbox_service.py` | create_system_broadcast 支持自定义 message_type |
+| `scripts/export_wechat_articles.py` | NEWS_FEEDS 差异化过滤规则 |
+| `web/src/app/inbox/page.tsx` | ReactMarkdown 渲染详情内容 |
+| `web/src/components/layout/AppShell.tsx` | 修复 user 变量作用域 |
+
+---
+
 ## 2026-04-17 (续) Briefing 生成改为 Celery 异步队列
 
 ### Briefing 异步化
