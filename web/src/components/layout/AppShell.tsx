@@ -501,6 +501,7 @@ export default function AppShell({
   children: React.ReactNode;
   topBar?: React.ReactNode;
 }) {
+  const user = useAuthStore(s => s.user);
   return (
     <>
       <style>{`
