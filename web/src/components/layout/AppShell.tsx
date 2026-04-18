@@ -6,6 +6,7 @@ import { useAuthStore } from '@/lib/store';
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useTrack } from '@/hooks/useTrack';
 import { NAV_PERMISSIONS, hasPermission } from '@/lib/permissions';
+import FloatingAssistant from '@/components/agent/FloatingAssistant';
 
 // ----------------------------------------------------------------
 // Nav structure with permission requirements
@@ -550,6 +551,7 @@ export default function AppShell({
             {children}
           </main>
         </div>
+        {user && <FloatingAssistant />}
       </div>
     </>
   );

@@ -22,6 +22,7 @@ from api.models.candidate_pool import (
 from api.models.invite_code import InviteCode
 from api.models.user_position import UserPosition
 from api.models.inbox_message import InboxMessage
+from api.models.agent import AgentConversation, AgentMessage
 
 __all__ = [
     'User', 'UserTier', 'UserRole',
@@ -40,4 +41,5 @@ __all__ = [
     'InviteCode',
     'UserPosition',
     'InboxMessage',
+    'AgentConversation', 'AgentMessage',
 ]

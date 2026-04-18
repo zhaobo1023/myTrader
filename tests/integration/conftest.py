@@ -56,6 +56,7 @@ async def db_engine():
         User, Subscription, UsageLog, ApiKey, Strategy, BacktestJob,
         UserWatchlist, UserScanResult, UserNotificationConfig,
         InviteCode, UserPosition, InboxMessage,
+        AgentConversation, AgentMessage,
     )
     from api.dependencies import Base
 

@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import ReactMarkdown from 'react-markdown';
 import AppShell from '@/components/layout/AppShell';
 import { inboxApi, InboxMessageItem } from '@/lib/api-client';
 
@@ -17,6 +18,71 @@ const TYPE_COLORS: Record<string, string> = {
   alert: 'var(--amber)',
   system: 'var(--text-muted)',
   strategy_signal: 'var(--green)',
+};
+
+const mdComponents: React.ComponentProps<typeof ReactMarkdown>['components'] = {
+  h1: ({ children }) => (
+    <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '15px', margin: '20px 0 8px', paddingLeft: '10px', borderLeft: '3px solid var(--accent)' }}>
+      {children}
+    </div>
+  ),
+  h2: ({ children }) => (
+    <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '14px', margin: '18px 0 6px', paddingLeft: '10px', borderLeft: '3px solid var(--accent)' }}>
+      {children}
+    </div>
+  ),
+  h3: ({ children }) => (
+    <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '13px', margin: '14px 0 5px' }}>
+      {children}
+    </div>
+  ),
+  p: ({ children }) => (
+    <p style={{ margin: '6px 0', fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.8 }}>
+      {children}
+    </p>
+  ),
+  strong: ({ children }) => (
+    <strong style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{children}</strong>
+  ),
+  ul: ({ children }) => (
+    <ul style={{ margin: '6px 0', paddingLeft: '20px', fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.8 }}>
+      {children}
+    </ul>
+  ),
+  ol: ({ children }) => (
+    <ol style={{ margin: '6px 0', paddingLeft: '20px', fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.8 }}>
+      {children}
+    </ol>
+  ),
+  li: ({ children }) => (
+    <li style={{ margin: '3px 0' }}>{children}</li>
+  ),
+  hr: () => (
+    <hr style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', margin: '14px 0' }} />
+  ),
+  blockquote: ({ children }) => (
+    <blockquote style={{
+      margin: '8px 0', padding: '10px 14px',
+      borderLeft: '3px solid var(--accent)',
+      background: 'var(--bg-elevated)', borderRadius: '0 6px 6px 0',
+      fontSize: '12px', color: 'var(--text-muted)',
+    }}>
+      {children}
+    </blockquote>
+  ),
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none', borderBottom: '1px solid transparent' }}
+      onMouseEnter={e => { (e.target as HTMLElement).style.borderBottomColor = 'var(--accent)'; }}
+      onMouseLeave={e => { (e.target as HTMLElement).style.borderBottomColor = 'transparent'; }}
+    >
+      {children}
+    </a>
+  ),
+  code: ({ children }) => (
+    <code style={{ fontSize: '11px', fontFamily: 'monospace', background: 'var(--bg-elevated)', padding: '1px 5px', borderRadius: '3px', color: 'var(--accent)' }}>
+      {children}
+    </code>
+  ),
 };
 
 export default function InboxPage() {
@@ -154,8 +220,10 @@ export default function InboxPage() {
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
                     {TYPE_LABELS[detail.message_type] || detail.message_type} | {detail.created_at.replace('T', ' ').slice(0, 19)}
                   </div>
-                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.7', whiteSpace: 'pre-wrap' }}>
-                    {detail.content || '(无内容)'}
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.7' }}>
+                    {detail.content ? (
+                      <ReactMarkdown components={mdComponents}>{detail.content}</ReactMarkdown>
+                    ) : '(无内容)'}
                   </div>
                 </>
               ) : (

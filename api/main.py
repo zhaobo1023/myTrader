@@ -35,6 +35,7 @@ from api.routers.candidate_pool import router as candidate_pool_router
 from api.routers.sim_pool import router as sim_pool_router
 from api.routers.positions import router as positions_router
 from api.routers.inbox import router as inbox_router
+from api.routers.agent import router as agent_router
 
 logger = logging.getLogger('myTrader.api')
 
@@ -150,6 +151,7 @@ app.include_router(sim_pool_router)
 app.include_router(positions_router)
 app.include_router(inbox_router)
 app.include_router(documents_router)
+app.include_router(agent_router)
 
 
 @app.exception_handler(Exception)

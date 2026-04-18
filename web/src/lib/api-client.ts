@@ -415,3 +415,53 @@ export const userApi = {
   changePassword: (currentPassword: string, newPassword: string) =>
     apiClient.post('/api/auth/change-password', { current_password: currentPassword, new_password: newPassword }),
 };
+
+// ============================================================
+// Agent Assistant API
+// ============================================================
+
+export interface AgentConversationSummary {
+  id: string;
+  title: string;
+  active_skill: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentMessageOut {
+  id: number;
+  role: string;
+  content: string | null;
+  tool_calls: unknown[] | null;
+  tool_call_id: string | null;
+  tool_name: string | null;
+  created_at: string;
+}
+
+export interface AgentConversationDetail {
+  id: string;
+  title: string;
+  active_skill: string | null;
+  messages: AgentMessageOut[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentToolInfo {
+  name: string;
+  description: string;
+  category: string;
+  source: string;
+  min_tier: string;
+}
+
+export const agentApi = {
+  listConversations: () =>
+    apiClient.get<AgentConversationSummary[]>('/api/agent/conversations'),
+  getConversation: (id: string) =>
+    apiClient.get<AgentConversationDetail>(`/api/agent/conversations/${id}`),
+  deleteConversation: (id: string) =>
+    apiClient.delete(`/api/agent/conversations/${id}`),
+  listTools: () =>
+    apiClient.get<AgentToolInfo[]>('/api/agent/tools'),
+};
