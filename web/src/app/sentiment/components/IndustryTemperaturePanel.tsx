@@ -469,7 +469,7 @@ function SwRotationCard() {
     setForceTriggering(true);
     setErrorMsg(null);
     try {
-      const res = await fetch(\`\${API_BASE}/api/industry/sw-rotation/force-trigger\`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/api/industry/sw-rotation/force-trigger`, { method: 'POST' });
       if (!res.ok) {
         const j = await res.json();
         setErrorMsg(j.detail || '强制触发失败');
