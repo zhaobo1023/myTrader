@@ -10,7 +10,7 @@ import IndustryStockScreener from './components/IndustryStockScreener';
 type Tab = 'preset' | 'theme' | 'industry';
 
 const TABS: { key: Tab; label: string }[] = [
-  { key: 'preset', label: '预设策略' },
+  { key: 'preset', label: '量化策略' },
   { key: 'theme', label: '主题选股' },
   { key: 'industry', label: '行业选股' },
 ];
