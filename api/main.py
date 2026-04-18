@@ -7,7 +7,7 @@ Main entry point with lifespan management for DB pool and Redis.
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -15,8 +15,10 @@ from api.config import settings
 from api.dependencies import close_redis
 from api.logging_config import setup_logging
 from api.middleware.access_log import AccessLogMiddleware
+from api.middleware.auth import require_admin
 from api.middleware.metrics import MetricsMiddleware, get_metrics
 from api.middleware.rate_limit import RateLimitMiddleware
+from api.middleware.security_headers import SecurityHeadersMiddleware
 from api.routers import health, auth, market, analysis, strategy, rag, portfolio, admin, api_keys, subscription, research
 from api.routers.documents import router as documents_router
 from api.routers.watchlist import router as watchlist_router
@@ -71,16 +73,20 @@ app = FastAPI(
     description='myTrader personal quantitative trading platform API',
     version=settings.app_version,
     lifespan=lifespan,
-    docs_url='/docs',
-    redoc_url='/redoc',
+    docs_url='/docs' if settings.api_debug else None,
+    redoc_url='/redoc' if settings.api_debug else None,
+    openapi_url='/openapi.json' if settings.api_debug else None,
 )
 
 # ============================================================
 # CORS - 限制允许的来源以防止 CSRF 攻击
 # ============================================================
-allow_origins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://123.56.3.1', 'https://mytrader.cc', 'https://www.mytrader.cc']
+allow_origins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://mytrader.cc', 'https://www.mytrader.cc']
+if settings.cors_extra_origins:
+    allow_origins.extend(
+        o.strip() for o in settings.cors_extra_origins.split(',') if o.strip()
+    )
 if settings.api_debug:
-    # 开发模式允许本地开发服务器
     allow_origins.extend(['http://localhost:3001', 'http://127.0.0.1:3001'])
 
 app.add_middleware(
@@ -88,8 +94,13 @@ app.add_middleware(
     allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allow_headers=['*'],
+    allow_headers=['Content-Type', 'Authorization', 'Accept', 'X-API-Key'],
 )
+
+# ============================================================
+# Security Headers Middleware
+# ============================================================
+app.add_middleware(SecurityHeadersMiddleware)
 
 # ============================================================
 # Metrics Middleware
@@ -149,14 +160,16 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get('/')
 async def root():
-    return {
+    info = {
         'name': settings.app_name,
         'version': settings.app_version,
-        'docs': '/docs',
     }
+    if settings.api_debug:
+        info['docs'] = '/docs'
+    return info
 
 
 @app.get('/metrics')
-async def metrics():
-    """Application metrics endpoint."""
+async def metrics(_admin=Depends(require_admin)):
+    """Application metrics endpoint (admin only)."""
     return get_metrics()

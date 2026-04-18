@@ -74,7 +74,7 @@ def create_pool(body: CreatePoolRequest, current_user: User = Depends(get_curren
         )
     except Exception as e:
         logger.exception('[SimPool] create_pool failed: %s', e)
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail='Internal server error')
 
     return CreatePoolResponse(
         task_id=task_id,
@@ -179,5 +179,5 @@ def close_pool(pool_id: int):
         _svc.force_close_pool(pool_id)
     except Exception as e:
         logger.exception('[SimPool] force close pool %d failed: %s', pool_id, e)
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail='Internal server error')
     return {'pool_id': pool_id, 'status': 'closed', 'message': 'Pool force-closed successfully'}

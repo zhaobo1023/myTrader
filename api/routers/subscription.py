@@ -68,7 +68,7 @@ async def get_current_subscription(
         }
     except Exception as e:
         logger.error('[SUB] Get subscription failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.post('/upgrade')
@@ -126,7 +126,7 @@ async def upgrade_subscription(
         }
     except Exception as e:
         logger.error('[SUB] Upgrade failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.post('/webhook')

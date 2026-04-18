@@ -55,7 +55,7 @@ async def upload_document(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error('[doc-upload] Unexpected error: %s', e)
-        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+        raise HTTPException(status_code=500, detail='Internal server error')
 
     # Trigger async ingestion (parse + embed + ChromaDB)
     ingest_document_task.delay(result['document_id'])

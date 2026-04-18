@@ -293,17 +293,22 @@ def _extract_verdict(content: str) -> str:
     return ''
 
 
-def _send_card(title: str, verdict: str, doc_url: str) -> None:
-    """Send an interactive card message to the owner via bot."""
+def _send_card(title: str, verdict: str, doc_url: str, color: str = None) -> None:
+    """Send an interactive card message to the owner via bot.
+
+    Args:
+        color: Card header color. If not provided, inferred from verdict text.
+    """
     import json as _json
 
-    color = 'blue'
-    if '偏多' in verdict:
-        color = 'green'
-    elif '偏空' in verdict:
-        color = 'red'
-    elif '中性' in verdict:
-        color = 'turquoise'
+    if color is None:
+        color = 'blue'
+        if '偏多' in verdict:
+            color = 'green'
+        elif '偏空' in verdict:
+            color = 'red'
+        elif '中性' in verdict:
+            color = 'turquoise'
 
     card = {
         'config': {'wide_screen_mode': True},

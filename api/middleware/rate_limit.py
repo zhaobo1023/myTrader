@@ -17,8 +17,15 @@ RATE_LIMITS = {
     'pro': {'requests': 300, 'window': 60},     # 300 req/min
 }
 
+# Stricter rate limits for sensitive endpoints (per IP, ignores tier)
+AUTH_RATE_LIMITS = {
+    '/api/auth/login': {'requests': 10, 'window': 60},      # 10 req/min
+    '/api/auth/register': {'requests': 5, 'window': 60},     # 5 req/min
+    '/api/auth/refresh': {'requests': 20, 'window': 60},     # 20 req/min
+}
+
 # Endpoints exempt from rate limiting
-EXEMPT_PATHS = {'/health', '/docs', '/redoc', '/openapi.json'}
+EXEMPT_PATHS = {'/health'}
 
 
 async def rate_limit_middleware(request: Request, redis: Redis, user_tier: str = 'free'):
@@ -42,25 +49,39 @@ async def rate_limit_middleware(request: Request, redis: Redis, user_tier: str =
     # Get client identifier (user_id or IP)
     client_id = _get_client_id(request)
 
-    # Get limit config
-    limits = RATE_LIMITS.get(user_tier, RATE_LIMITS['free'])
-    max_requests = limits['requests']
-    window = limits['window']
+    # Auth endpoints use stricter per-IP limits (ignore tier)
+    if path in AUTH_RATE_LIMITS:
+        forwarded = request.headers.get('X-Forwarded-For')
+        ip = forwarded.split(",")[0].strip() if forwarded else (
+            request.client.host if request.client else 'unknown'
+        )
+        auth_limits = AUTH_RATE_LIMITS[path]
+        await _check_rate_limit(
+            redis, f'rate_limit:auth:ip:{ip}:{path}',
+            auth_limits['requests'], auth_limits['window'], ip, path,
+        )
 
-    # Redis sliding window key
-    key = f'rate_limit:{client_id}:{path}'
+    # General rate limit by tier
+    limits = RATE_LIMITS.get(user_tier, RATE_LIMITS['free'])
+    await _check_rate_limit(
+        redis, f'rate_limit:{client_id}:{path}',
+        limits['requests'], limits['window'], client_id, path,
+    )
+
+
+async def _check_rate_limit(
+    redis: Redis, key: str, max_requests: int, window: int,
+    client_id: str, path: str,
+):
+    """Execute sliding window rate limit check. Raises 429 if exceeded."""
     now = time.time()
     window_start = now - window
 
     try:
         pipe = redis.pipeline()
-        # Remove expired entries
         pipe.zremrangebyscore(key, 0, window_start)
-        # Count current window
         pipe.zcard(key)
-        # Add current request
         pipe.zadd(key, {str(now): now})
-        # Set expiry
         pipe.expire(key, window)
 
         results = await pipe.execute()
@@ -80,7 +101,6 @@ async def rate_limit_middleware(request: Request, redis: Redis, user_tier: str =
     except HTTPException:
         raise
     except Exception as e:
-        # Fail-open: if Redis is down, allow the request
         logger.error('[RATE_LIMIT] Redis error (fail-open): %s', e)
 
 

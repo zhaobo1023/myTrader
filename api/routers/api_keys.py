@@ -55,7 +55,7 @@ async def create_api_key(
         }
     except Exception as e:
         logger.error('[API_KEY] Create failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.get('/')
@@ -75,7 +75,7 @@ async def list_api_keys(
         return {'keys': [dict(row) for row in result.mappings()]}
     except Exception as e:
         logger.error('[API_KEY] List failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.delete('/{key_id}')
@@ -94,4 +94,4 @@ async def revoke_api_key(
         return {'message': 'API key revoked'}
     except Exception as e:
         logger.error('[API_KEY] Revoke failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')

@@ -131,12 +131,28 @@ class Settings(BaseSettings):
             return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
+    # Comma-separated extra CORS origins (e.g. "http://123.56.3.1,https://extra.example.com")
+    cors_extra_origins: str = Field(default='', alias='CORS_EXTRA_ORIGINS')
+
     def validate_startup(self) -> list[str]:
         """Validate critical settings on startup. Returns list of errors."""
         errors = []
-        if not self.jwt_secret_key or self.jwt_secret_key == 'change-me-to-a-random-secret-key':
-            if not self.api_debug:
-                errors.append('JWT_SECRET_KEY must be set in production')
+        _jwt_missing = (
+            not self.jwt_secret_key
+            or self.jwt_secret_key == 'change-me-to-a-random-secret-key'
+        )
+        if _jwt_missing:
+            if self.api_debug:
+                import logging
+                logging.getLogger('myTrader.api').warning(
+                    '[STARTUP][WARN] JWT_SECRET_KEY is not set or uses placeholder value. '
+                    'This is acceptable for local dev but MUST be changed before production.'
+                )
+            else:
+                errors.append(
+                    'JWT_SECRET_KEY must be set to a strong random value in production '
+                    '(not empty, not the placeholder)'
+                )
         return errors
 
 

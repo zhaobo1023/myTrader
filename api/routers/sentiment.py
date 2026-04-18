@@ -78,7 +78,7 @@ async def get_fear_index():
         raise
     except Exception as e:
         logger.error(f"Failed to get fear index: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.get("/fear-index/dimensions")
@@ -106,7 +106,7 @@ async def get_fear_index_dimensions():
         }
     except Exception as e:
         logger.error("Failed to calculate fear index dimensions: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.get("/fear-index/history", response_model=FearIndexHistoryResponse)
@@ -136,7 +136,7 @@ async def get_fear_index_history(
         return FearIndexHistoryResponse(data=items, total=len(items))
     except Exception as e:
         logger.error(f"Failed to get fear index history: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.get("/news", response_model=NewsListResponse)
@@ -174,7 +174,7 @@ async def get_news(
         raise
     except Exception as e:
         logger.error(f"Failed to get news: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.post("/news/analyze", response_model=SentimentResponse)
@@ -205,7 +205,7 @@ async def analyze_news(request: AnalyzeNewsRequest):
         )
     except Exception as e:
         logger.error(f"Failed to analyze news: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.get("/events", response_model=EventListResponse)
@@ -239,7 +239,7 @@ async def get_events(
         return EventListResponse(data=items, total=len(items))
     except Exception as e:
         logger.error(f"Failed to get events: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.get("/polymarket", response_model=PolymarketListResponse)
@@ -268,7 +268,7 @@ async def get_polymarket(
         return PolymarketListResponse(data=items, total=len(items))
     except Exception as e:
         logger.error(f"Failed to get Polymarket data: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.get("/overview", response_model=OverviewResponse)
@@ -325,4 +325,4 @@ async def get_overview():
         )
     except Exception as e:
         logger.error(f"Failed to get overview: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')

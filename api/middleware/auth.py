@@ -19,7 +19,11 @@ from api.core.security import decode_token
 _bearer_scheme = HTTPBearer(auto_error=False)
 _bearer_scheme_optional = HTTPBearer(auto_error=False)
 
-AUTH_ENABLED = os.getenv('AUTH_ENABLED', 'true').lower() in ('true', '1', 'yes')
+# Auth bypass is only allowed when both AUTH_ENABLED=false AND API_DEBUG=true.
+# This prevents accidental auth bypass in production even if the env var is misconfigured.
+_auth_env = os.getenv('AUTH_ENABLED', 'true').lower() in ('true', '1', 'yes')
+from api.config import settings as _settings
+AUTH_ENABLED = _auth_env or not _settings.api_debug
 
 
 class _MockUser:

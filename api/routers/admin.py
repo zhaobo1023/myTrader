@@ -50,7 +50,7 @@ async def list_users(
         }
     except Exception as e:
         logger.error('[ADMIN] List users failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.get('/users/{user_id}/usage')
@@ -84,7 +84,7 @@ async def get_user_usage(
         return {'usage': usage, 'summary': summary}
     except Exception as e:
         logger.error('[ADMIN] Get usage failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.put('/users/{user_id}/tier')
@@ -104,7 +104,7 @@ async def update_user_tier(
         return {'message': f'User {user_id} tier updated to {tier}'}
     except Exception as e:
         logger.error('[ADMIN] Update tier failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.put('/users/{user_id}/active')
@@ -124,7 +124,7 @@ async def toggle_user_active(
         return {'message': f'User {user_id} {"enabled" if is_active else "disabled"}'}
     except Exception as e:
         logger.error('[ADMIN] Toggle active failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 # ============================================================
@@ -592,7 +592,7 @@ async def get_task_runs(
         rows = [dict(r) for r in result.mappings()]
     except Exception as e:
         logger.error('[ADMIN] task-runs query failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
     # Group by task_name
     task_map = {}  # task_name -> {task_group, runs: {date: row}}

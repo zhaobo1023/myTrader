@@ -20,7 +20,7 @@ async def list_runs(limit: int = 5):
         return {'data': sw_rotation_service.list_runs(limit)}
     except Exception as e:
         logger.error('[SW_ROTATION] list_runs failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.post('/sw-rotation/trigger')
@@ -49,7 +49,7 @@ async def get_log_bias_latest():
         return {'data': log_bias_service.get_latest()}
     except Exception as e:
         logger.error('[LOG_BIAS] get_latest failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.get('/log-bias/run-status')
@@ -60,7 +60,7 @@ async def get_log_bias_run_status():
         return status or {}
     except Exception as e:
         logger.error('[LOG_BIAS] get_run_status failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.post('/log-bias/trigger')
@@ -76,4 +76,4 @@ async def get_log_bias_history(ts_code: str, days: int = 120):
         return {'data': log_bias_service.get_history(ts_code, days)}
     except Exception as e:
         logger.error('[LOG_BIAS] get_history failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')

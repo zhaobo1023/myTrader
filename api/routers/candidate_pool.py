@@ -61,7 +61,7 @@ async def list_stocks(
         return {'count': len(data), 'data': data}
     except Exception as e:
         logger.error('[candidate_pool] list_stocks error: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.post('/stocks')
@@ -82,7 +82,7 @@ async def add_stock(body: AddStockRequest):
         return result
     except Exception as e:
         logger.error('[candidate_pool] add_stock error: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.patch('/stocks/{stock_code}')
@@ -96,7 +96,7 @@ async def update_stock(stock_code: str, body: UpdateStockRequest):
         return {'success': ok}
     except Exception as e:
         logger.error('[candidate_pool] update_stock error: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.delete('/stocks/{stock_code}')
@@ -107,7 +107,7 @@ async def remove_stock(stock_code: str):
         return {'success': True, 'stock_code': stock_code}
     except Exception as e:
         logger.error('[candidate_pool] remove_stock error: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.get('/stocks/{stock_code}/history')
@@ -121,7 +121,7 @@ async def get_stock_history(
         return {'stock_code': stock_code, 'count': len(data), 'data': data}
     except Exception as e:
         logger.error('[candidate_pool] get_stock_history error: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +136,7 @@ async def list_industries():
         return {'count': len(data), 'data': data}
     except Exception as e:
         logger.error('[candidate_pool] list_industries error: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.get('/industry-stocks')
@@ -161,7 +161,7 @@ async def get_industry_stocks(
         }
     except Exception as e:
         logger.error('[candidate_pool] get_industry_stocks error: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +176,7 @@ async def trigger_monitor():
         return result
     except Exception as e:
         logger.error('[candidate_pool] trigger_monitor error: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.get('/monitor/latest')
@@ -193,7 +193,7 @@ async def get_latest_monitor():
         }
     except Exception as e:
         logger.error('[candidate_pool] get_latest_monitor error: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.post('/monitor/push')
@@ -204,4 +204,4 @@ async def push_feishu():
         return {'success': ok}
     except Exception as e:
         logger.error('[candidate_pool] push_feishu error: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail='Internal server error')
