@@ -4,9 +4,11 @@ import { useState, useEffect } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import AppShell from '@/components/layout/AppShell';
 import { useAuthStore } from '@/lib/store';
+import { useRequireAuth } from '@/hooks/useRequireAuth';
 import { userApi } from '@/lib/api-client';
 
 export default function SettingsPage() {
+  useRequireAuth();
   const { user, fetchUser } = useAuthStore();
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
@@ -92,13 +94,13 @@ export default function SettingsPage() {
           </div>
           <div style={{ marginBottom: '12px' }}>
             <label style={labelStyle}>新密码</label>
-            <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} style={inputStyle} placeholder="至少6位字符" />
+            <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} style={inputStyle} placeholder="至少8位，需包含字母和数字" />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <button
               onClick={() => pwdMut.mutate()}
-              disabled={!currentPassword || newPassword.length < 6}
-              style={{ ...btnStyle, opacity: (!currentPassword || newPassword.length < 6) ? 0.5 : 1 }}
+              disabled={!currentPassword || newPassword.length < 8}
+              style={{ ...btnStyle, opacity: (!currentPassword || newPassword.length < 8) ? 0.5 : 1 }}
             >
               修改密码
             </button>
