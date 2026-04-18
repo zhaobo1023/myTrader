@@ -265,7 +265,7 @@ function SignalBadge({ label, count, color }: { label: string; count: number; co
 }
 
 const SIGNAL_DEFS: Record<string, { label: string; bg: string; color: string; tip: string }> = {
-  '过热':   { label: '过热',     bg: '#e5534b', color: '#fff', tip: '长期分位>85，年线历史极高位，注意止盈' },
+  AUTH_REMOVED_marker_1,
   '降温':   { label: '高位降温', bg: '#e67e22', color: '#fff', tip: '上周过热，本周跌破阈值，趋势可能反转' },
   '长强短弱': { label: '高位退潮', bg: '#c69026', color: '#fff', tip: '年线强但月线动能已失，减仓信号' },
   '连续上升': { label: '持续上升', bg: '#2980b9', color: '#fff', tip: '近3周连续上升>=5分位，趋势跟随' },
@@ -412,6 +412,8 @@ function SwRotationCard() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [triggering, setTriggering] = useState(false);
+  const [forceTriggering, setForceTriggering] = useState(false);
+  const [showForceConfirm, setShowForceConfirm] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -459,6 +461,32 @@ function SwRotationCard() {
       }
     } finally {
       setTriggering(false);
+    }
+  }
+
+  async function handleForceTrigger() {
+    setShowForceConfirm(false);
+    setForceTriggering(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch(\`\${API_BASE}/api/industry/sw-rotation/force-trigger\`, { method: 'POST' });
+      if (!res.ok) {
+        const j = await res.json();
+        setErrorMsg(j.detail || '强制触发失败');
+      } else {
+        await loadRuns();
+        const poll = setInterval(async () => {
+          const r2 = await fetch(\`\${API_BASE}/api/industry/sw-rotation/runs?limit=5\`);
+          const j2 = await r2.json();
+          const latest = (j2.data || [])[0];
+          setRuns(j2.data || []);
+          if (latest && !['pending', 'running'].includes(latest.status)) {
+            clearInterval(poll);
+          }
+        }, 10000);
+      }
+    } finally {
+      setForceTriggering(false);
     }
   }
 
