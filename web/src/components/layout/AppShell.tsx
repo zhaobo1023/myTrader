@@ -501,7 +501,14 @@ export default function AppShell({
   children: React.ReactNode;
   topBar?: React.ReactNode;
 }) {
-  const user = useAuthStore(s => s.user);
+  const { user, fetchUser } = useAuthStore();
+  const [authReady, setAuthReady] = useState(false);
+
+  useEffect(() => {
+    fetchUser().finally(() => setAuthReady(true));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <>
       <style>{`
@@ -552,7 +559,7 @@ export default function AppShell({
             {children}
           </main>
         </div>
-        {user && <FloatingAssistant />}
+        {authReady && user && <FloatingAssistant />}
       </div>
     </>
   );
