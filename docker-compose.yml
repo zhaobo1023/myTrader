@@ -21,11 +21,9 @@ services:
     env_file:
       - .env
     environment:
-      - REDIS_HOST=host.docker.internal
+      - REDIS_HOST=mytrader-redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 15s
@@ -89,10 +87,8 @@ services:
         reservations:
           memory: 1G
     environment:
-      - REDIS_HOST=host.docker.internal
+      - REDIS_HOST=mytrader-redis
       - REDIS_PASSWORD=${REDIS_PASSWORD}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - .:/app
       - ./output:/app/output
@@ -109,10 +105,8 @@ services:
     command: celery -A api.tasks.celery_app beat -l info --scheduler celery.beat.PersistentScheduler
     env_file: .env
     environment:
-      - REDIS_HOST=host.docker.internal
+      - REDIS_HOST=mytrader-redis
       - REDIS_PASSWORD=${REDIS_PASSWORD}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - .:/app
     restart: unless-stopped
