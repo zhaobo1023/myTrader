@@ -29,6 +29,17 @@ async def trigger_run():
     return sw_rotation_service.trigger_run()
 
 
+@router.post('/sw-rotation/force-trigger')
+async def force_trigger_run():
+    """
+    Force re-run even if already completed.
+
+    WARNING: This will delete the existing result and re-calculate.
+    Use with caution - typically only needed after code/logic fixes.
+    """
+    return sw_rotation_service.force_trigger_run()
+
+
 @router.get('/sw-rotation/runs/{run_id}')
 async def get_run_detail(run_id: int):
     """Get run detail including per-industry scores."""
@@ -64,9 +75,20 @@ async def get_log_bias_run_status():
 
 
 @router.post('/log-bias/trigger')
-async def trigger_log_bias(force: bool = Query(False, description='Force re-run even if already done')):
+async def trigger_log_bias():
     """Trigger today's ETF log bias daily calculation."""
-    return log_bias_service.trigger_run(force=force)
+    return log_bias_service.trigger_run(force=False)
+
+
+@router.post('/log-bias/force-trigger')
+async def force_trigger_log_bias():
+    """
+    Force re-run even if already completed.
+
+    WARNING: This will delete the existing result and re-calculate.
+    Use with caution - typically only needed after code/logic fixes.
+    """
+    return log_bias_service.trigger_run(force=True)
 
 
 @router.get('/log-bias/history/{ts_code}')

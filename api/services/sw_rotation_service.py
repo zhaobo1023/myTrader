@@ -89,6 +89,25 @@ def trigger_run() -> dict:
     - If running > TIMEOUT -> mark failed, allow re-insert
     - If failed -> delete old record, insert new
     """
+    return _trigger_run(force=False)
+
+
+def force_trigger_run() -> dict:
+    """
+    Force re-run even if already done.
+
+    Requires explicit call (separate endpoint) to avoid accidental re-runs.
+    """
+    return _trigger_run(force=True)
+
+
+def _trigger_run(force: bool = False) -> dict:
+    """
+    Internal trigger implementation.
+
+    Args:
+        force: If True, allow re-running even if status is 'done'
+    """
     today_str = _current_run_date()
 
     rows = execute_query(
@@ -98,8 +117,14 @@ def trigger_run() -> dict:
     if rows:
         row = rows[0]
         status = row['status']
-        if status == 'done':
+        if status == 'done' and not force:
             raise _conflict('本周已完成，不可重复触发')
+        if status == 'done' and force:
+            # Force mode: delete old record and create new one
+            execute_update(
+                'DELETE FROM trade_sw_rotation_run WHERE id = %s', (row['id'],)
+            )
+            logger.info('[SW_ROTATION] Force re-run: deleted old run %d', row['id'])
         if status in ('pending', 'running'):
             # check timeout
             triggered_at = row['triggered_at']

@@ -8,32 +8,23 @@
   4. 输出HTML周报，无需额外工具，浏览器直接看
   5. 保留原有热力图 + 排名图
 
-依赖：pip install akshare pandas numpy matplotlib seaborn scipy
+依赖：pip install akshare pandas numpy scipy
+      (matplotlib 仅在生成图片时需要，非必需)
 """
 
 import warnings; warnings.filterwarnings("ignore")
 
-import akshare as ak
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import seaborn as sns
-from matplotlib import rcParams
 from datetime import datetime
 from scipy import stats
 import json, os, platform, sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Optional dependencies - imported inside functions that need them
+# - akshare: only for fetch_data()
+# - matplotlib: only for plot_heatmap() and plot_quadrant()
 
-# ── 字体 ──────────────────────────────────────────────────────
-if platform.system() == "Darwin":
-    rcParams["font.family"] = ["PingFang SC", "Heiti TC"]
-elif platform.system() == "Windows":
-    rcParams["font.family"] = ["SimHei", "Microsoft YaHei"]
-else:
-    rcParams["font.family"] = ["Noto Sans CJK SC", "DejaVu Sans"]
-rcParams["axes.unicode_minus"] = False
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 TODAY = datetime.today().strftime("%Y-%m-%d")
 TODAY_COMPACT = datetime.today().strftime("%Y%m%d")
@@ -44,6 +35,12 @@ TODAY_COMPACT = datetime.today().strftime("%Y%m%d")
 # ══════════════════════════════════════════════════════════════
 
 def fetch_data(start_date="20230101") -> pd.DataFrame:
+    """Fetch SW industry data from AKShare."""
+    try:
+        import akshare as ak
+    except ImportError:
+        raise ImportError("fetch_data requires akshare. Install it with: pip install akshare")
+
     print("拉取申万一级行业数据...")
     sw_df = ak.sw_index_first_info()
     all_close = {}
@@ -173,18 +170,27 @@ def detect_signals_v2(weekly_hist: pd.DataFrame,
             rising = (all(recent.iloc[i] < recent.iloc[i+1] for i in range(len(recent)-1))
                       and (recent.iloc[-1] - recent.iloc[0]) >= rise_min)
 
-        # 过热 / 降温
-        hot = pd.notna(cur_l) and cur_l >= hot_thr
+        # 过热: 长期分位高 AND 短期分位也高（当前依然强势）
+        # 修正: 只看长期分位不够，必须短期也强才算"过热"
+        # 长期高但短期低 = 高位退潮，不是过热
+        hot = (pd.notna(cur_l) and pd.notna(cur_s)
+               and cur_l >= hot_thr and cur_s >= 60)
+
+        # 降温: 上周过热，本周不过热
         cooling = False
-        if len(series) >= 2 and pd.notna(cur_l):
+        if len(series) >= 2:
             prev_l = series.iloc[-2] if len(series) >= 2 else np.nan
-            cooling = (pd.notna(prev_l) and prev_l >= hot_thr and cur_l < hot_thr)
+            cooling = (pd.notna(prev_l) and prev_l >= hot_thr and pd.notna(cur_l) and cur_l < hot_thr)
 
         # 背离信号
+        # 短强长弱: 短期突然发力，历史上低位 → 趋势启动候选
         diverge_up = (pd.notna(cur_s) and pd.notna(cur_l)
-                      and cur_s >= 60 and cur_l <= 30)   # 短强长弱 → 趋势启动？
+                      and cur_s >= 60 and cur_l <= 40)
+
+        # 长强短弱: 长期高位但近期动能不足 → 高位退潮/减仓信号
+        # 放宽条件: 长期>=70 且 短期<=35 (覆盖更多"高位回调"情况)
         diverge_dn = (pd.notna(cur_s) and pd.notna(cur_l)
-                      and cur_l >= 70 and cur_s <= 20)   # 长强短弱 → 高位退潮
+                      and cur_l >= 70 and cur_s <= 35)
 
         rows.append(dict(
             行业=name,
@@ -205,6 +211,24 @@ def detect_signals_v2(weekly_hist: pd.DataFrame,
 # ══════════════════════════════════════════════════════════════
 
 def plot_heatmap(weekly_scores: pd.DataFrame, sig_df: pd.DataFrame, fname: str):
+    # Import matplotlib only when plotting (soft dependency)
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        import seaborn as sns
+        from matplotlib import rcParams
+    except ImportError:
+        raise ImportError("plot_heatmap requires matplotlib. Install it with: pip install matplotlib")
+
+    # Configure font for Chinese characters
+    if platform.system() == "Darwin":
+        rcParams["font.family"] = ["PingFang SC", "Heiti TC"]
+    elif platform.system() == "Windows":
+        rcParams["font.family"] = ["SimHei", "Microsoft YaHei"]
+    else:
+        rcParams["font.family"] = ["Noto Sans CJK SC", "DejaVu Sans"]
+    rcParams["axes.unicode_minus"] = False
+
     sorted_cols = weekly_scores.iloc[-1].sort_values(ascending=False).index.tolist()
     data = weekly_scores[sorted_cols].T
     col_labels = [d.strftime("%m/%d") for d in data.columns]
@@ -237,7 +261,7 @@ def plot_heatmap(weekly_scores: pd.DataFrame, sig_df: pd.DataFrame, fname: str):
                  fontsize=13, fontweight="bold", pad=12)
 
     legend_items = [
-        mpatches.Patch(color="none", label="🔥 过热（长期分位>85）"),
+        mpatches.Patch(color="none", label="🔥 过热（长期>85）"),
         mpatches.Patch(color="none", label="↑  连续上升中"),
         mpatches.Patch(color="none", label="❄  高位降温"),
         mpatches.Patch(color="none", label="★  短强长弱（趋势启动候选）"),
@@ -261,6 +285,23 @@ def plot_quadrant(sig_df: pd.DataFrame, fname: str):
       左上 — 长弱短强（趋势启动，进攻信号）
       左下 — 长弱短弱（持续弱势，回避）
     """
+    # Import matplotlib only when plotting (soft dependency)
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        from matplotlib import rcParams
+    except ImportError:
+        raise ImportError("plot_quadrant requires matplotlib. Install it with: pip install matplotlib")
+
+    # Configure font for Chinese characters
+    if platform.system() == "Darwin":
+        rcParams["font.family"] = ["PingFang SC", "Heiti TC"]
+    elif platform.system() == "Windows":
+        rcParams["font.family"] = ["SimHei", "Microsoft YaHei"]
+    else:
+        rcParams["font.family"] = ["Noto Sans CJK SC", "DejaVu Sans"]
+    rcParams["axes.unicode_minus"] = False
+
     df = sig_df.dropna(subset=["短期分位", "长期分位"])
     x = df["长期分位"]
     y = df["短期分位"]
@@ -420,8 +461,9 @@ def gen_html_report(sig_df: pd.DataFrame,
   {tag("↑ 连续上升中", "#2980b9", rising)}
   {tag("★ 趋势启动候选", "#27ae60", startup)}
   <p style="font-size:12px;color:#95a5a6;margin-top:10px">
-    ★趋势启动候选：短期分位≥60 且 长期分位≤30（短期突然发力，历史上少见，可能是趋势初期）<br>
-    ⚠高位退潮：长期分位≥70 且 短期分位≤20（长线高位但近期动能已失）
+    🔥过热预警：长期分位≥85 且 短期分位≥60（历史高位且当前依然强势，警惕追高风险）<br>
+    ⚠高位退潮：长期分位≥70 且 短期分位≤35（长线高位但近期动能不足，注意减仓止盈）<br>
+    ★趋势启动候选：短期分位≥60 且 长期分位≤40（短期突然发力，历史上少见，可能是趋势初期）
   </p>
 </div>
 
@@ -453,8 +495,8 @@ def gen_html_report(sig_df: pd.DataFrame,
     <h2>说明 & 操作框架</h2>
     <table>
       <tr><th>信号</th><th>含义</th><th>参考操作</th></tr>
-      <tr><td>🔥过热</td><td>长期分位&gt;85，历史极高位</td><td>减仓/止盈，不追高</td></tr>
-      <tr><td>⚠退潮</td><td>年线强但月线已失动能</td><td>关注止损位，逐步撤退</td></tr>
+      <tr><td>🔥过热</td><td>长期≥85且短期≥60，高位强势</td><td>警惕追高，考虑减仓</td></tr>
+      <tr><td>⚠退潮</td><td>长期≥70但短期≤35，高位回调</td><td>关注止损位，逐步撤退</td></tr>
       <tr><td>❄降温</td><td>上周过热，本周跌破阈值</td><td>及时止盈，等待再入</td></tr>
       <tr><td>↑上升</td><td>近3周持续上升</td><td>趋势跟随，关注破位</td></tr>
       <tr><td>★启动</td><td>短期突然发力，历史低位</td><td>小仓试探，确认趋势后加仓</td></tr>
