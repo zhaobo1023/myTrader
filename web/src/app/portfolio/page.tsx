@@ -3,34 +3,34 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import AppShell from '@/components/layout/AppShell';
-import StrategyContent from './StrategyContent';
-import ThemePoolContent from '@/app/theme-pool/ThemePoolContent';
+import PositionsContent from '@/app/positions/PositionsContent';
+import SimPoolContent from '@/app/sim-pool/SimPoolContent';
 
-type Tab = 'preset' | 'theme';
+type Tab = 'positions' | 'sim';
 
 const TABS: { key: Tab; label: string }[] = [
-  { key: 'preset', label: '预设策略' },
-  { key: 'theme', label: '主题选股' },
+  { key: 'positions', label: '实盘持仓' },
+  { key: 'sim', label: '模拟池' },
 ];
 
-export default function StrategyPage() {
+export default function PortfolioPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState<Tab>(
-    tabParam === 'theme' ? 'theme' : 'preset'
+    tabParam === 'sim' ? 'sim' : 'positions'
   );
 
   useEffect(() => {
     const t = searchParams.get('tab');
-    if (t === 'theme') setActiveTab('theme');
-    else setActiveTab('preset');
+    if (t === 'sim') setActiveTab('sim');
+    else setActiveTab('positions');
   }, [searchParams]);
 
   function switchTab(tab: Tab) {
     setActiveTab(tab);
-    const url = tab === 'preset' ? '/strategy' : '/strategy?tab=theme';
+    const url = tab === 'positions' ? '/portfolio' : '/portfolio?tab=sim';
     router.replace(url, { scroll: false });
   }
 
@@ -56,8 +56,8 @@ export default function StrategyPage() {
         ))}
       </div>
 
-      {activeTab === 'preset' && <StrategyContent />}
-      {activeTab === 'theme' && <ThemePoolContent />}
+      {activeTab === 'positions' && <PositionsContent />}
+      {activeTab === 'sim' && <SimPoolContent />}
     </AppShell>
   );
 }

@@ -75,16 +75,6 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
-    href: '/theme-pool',
-    label: '主题选股',
-    labelEn: 'Themes',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-      </svg>
-    ),
-  },
-  {
     href: '/candidate-pool',
     label: '候选池',
     labelEn: 'Watchlist',
@@ -95,32 +85,12 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
-    href: '/sim-pool',
-    label: '模拟池',
-    labelEn: 'SimPool',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 17h7m-3.5-3.5v7"/>
-      </svg>
-    ),
-  },
-  {
-    href: '/positions',
+    href: '/portfolio',
     label: '持仓',
-    labelEn: 'Positions',
+    labelEn: 'Portfolio',
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
         <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-      </svg>
-    ),
-  },
-  {
-    href: '/inbox',
-    label: '信箱',
-    labelEn: 'Inbox',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>
       </svg>
     ),
   },
@@ -132,16 +102,6 @@ const NAV_ITEMS: NavItem[] = [
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
         <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
         <circle cx="12" cy="12" r="1"/>
-      </svg>
-    ),
-  },
-  {
-    href: '/settings',
-    label: '设置',
-    labelEn: 'Settings',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
       </svg>
     ),
   },
@@ -159,6 +119,44 @@ function Chevron({ open }: { open: boolean }) {
     >
       <polyline points="9 18 15 12 9 6"/>
     </svg>
+  );
+}
+
+// ----------------------------------------------------------------
+// Topbar icon links (Inbox + Settings)
+// ----------------------------------------------------------------
+function TopBarIcons() {
+  const pathname = usePathname();
+  const iconBtnStyle = (href: string): React.CSSProperties => ({
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: '32px', height: '32px', borderRadius: '6px',
+    color: pathname === href ? 'var(--accent)' : 'var(--text-tertiary)',
+    background: pathname === href ? 'var(--bg-nav-active)' : 'transparent',
+    transition: 'all 0.12s',
+    flexShrink: 0,
+  });
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+      <Link
+        href="/inbox"
+        style={{ ...iconBtnStyle('/inbox'), textDecoration: 'none' }}
+        title="信箱"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>
+        </svg>
+      </Link>
+      <Link
+        href="/settings"
+        style={{ ...iconBtnStyle('/settings'), textDecoration: 'none' }}
+        title="设置"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </Link>
+    </div>
   );
 }
 
@@ -216,7 +214,11 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   function isParentActive(item: NavItem): boolean {
     if (pathname === item.href) return true;
     if (item.children?.some((c) => pathname === c.href || pathname.startsWith(c.href + '/'))) return true;
-    return pathname.startsWith(item.href + '/');
+    if (pathname.startsWith(item.href + '/')) return true;
+    // Merged routes: /positions, /sim-pool -> /portfolio; /theme-pool -> /strategy
+    if (item.href === '/portfolio' && (pathname.startsWith('/positions') || pathname.startsWith('/sim-pool'))) return true;
+    if (item.href === '/strategy' && pathname.startsWith('/theme-pool')) return true;
+    return false;
   }
 
   return (
@@ -487,6 +489,7 @@ function MobileNav({ topBar }: { topBar?: React.ReactNode }) {
         ) : (
           <span className="mobile-topbar-logo">myTrader</span>
         )}
+        <TopBarIcons />
       </div>
 
       {open && (
@@ -553,11 +556,10 @@ export default function AppShell({
         <Sidebar />
         <div className="app-main">
           <MobileNav topBar={topBar} />
-          {topBar && (
-            <header className="app-topbar">
-              {topBar}
-            </header>
-          )}
+          <header className="app-topbar">
+            <div style={{ flex: 1, minWidth: 0 }}>{topBar}</div>
+            <TopBarIcons />
+          </header>
           <main className="app-content">
             {children}
           </main>
