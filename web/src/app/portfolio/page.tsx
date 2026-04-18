@@ -5,12 +5,14 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import AppShell from '@/components/layout/AppShell';
 import PositionsContent from '@/app/positions/PositionsContent';
 import SimPoolContent from '@/app/sim-pool/SimPoolContent';
+import CandidatePoolContent from '@/app/candidate-pool/CandidatePoolContent';
 
-type Tab = 'positions' | 'sim';
+type Tab = 'positions' | 'sim' | 'candidate';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'positions', label: '实盘持仓' },
   { key: 'sim', label: '模拟池' },
+  { key: 'candidate', label: '观察池' },
 ];
 
 function PortfolioInner() {
@@ -25,12 +27,13 @@ function PortfolioInner() {
   useEffect(() => {
     const t = searchParams.get('tab');
     if (t === 'sim') setActiveTab('sim');
+    else if (t === 'candidate') setActiveTab('candidate');
     else setActiveTab('positions');
   }, [searchParams]);
 
   function switchTab(tab: Tab) {
     setActiveTab(tab);
-    const url = tab === 'positions' ? '/portfolio' : '/portfolio?tab=sim';
+    const url = tab === 'positions' ? '/portfolio' : `/portfolio?tab=${tab}`;
     router.replace(url, { scroll: false });
   }
 
@@ -58,6 +61,7 @@ function PortfolioInner() {
 
       {activeTab === 'positions' && <PositionsContent />}
       {activeTab === 'sim' && <SimPoolContent />}
+      {activeTab === 'candidate' && <CandidatePoolContent />}
     </>
   );
 }

@@ -5,12 +5,14 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import AppShell from '@/components/layout/AppShell';
 import StrategyContent from './StrategyContent';
 import ThemePoolContent from '@/app/theme-pool/ThemePoolContent';
+import IndustryStockScreener from './components/IndustryStockScreener';
 
-type Tab = 'preset' | 'theme';
+type Tab = 'preset' | 'theme' | 'industry';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'preset', label: '预设策略' },
   { key: 'theme', label: '主题选股' },
+  { key: 'industry', label: '行业选股' },
 ];
 
 function StrategyInner() {
@@ -25,12 +27,13 @@ function StrategyInner() {
   useEffect(() => {
     const t = searchParams.get('tab');
     if (t === 'theme') setActiveTab('theme');
+    else if (t === 'industry') setActiveTab('industry');
     else setActiveTab('preset');
   }, [searchParams]);
 
   function switchTab(tab: Tab) {
     setActiveTab(tab);
-    const url = tab === 'preset' ? '/strategy' : '/strategy?tab=theme';
+    const url = tab === 'preset' ? '/strategy' : `/strategy?tab=${tab}`;
     router.replace(url, { scroll: false });
   }
 
@@ -58,6 +61,7 @@ function StrategyInner() {
 
       {activeTab === 'preset' && <StrategyContent />}
       {activeTab === 'theme' && <ThemePoolContent />}
+      {activeTab === 'industry' && <IndustryStockScreener />}
     </>
   );
 }

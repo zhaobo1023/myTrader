@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import apiClient from '@/lib/api-client';
 import { useQuery } from '@tanstack/react-query';
 
@@ -699,6 +699,465 @@ function SwRotationCard() {
 }
 
 // ---------------------------------------------------------------------------
+// ETF Log Bias card
+// ---------------------------------------------------------------------------
+
+interface EtfRow {
+  ts_code: string;
+  name: string;
+  trade_date: string;
+  close: number | null;
+  log_bias: number | null;
+  signal_state: string;
+  prev_state: string;
+}
+
+interface LogBiasRunStatus {
+  id?: number;
+  run_date?: string;
+  status?: string;
+  etf_count?: number;
+  triggered_at?: string;
+  finished_at?: string | null;
+  error_msg?: string | null;
+}
+
+const SIGNAL_META: Record<string, { label: string; color: string; bg: string; tip: string }> = {
+  overheat: { label: '过热',   color: '#e5534b', bg: 'rgba(229,83,75,0.12)',   tip: 'log_bias > 15，严重高估，注意止盈' },
+  breakout: { label: '突破',   color: '#27a644', bg: 'rgba(39,166,68,0.12)',   tip: 'log_bias >= 5，上升突破，可跟进' },
+  pullback: { label: '回调',   color: '#2980b9', bg: 'rgba(41,128,185,0.12)',  tip: '突破后 log_bias 回落至 0-5，整理阶段' },
+  stall:    { label: '急跌',   color: '#c69026', bg: 'rgba(198,144,38,0.12)',  tip: 'log_bias < -5，急速下跌，冷却期中' },
+  normal:   { label: '正常',   color: 'var(--text-muted)', bg: 'var(--bg-tag)', tip: '无明显信号' },
+};
+
+function SignalPill({ state }: { state: string }) {
+  const meta = SIGNAL_META[state] ?? SIGNAL_META.normal;
+  return (
+    <span title={meta.tip} style={{
+      display: 'inline-block',
+      padding: '2px 8px',
+      borderRadius: '4px',
+      fontSize: '11px',
+      fontWeight: 600,
+      color: meta.color,
+      background: meta.bg,
+    }}>
+      {meta.label}
+    </span>
+  );
+}
+
+function biasFmt(v: number | null): string {
+  if (v == null) return '--';
+  return (v >= 0 ? '+' : '') + v.toFixed(2);
+}
+
+function biasColor(v: number | null): string {
+  if (v == null) return 'var(--text-muted)';
+  if (v >= 15) return '#e5534b';
+  if (v >= 5)  return '#27a644';
+  if (v <= -5) return '#c69026';
+  return 'var(--text-secondary)';
+}
+
+interface HistoryRow {
+  trade_date: string;
+  close: number | null;
+  log_bias: number | null;
+  signal_state: string;
+}
+
+// Tiny SVG sparkline for log_bias history
+function LogBiasSparkline({ data }: { data: HistoryRow[] }) {
+  if (data.length < 2) return <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>数据不足</span>;
+
+  const W = 480;
+  const H = 100;
+  const PAD_TOP = 4;
+  const PAD_BOTTOM = 18; // room for date labels
+  const PAD_X = 4;
+
+  const values = data.map(d => d.log_bias ?? 0);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+
+  const toX = (i: number) => PAD_X + (i / (data.length - 1)) * (W - PAD_X * 2);
+  const toY = (v: number) => PAD_TOP + (1 - (v - min) / range) * (H - PAD_TOP - PAD_BOTTOM);
+
+  const zeroY = toY(0);
+  const chartBottom = H - PAD_BOTTOM;
+
+  // Build polyline points
+  const points = data.map((d, i) => `${toX(i)},${toY(d.log_bias ?? 0)}`).join(' ');
+
+  // All data points with hover tooltip (date + value)
+  const allDots = data.map((d, i) => ({
+    x: toX(i), y: toY(d.log_bias ?? 0),
+    date: d.trade_date, value: d.log_bias ?? 0,
+    signal: d.signal_state,
+  }));
+
+  // Signal dots (visible markers)
+  const signalDots = allDots.filter(d => d.signal !== 'normal').map(d => ({
+    ...d, color: (SIGNAL_META[d.signal] ?? SIGNAL_META.normal).color,
+    label: (SIGNAL_META[d.signal] ?? SIGNAL_META.normal).label,
+  }));
+
+  // Reference lines at +/-5, +/-15
+  const refLines = [5, 15, -5, -15].map(v => ({ v, y: toY(v), dashed: Math.abs(v) === 15 }));
+
+  // Date labels on X axis: start, middle, end
+  const fmtDate = (d: string) => d.slice(5); // MM-DD
+  const dateTicks = [
+    { i: 0, label: fmtDate(data[0].trade_date) },
+    { i: Math.floor(data.length / 2), label: fmtDate(data[Math.floor(data.length / 2)].trade_date) },
+    { i: data.length - 1, label: fmtDate(data[data.length - 1].trade_date) },
+  ];
+
+  return (
+    <div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block', overflow: 'visible' }}>
+        {/* reference lines */}
+        {refLines.map(({ v, y, dashed }) => (
+          <g key={v}>
+            <line x1={PAD_X} y1={y} x2={W - PAD_X} y2={y}
+              stroke={v > 0 ? '#27a644' : '#e5534b'}
+              strokeWidth={0.8}
+              strokeDasharray={dashed ? '4 3' : '2 2'}
+              opacity={0.5} />
+            <text x={W - PAD_X + 2} y={y + 3} fontSize={8} fill={v > 0 ? '#27a644' : '#e5534b'} opacity={0.7}>{v}</text>
+          </g>
+        ))}
+        {/* zero line */}
+        {zeroY >= PAD_TOP && zeroY <= chartBottom && (
+          <line x1={PAD_X} y1={zeroY} x2={W - PAD_X} y2={zeroY}
+            stroke="var(--border-subtle)" strokeWidth={1} />
+        )}
+        {/* log_bias line */}
+        <polyline points={points} fill="none" stroke="var(--accent)" strokeWidth={1.5} />
+        {/* invisible hover targets for all points */}
+        {allDots.map((d, i) => (
+          <circle key={`h-${i}`} cx={d.x} cy={d.y} r={6} fill="transparent" stroke="none">
+            <title>{d.date}  {d.value.toFixed(2)}</title>
+          </circle>
+        ))}
+        {/* visible signal dots */}
+        {signalDots.map((d, i) => (
+          <circle key={i} cx={d.x} cy={d.y} r={3} fill={d.color} stroke="#fff" strokeWidth={1}>
+            <title>{d.date}  {d.value.toFixed(2)}  {d.label}</title>
+          </circle>
+        ))}
+        {/* X axis date labels */}
+        {dateTicks.map(({ i, label }) => (
+          <text key={i} x={toX(i)} y={H - 2} fontSize={9} fill="var(--text-muted)"
+            textAnchor={i === 0 ? 'start' : i === data.length - 1 ? 'end' : 'middle'}>
+            {label}
+          </text>
+        ))}
+      </svg>
+      <div style={{ display: 'flex', gap: '16px', marginTop: '6px', flexWrap: 'wrap' }}>
+        {refLines.map(({ v }) => (
+          <span key={v} style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+            {v > 0 ? `+${v}` : v} = {v === 5 ? '突破线' : v === 15 ? '过热线' : v === -5 ? '急跌线' : '深度急跌'}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LogBiasCard() {
+  const [etfs, setEtfs] = useState<EtfRow[]>([]);
+  const [runStatus, setRunStatus] = useState<LogBiasRunStatus>({});
+  const [loading, setLoading] = useState(false);
+  const [triggering, setTriggering] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  // collapsed by default
+  const [expanded, setExpanded] = useState(false);
+  const [expandedEtf, setExpandedEtf] = useState<string | null>(null);
+  const [historyData, setHistoryData] = useState<HistoryRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  async function loadData() {
+    setLoading(true);
+    try {
+      const [dataRes, statusRes] = await Promise.all([
+        fetch(`${API_BASE}/api/industry/log-bias/latest`),
+        fetch(`${API_BASE}/api/industry/log-bias/run-status`),
+      ]);
+      const dataJson = await dataRes.json();
+      const statusJson = await statusRes.json();
+      setEtfs(dataJson.data || []);
+      setRunStatus(statusJson || {});
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+      setLoaded(true);
+    }
+  }
+
+  useEffect(() => { loadData(); }, []);
+
+  useEffect(() => {
+    if (!runStatus.status || !['pending', 'running'].includes(runStatus.status)) return;
+    const timer = setInterval(loadData, 8000);
+    return () => clearInterval(timer);
+  }, [runStatus.status]);
+
+  async function toggleEtfHistory(tsCode: string) {
+    if (expandedEtf === tsCode) {
+      setExpandedEtf(null);
+      setHistoryData([]);
+      return;
+    }
+    setExpandedEtf(tsCode);
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/industry/log-bias/history/${tsCode}?days=120`);
+      const j = await res.json();
+      setHistoryData(j.data || []);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function handleTrigger(force = false) {
+    if (force && !confirm('确认强制重新计算？')) return;
+    setTriggering(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/industry/log-bias/trigger?force=${force}`, { method: 'POST' });
+      if (!res.ok) {
+        const j = await res.json();
+        setErrorMsg(j.detail || '触发失败');
+      } else {
+        await loadData();
+      }
+    } finally {
+      setTriggering(false);
+    }
+  }
+
+  const status = runStatus.status;
+  const today = new Date().toISOString().split('T')[0];
+  const isToday = runStatus.run_date === today;
+
+  const isDone = status === 'done' && isToday;
+  const isRunning = (status === 'running' || status === 'pending') && isToday;
+  const isFailed = status === 'failed' && isToday;
+
+  let btnLabel = '触发计算';
+  let btnDisabled = triggering;
+  let btnColor = 'var(--accent)';
+  if (isDone) {
+    btnLabel = '今日已完成'; btnColor = '#27a644'; btnDisabled = true;
+  } else if (isRunning) {
+    btnLabel = '计算中...'; btnColor = 'var(--text-muted)'; btnDisabled = true;
+  } else if (isFailed) {
+    btnLabel = '重新触发'; btnColor = '#c69026';
+  }
+
+  const signalOrder = ['overheat', 'breakout', 'pullback', 'stall', 'normal'];
+  const sorted = [...etfs].sort((a, b) => {
+    const oa = signalOrder.indexOf(a.signal_state);
+    const ob = signalOrder.indexOf(b.signal_state);
+    if (oa !== ob) return oa - ob;
+    return Math.abs(b.log_bias ?? 0) - Math.abs(a.log_bias ?? 0);
+  });
+
+  const tradeDate = etfs[0]?.trade_date ?? '';
+
+  // Summary badges for header
+  const signalCounts = sorted.reduce((acc, e) => {
+    if (e.signal_state !== 'normal') acc[e.signal_state] = (acc[e.signal_state] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  return (
+    <div style={{
+      background: 'var(--bg-card)',
+      border: '1px solid var(--border-subtle)',
+      borderRadius: '10px',
+      overflow: 'hidden',
+    }}>
+      {/* Header - always visible, clickable to expand */}
+      <div
+        onClick={() => setExpanded(e => !e)}
+        style={{
+          padding: '16px 20px',
+          borderBottom: expanded && etfs.length > 0 ? '1px solid var(--border-subtle)' : 'none',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px',
+          cursor: 'pointer', userSelect: 'none',
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '15px', fontWeight: 590, color: 'var(--text-primary)' }}>
+              ETF 对数乖离率
+            </span>
+            {tradeDate && (
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{tradeDate}</span>
+            )}
+            {/* signal summary badges */}
+            {Object.entries(signalCounts).map(([sig, cnt]) => {
+              const m = SIGNAL_META[sig];
+              return m ? (
+                <span key={sig} style={{
+                  fontSize: '11px', padding: '1px 7px', borderRadius: '10px',
+                  color: m.color, background: m.bg, fontWeight: 600,
+                }}>{m.label} {cnt}</span>
+              ) : null;
+            })}
+            {loaded && etfs.length > 0 && Object.keys(signalCounts).length === 0 && (
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>全部正常</span>
+            )}
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            12 只行业 ETF 乖离率监控，每日收盘后计算
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexShrink: 0, alignItems: 'center' }}>
+          <button
+            onClick={e => { e.stopPropagation(); handleTrigger(); }}
+            disabled={btnDisabled}
+            style={{
+              padding: '5px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: 510,
+              background: btnDisabled ? 'transparent' : btnColor,
+              border: `1px solid ${btnColor}`,
+              color: btnDisabled ? btnColor : '#fff',
+              cursor: btnDisabled ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {triggering ? '触发中...' : btnLabel}
+          </button>
+          {isDone && (
+            <button
+              onClick={e => { e.stopPropagation(); handleTrigger(true); }}
+              disabled={triggering}
+              style={{
+                padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 510,
+                background: 'transparent', border: '1px solid var(--text-muted)',
+                color: 'var(--text-muted)', cursor: triggering ? 'wait' : 'pointer',
+              }}
+            >
+              强制重算
+            </button>
+          )}
+          <span style={{ fontSize: '16px', color: 'var(--text-muted)', lineHeight: 1 }}>
+            {expanded ? '▲' : '▼'}
+          </span>
+        </div>
+      </div>
+
+      {errorMsg && expanded && (
+        <div style={{
+          margin: '0 20px 12px', padding: '8px 12px', borderRadius: '6px',
+          background: 'rgba(229,83,75,0.06)', border: '1px solid rgba(229,83,75,0.2)',
+          fontSize: '12px', color: '#e5534b',
+        }}>
+          {errorMsg}
+        </div>
+      )}
+
+      {/* Expanded content */}
+      {expanded && (
+        <>
+          {sorted.length > 0 ? (
+            <div className="table-scroll">
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '400px' }}>
+                <thead>
+                  <tr style={{ background: 'var(--bg-panel)' }}>
+                    {['ETF', '代码', '收盘', '乖离率', '信号', ''].map((h, i) => (
+                      <th key={i} style={{
+                        padding: '8px 14px', textAlign: 'left', fontWeight: 510,
+                        color: 'var(--text-secondary)',
+                        borderBottom: '1px solid var(--border-subtle)',
+                        whiteSpace: 'nowrap',
+                      }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map(row => (
+                    <React.Fragment key={row.ts_code}>
+                      <tr
+                        onClick={() => toggleEtfHistory(row.ts_code)}
+                        style={{
+                          borderBottom: expandedEtf === row.ts_code ? 'none' : '1px solid var(--border-subtle)',
+                          cursor: 'pointer',
+                          background: expandedEtf === row.ts_code ? 'var(--bg-card-hover)' : 'transparent',
+                        }}
+                        onMouseEnter={e => { if (expandedEtf !== row.ts_code) (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-card-hover)'; }}
+                        onMouseLeave={e => { if (expandedEtf !== row.ts_code) (e.currentTarget as HTMLTableRowElement).style.background = 'transparent'; }}
+                      >
+                        <td style={{ padding: '8px 14px', color: 'var(--text-primary)', fontWeight: 510 }}>
+                          {row.name}
+                        </td>
+                        <td style={{ padding: '8px 14px', color: 'var(--text-muted)', fontFamily: 'var(--font-geist-mono)', fontSize: '11px' }}>
+                          {row.ts_code}
+                        </td>
+                        <td style={{ padding: '8px 14px', color: 'var(--text-secondary)' }}>
+                          {row.close != null ? row.close.toFixed(3) : '--'}
+                        </td>
+                        <td style={{ padding: '8px 14px', fontWeight: 600, color: biasColor(row.log_bias), fontFamily: 'var(--font-geist-mono)' }}>
+                          {biasFmt(row.log_bias)}
+                        </td>
+                        <td style={{ padding: '8px 14px' }}>
+                          <SignalPill state={row.signal_state} />
+                        </td>
+                        <td style={{ padding: '8px 14px', color: 'var(--accent)', fontSize: '11px' }}>
+                          {expandedEtf === row.ts_code ? '收起' : '走势'}
+                        </td>
+                      </tr>
+                      {expandedEtf === row.ts_code && (
+                        <tr>
+                          <td colSpan={6} style={{ padding: '16px 20px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-subtle)' }}>
+                            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 510 }}>
+                              {row.name} · 近120日 log_bias 走势
+                            </div>
+                            {historyLoading ? (
+                              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>加载中...</div>
+                            ) : (
+                              <LogBiasSparkline data={historyData} />
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+              {/* Legend */}
+              <div style={{
+                padding: '10px 14px', background: 'var(--bg-panel)',
+                borderTop: '1px solid var(--border-subtle)',
+                display: 'flex', flexWrap: 'wrap', gap: '14px',
+              }}>
+                {Object.entries(SIGNAL_META).filter(([k]) => k !== 'normal').map(([, m]) => (
+                  <span key={m.label} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                    <span style={{ display: 'inline-block', padding: '1px 6px', borderRadius: '4px', background: m.bg, color: m.color, fontWeight: 600, fontSize: '10px' }}>{m.label}</span>
+                    {m.tip}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : (
+            loaded && (
+              <div style={{ padding: '24px', color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center' }}>
+                暂无数据，点击「触发计算」生成今日 ETF 乖离率
+              </div>
+            )
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Composed panel
 // ---------------------------------------------------------------------------
 
@@ -706,6 +1165,7 @@ export default function IndustryTemperaturePanel() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       <IndustryValuationHeatmap />
+      <LogBiasCard />
       <SwRotationCard />
     </div>
   );

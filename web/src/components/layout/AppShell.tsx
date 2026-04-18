@@ -35,16 +35,6 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
-    href: '/industry',
-    label: '行业',
-    labelEn: 'Industry',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="2" y="7" width="6" height="14"/><rect x="9" y="3" width="6" height="18"/><rect x="16" y="10" width="6" height="11"/>
-      </svg>
-    ),
-  },
-  {
     href: '/stock',
     label: '个股',
     labelEn: 'Stock',
@@ -75,19 +65,9 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
-    href: '/candidate-pool',
-    label: '候选池',
-    labelEn: 'Watchlist',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-      </svg>
-    ),
-  },
-  {
     href: '/portfolio',
-    label: '持仓',
-    labelEn: 'Portfolio',
+    label: '观察池',
+    labelEn: 'Watchlist',
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
         <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
@@ -215,8 +195,8 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
     if (pathname === item.href) return true;
     if (item.children?.some((c) => pathname === c.href || pathname.startsWith(c.href + '/'))) return true;
     if (pathname.startsWith(item.href + '/')) return true;
-    // Merged routes: /positions, /sim-pool -> /portfolio; /theme-pool -> /strategy
-    if (item.href === '/portfolio' && (pathname.startsWith('/positions') || pathname.startsWith('/sim-pool'))) return true;
+    // Merged routes: /positions, /sim-pool, /candidate-pool -> /portfolio; /theme-pool -> /strategy
+    if (item.href === '/portfolio' && (pathname.startsWith('/positions') || pathname.startsWith('/sim-pool') || pathname.startsWith('/candidate-pool'))) return true;
     if (item.href === '/strategy' && pathname.startsWith('/theme-pool')) return true;
     return false;
   }

@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import AppShell from '@/components/layout/AppShell';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
@@ -294,7 +293,7 @@ function StockRow({
                   onClick={() => onRemove(stock.stock_code)}
                   style={{ fontSize: '11px', color: '#e5534b', background: 'none', border: '1px solid rgba(229,83,75,0.3)', borderRadius: '6px', padding: '3px 10px', cursor: 'pointer' }}
                 >
-                  移出候选池
+                  移出观察池
                 </button>
               </div>
 
@@ -365,10 +364,10 @@ function StockRow({
 }
 
 // ---------------------------------------------------------------------------
-// Main Page
+// Main Content
 // ---------------------------------------------------------------------------
 
-export default function CandidatePoolPage() {
+export default function CandidatePoolContent() {
   const [stocks, setStocks] = useState<CandidateStock[]>([]);
   const [loading, setLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string>('');
@@ -406,7 +405,7 @@ export default function CandidatePoolPage() {
   }
 
   async function handleRemove(code: string) {
-    if (!confirm('确认将该股票移出候选池？')) return;
+    if (!confirm('确认将该股票移出观察池？')) return;
     await fetch(`${API_BASE}/api/candidate-pool/stocks/${code}`, { method: 'DELETE' });
     setExpandedCode(null);
     loadStocks();
@@ -460,14 +459,14 @@ export default function CandidatePoolPage() {
   };
 
   return (
-    <AppShell>
+    <>
       {/* Header */}
       <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ fontSize: '20px', fontWeight: 590, color: 'var(--text-primary)', letterSpacing: '-0.3px', margin: 0 }}>
-            候选池
-          </h1>
-          <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '6px 0 0' }}>
+          <h2 style={{ fontSize: '16px', fontWeight: 580, color: 'var(--text-primary)', margin: '0 0 4px' }}>
+            观察池
+          </h2>
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
             从行业或策略加入的候选股票，每日盘后自动监控技术面
           </p>
         </div>
@@ -558,7 +557,7 @@ export default function CandidatePoolPage() {
           background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px',
           color: 'var(--text-muted)', fontSize: '13px',
         }}>
-          候选池为空，从「行业」或「策略」页面添加股票
+          观察池为空，从「行业」或「策略」页面添加股票
         </div>
       ) : (
         <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px', overflow: 'hidden' }}>
@@ -590,6 +589,6 @@ export default function CandidatePoolPage() {
           </div>
         </div>
       )}
-    </AppShell>
+    </>
   );
 }
