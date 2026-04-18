@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import AppShell from '@/components/layout/AppShell';
 import PositionsContent from '@/app/positions/PositionsContent';
@@ -13,7 +13,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'sim', label: '模拟池' },
 ];
 
-export default function PortfolioPage() {
+function PortfolioInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -47,7 +47,7 @@ export default function PortfolioPage() {
   });
 
   return (
-    <AppShell>
+    <>
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: '20px', borderBottom: '1px solid var(--border-subtle)' }}>
         {TABS.map((t) => (
           <button key={t.key} style={tabBtnStyle(activeTab === t.key)} onClick={() => switchTab(t.key)}>
@@ -58,6 +58,16 @@ export default function PortfolioPage() {
 
       {activeTab === 'positions' && <PositionsContent />}
       {activeTab === 'sim' && <SimPoolContent />}
+    </>
+  );
+}
+
+export default function PortfolioPage() {
+  return (
+    <AppShell>
+      <Suspense fallback={null}>
+        <PortfolioInner />
+      </Suspense>
     </AppShell>
   );
 }

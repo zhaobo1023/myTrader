@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import AppShell from '@/components/layout/AppShell';
 import StrategyContent from './StrategyContent';
@@ -13,7 +13,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'theme', label: '主题选股' },
 ];
 
-export default function StrategyPage() {
+function StrategyInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -47,7 +47,7 @@ export default function StrategyPage() {
   });
 
   return (
-    <AppShell>
+    <>
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: '20px', borderBottom: '1px solid var(--border-subtle)' }}>
         {TABS.map((t) => (
           <button key={t.key} style={tabBtnStyle(activeTab === t.key)} onClick={() => switchTab(t.key)}>
@@ -58,6 +58,16 @@ export default function StrategyPage() {
 
       {activeTab === 'preset' && <StrategyContent />}
       {activeTab === 'theme' && <ThemePoolContent />}
+    </>
+  );
+}
+
+export default function StrategyPage() {
+  return (
+    <AppShell>
+      <Suspense fallback={null}>
+        <StrategyInner />
+      </Suspense>
     </AppShell>
   );
 }
