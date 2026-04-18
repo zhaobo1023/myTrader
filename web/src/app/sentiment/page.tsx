@@ -12,13 +12,15 @@ import NewsSentimentPanel from './components/NewsSentimentPanel';
 import EventSignalPanel from './components/EventSignalPanel';
 import PolymarketPanel from './components/PolymarketPanel';
 import GlobalAssetsPanel from './components/GlobalAssetsPanel';
+import IndustryTemperaturePanel from './components/IndustryTemperaturePanel';
 
-type MainTab = 'dashboard' | 'global' | 'sentiment';
+type MainTab = 'dashboard' | 'global' | 'sentiment' | 'industry';
 type SentimentTab = 'fear' | 'news' | 'events' | 'polymarket';
 
 const MAIN_TABS: { key: MainTab; label: string }[] = [
   { key: 'dashboard',  label: '大盘总览' },
   { key: 'global',     label: '全球资产' },
+  { key: 'industry',   label: '行业温度' },
   { key: 'sentiment',  label: '舆情详情' },
 ];
 
@@ -431,6 +433,7 @@ export default function SentimentPage() {
       {/* Content */}
       {mainTab === 'dashboard' && <DashboardView />}
       {mainTab === 'global' && <GlobalAssetsPanel />}
+      {mainTab === 'industry' && <IndustryTemperaturePanel />}
 
       {mainTab === 'sentiment' && (
         <>
