@@ -4,6 +4,7 @@ import { useState, Fragment } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import apiClient from '@/lib/api-client';
 import AppShell from '@/components/layout/AppShell';
+import { ProtectedRoute } from '@/components/layout/ProtectedRoute';
 
 // ============================================================
 // Types
@@ -415,7 +416,8 @@ export default function DataHealthPage() {
   const [tab, setTab] = useState<'completeness' | 'task-runs'>('completeness');
 
   return (
-    <AppShell>
+    <ProtectedRoute routePath="/data-health">
+      <AppShell>
       <div>
         <div className="flex items-center justify-between mb-4">
           <h1 style={{ fontSize: '20px', fontWeight: 590, color: 'var(--text-primary)', letterSpacing: '-0.3px' }}>
@@ -450,6 +452,7 @@ export default function DataHealthPage() {
         {tab === 'completeness' && <DataCompletenessTab />}
         {tab === 'task-runs' && <TaskRunStatusTab />}
       </div>
-    </AppShell>
+      </AppShell>
+    </ProtectedRoute>
   );
 }

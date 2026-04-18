@@ -3,11 +3,12 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuthStore } from '@/lib/store';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useTrack } from '@/hooks/useTrack';
+import { NAV_PERMISSIONS, hasPermission } from '@/lib/permissions';
 
 // ----------------------------------------------------------------
-// Nav structure
+// Nav structure with permission requirements
 // ----------------------------------------------------------------
 
 interface NavChild {
@@ -212,7 +213,12 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
 
       {/* Nav */}
       <nav style={{ flex: 1, padding: '8px', overflowY: 'auto' }}>
-        {NAV_ITEMS.map((item) => {
+        {NAV_ITEMS.filter((item) => {
+          // Filter navigation items based on user permissions
+          const permission = NAV_PERMISSIONS[item.href];
+          if (!permission) return true;
+          return hasPermission(user?.tier ?? null, user?.role ?? null, permission);
+        }).map((item) => {
           const parentActive = isParentActive(item);
           const hasChildren = item.children && item.children.length > 0;
           const isOpen = expanded[item.href] ?? false;
