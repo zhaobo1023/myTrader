@@ -476,7 +476,11 @@ function SwRotationCard() {
       } else {
         await loadRuns();
         const poll = setInterval(async () => {
+<<<<<<< HEAD
           const r2 = await fetch(`\${API_BASE}/api/industry/sw-rotation/runs?limit=5`);
+=======
+          const r2 = await fetch(`${API_BASE}/api/industry/sw-rotation/runs?limit=5`);
+>>>>>>> feat: 注册页面密码验证增强 + 申万行业面板修复 + 分类报告脚本
           const j2 = await r2.json();
           const latest = (j2.data || [])[0];
           setRuns(j2.data || []);

@@ -14,6 +14,12 @@ export default function RegisterPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // 密码强度检查
+  const hasMinLength = password.length >= 8;
+  const hasLetter = /[a-zA-Z]/.test(password);
+  const hasDigit = /\d/.test(password);
+  const isPasswordValid = hasMinLength && hasLetter && hasDigit;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -23,8 +29,8 @@ export default function RegisterPage() {
       return;
     }
 
-    if (password.length < 6) {
-      setError('密码至少需要6位字符');
+    if (!isPasswordValid) {
+      setError('请满足所有密码要求');
       return;
     }
 
@@ -57,7 +63,7 @@ export default function RegisterPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label htmlFor="invite-code" className="block text-sm font-medium text-gray-700 mb-1">
-                邀请码
+                邀请码 <span className="text-red-500">*</span>
               </label>
               <input
                 id="invite-code"
@@ -72,7 +78,7 @@ export default function RegisterPage() {
 
             <div>
               <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
-                用户名
+                用户名 <span className="text-red-500">*</span>
               </label>
               <input
                 id="username"
@@ -101,7 +107,7 @@ export default function RegisterPage() {
 
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
-                密码
+                密码 <span className="text-red-500">*</span>
               </label>
               <input
                 id="password"
@@ -109,14 +115,35 @@ export default function RegisterPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                placeholder="至少6位字符"
+                className={`w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-1 ${
+                  password && !isPasswordValid
+                    ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
+                    : 'border-gray-300 focus:border-blue-500 focus:ring-blue-500'
+                }`}
+                placeholder="请输入密码"
               />
+              {/* 密码要求提示 */}
+              {password && (
+                <div className="mt-2 space-y-1">
+                  <div className={`flex items-center text-xs ${hasMinLength ? 'text-green-600' : 'text-gray-400'}`}>
+                    <span className="mr-1">{hasMinLength ? '✓' : '○'}</span>
+                    至少 8 位字符
+                  </div>
+                  <div className={`flex items-center text-xs ${hasLetter ? 'text-green-600' : 'text-gray-400'}`}>
+                    <span className="mr-1">{hasLetter ? '✓' : '○'}</span>
+                    至少 1 个字母
+                  </div>
+                  <div className={`flex items-center text-xs ${hasDigit ? 'text-green-600' : 'text-gray-400'}`}>
+                    <span className="mr-1">{hasDigit ? '✓' : '○'}</span>
+                    至少 1 个数字
+                  </div>
+                </div>
+              )}
             </div>
 
             <div>
               <label htmlFor="confirm" className="block text-sm font-medium text-gray-700 mb-1">
-                确认密码
+                确认密码 <span className="text-red-500">*</span>
               </label>
               <input
                 id="confirm"
@@ -124,8 +151,23 @@ export default function RegisterPage() {
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className={`w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-1 ${
+                  confirmPassword && password !== confirmPassword
+                    ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
+                    : 'border-gray-300 focus:border-blue-500 focus:ring-blue-500'
+                }`}
+                placeholder="再次输入密码"
               />
+            </div>
+
+            {/* 加密存储提示 */}
+            <div className="bg-blue-50 rounded-md p-3 flex items-start">
+              <svg className="w-5 h-5 text-blue-600 mt-0.5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              <p className="text-xs text-blue-700">
+                密码采用 <strong>bcrypt</strong> 加密存储，我们无法查看您的原始密码
+              </p>
             </div>
 
             {error && (
@@ -136,8 +178,8 @@ export default function RegisterPage() {
 
             <button
               type="submit"
-              disabled={loading}
-              className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:bg-blue-300"
+              disabled={loading || !isPasswordValid}
+              className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed"
             >
               {loading ? '注册中...' : '注册'}
             </button>

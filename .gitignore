@@ -74,6 +74,9 @@ certs/
 
 # Output (all generated artifacts)
 output/
+
+# ChromaDB vector storage
+chroma_db/
 =1.1.0
 celerybeat-schedule
 =1.1.0
