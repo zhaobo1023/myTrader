@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.models.user import User
 from api.services.agent.conversation import ConversationStore
 from api.services.agent.llm_chat import AgentLLMClient
-from api.services.agent.prompts import build_system_prompt
+from api.services.agent.prompts import build_system_prompt, get_persona_prompt
 from api.services.agent.schemas import AgentContext
 from api.services.agent.tool_registry import ToolRegistry
 
@@ -77,9 +77,24 @@ class AgentOrchestrator:
         # 4. Build system prompt
         active_skill_prompt = None
         if active_skill:
+            # Try plugin skill first
             skill_tool = self.registry.get_tool(active_skill)
             if skill_tool and hasattr(skill_tool, '_plugin_system_prompt'):
                 active_skill_prompt = skill_tool._plugin_system_prompt
+            else:
+                # Try persona: active_skill may be a persona_id
+                persona_id = active_skill
+                custom_prompt = (page_context or {}).get('custom_persona_prompt', '')
+                persona_prompt = get_persona_prompt(persona_id, custom_prompt or '')
+                if persona_prompt:
+                    active_skill_prompt = persona_prompt
+
+        # Also check page_context for explicit persona_id (fallback)
+        if not active_skill_prompt and page_context:
+            persona_id = page_context.get('persona_id', 'default')
+            if persona_id and persona_id != 'default':
+                custom_prompt = page_context.get('custom_persona_prompt', '')
+                active_skill_prompt = get_persona_prompt(persona_id, custom_prompt or '')
 
         system_prompt = build_system_prompt(
             page_context=page_context,

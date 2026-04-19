@@ -1,14 +1,16 @@
 'use client';
 
-import { useAgentStore } from '@/lib/agent-store';
+import { useAgentStore, PRESET_PERSONAS } from '@/lib/agent-store';
 import { useAgentChat } from '@/hooks/useAgentChat';
 import MessageList from './MessageList';
 import QuickActions from './QuickActions';
 import InputBar from './InputBar';
 
 export default function ChatPanel() {
-  const { isOpen, mode, setOpen, setMode, newConversation } = useAgentStore();
+  const { isOpen, mode, setOpen, setMode, newConversation, personaId } = useAgentStore();
   const { sendMessage, cancel, isStreaming } = useAgentChat();
+
+  const currentPersona = PRESET_PERSONAS.find(p => p.id === personaId) || PRESET_PERSONAS[0];
 
   if (!isOpen) return null;
 
@@ -58,6 +60,18 @@ export default function ChatPanel() {
           font-weight: 600;
           color: var(--text-primary);
           flex: 1;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .agent-persona-tag {
+          font-size: 11px;
+          font-weight: 500;
+          padding: 1px 6px;
+          border-radius: 8px;
+          background: var(--accent, #2563eb);
+          color: #fff;
+          opacity: 0.85;
         }
         .agent-panel-btn {
           width: 28px;
@@ -92,7 +106,12 @@ export default function ChatPanel() {
       <div className={`agent-panel ${isFullscreen ? 'fullscreen' : 'floating'}`}>
         {/* Header */}
         <div className="agent-panel-header">
-          <span className="agent-panel-title">交易助手</span>
+          <span className="agent-panel-title">
+            交易助手
+            {personaId !== 'default' && (
+              <span className="agent-persona-tag">{currentPersona.name}</span>
+            )}
+          </span>
           <button
             className="agent-panel-btn"
             onClick={newConversation}

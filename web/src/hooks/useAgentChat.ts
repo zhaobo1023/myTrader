@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useRef } from 'react';
-import { useAgentStore, nextMsgId } from '@/lib/agent-store';
+import { useAgentStore, nextMsgId, PRESET_PERSONAS } from '@/lib/agent-store';
 import type { AgentToolCall, AgentAction } from '@/lib/agent-store';
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || '';
@@ -19,6 +19,8 @@ export function useAgentChat() {
     conversationId,
     activeSkill,
     pageContext,
+    personaId,
+    customPersonaPrompt,
     addMessage,
     updateLastAssistantContent,
     addToolCallToLastAssistant,
@@ -26,6 +28,7 @@ export function useAgentChat() {
     addActionToLastAssistant,
     setStreaming,
     setConversationId,
+    setPersona,
   } = useAgentStore();
 
   const sendMessage = useCallback(
@@ -70,8 +73,12 @@ export function useAgentChat() {
           body: JSON.stringify({
             message: content,
             conversation_id: conversationId,
-            active_skill: activeSkill,
-            page_context: pageContext,
+            active_skill: activeSkill || personaId,
+            page_context: {
+              ...pageContext,
+              persona_id: personaId,
+              custom_persona_prompt: personaId === 'custom' ? customPersonaPrompt : undefined,
+            },
           }),
           signal: controller.signal,
         });
@@ -124,14 +131,20 @@ export function useAgentChat() {
                   break;
                 }
 
-                case 'tool_result':
+                case 'tool_result': {
+                  const result = (event.result as Record<string, unknown>) || {};
                   updateToolCallResult(
                     event.call_id as string,
-                    (event.result as Record<string, unknown>) || {},
+                    result,
                     (event.duration_ms as number) || 0,
                     (event.success as boolean) ?? true,
                   );
+                  // Auto-apply persona switch from tool result
+                  if (result.action === 'switch_persona' && result.persona_id) {
+                    setPersona(result.persona_id as string);
+                  }
                   break;
+                }
 
                 case 'token':
                   updateLastAssistantContent(event.content as string);
@@ -179,6 +192,8 @@ export function useAgentChat() {
       conversationId,
       activeSkill,
       pageContext,
+      personaId,
+      customPersonaPrompt,
       addMessage,
       updateLastAssistantContent,
       addToolCallToLastAssistant,
@@ -186,6 +201,7 @@ export function useAgentChat() {
       addActionToLastAssistant,
       setStreaming,
       setConversationId,
+      setPersona,
     ],
   );
 

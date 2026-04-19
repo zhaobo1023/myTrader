@@ -33,6 +33,28 @@ export interface AgentMessage {
 }
 
 // ---------------------------------------------------------------------------
+// Persona types
+// ---------------------------------------------------------------------------
+
+export interface PersonaDef {
+  id: string;
+  name: string;
+  desc: string;
+  prompt: string;
+}
+
+export const PRESET_PERSONAS: PersonaDef[] = [
+  { id: 'default',   name: 'myTrader 助手', desc: '默认模式，全能量化投资助手', prompt: '' },
+  { id: 'buffett',   name: '巴菲特',        desc: '价值投资之父，护城河理论，长期持有', prompt: '__server__' },
+  { id: 'munger',    name: '查理·芒格',     desc: '多元思维模型，逆向思考，避免愚蠢', prompt: '__server__' },
+  { id: 'graham',    name: '本杰明·格雷厄姆', desc: '价值投资鼻祖，安全边际，防御型投资', prompt: '__server__' },
+  { id: 'lynch',     name: '彼得·林奇',     desc: '成长股猎手，十倍股，从生活中发现机会', prompt: '__server__' },
+  { id: 'livermore', name: '杰西·利弗莫尔', desc: '趋势交易先驱，顺势而为，严格止损', prompt: '__server__' },
+  { id: 'dalio',     name: '瑞·达利欧',     desc: '全天候策略，债务周期，原则驱动', prompt: '__server__' },
+  { id: 'custom',    name: '自定义',        desc: '用户自定义投资风格', prompt: '' },
+];
+
+// ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
 
@@ -44,6 +66,9 @@ interface AgentState {
   isStreaming: boolean;
   activeSkill: string | null;
   pageContext: Record<string, unknown>;
+  // Persona
+  personaId: string;
+  customPersonaPrompt: string;
 
   // Actions
   toggle: () => void;
@@ -60,6 +85,7 @@ interface AgentState {
   updatePageContext: (ctx: Record<string, unknown>) => void;
   clearMessages: () => void;
   newConversation: () => void;
+  setPersona: (personaId: string, customPrompt?: string) => void;
 }
 
 let _msgCounter = 0;
@@ -68,16 +94,27 @@ function nextMsgId(): string {
   return `msg_${Date.now()}_${_msgCounter}`;
 }
 
+function _ls(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(key);
+}
+function _lsSet(key: string, val: string) {
+  if (typeof window !== 'undefined') localStorage.setItem(key, val);
+}
+function _lsDel(key: string) {
+  if (typeof window !== 'undefined') localStorage.removeItem(key);
+}
+
 export const useAgentStore = create<AgentState>((set, get) => ({
   isOpen: false,
   mode: 'floating',
-  conversationId: typeof window !== 'undefined'
-    ? localStorage.getItem('agent_conversation_id') || null
-    : null,
+  conversationId: _ls('agent_conversation_id'),
   messages: [],
   isStreaming: false,
   activeSkill: null,
   pageContext: {},
+  personaId: _ls('agent_persona_id') || 'default',
+  customPersonaPrompt: _ls('agent_persona_custom') || '',
 
   toggle: () => set((s) => ({ isOpen: !s.isOpen })),
   setOpen: (open) => set({ isOpen: open }),
@@ -85,13 +122,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   setMode: (mode) => set({ mode }),
 
   setConversationId: (id) => {
-    if (typeof window !== 'undefined') {
-      if (id) {
-        localStorage.setItem('agent_conversation_id', id);
-      } else {
-        localStorage.removeItem('agent_conversation_id');
-      }
-    }
+    if (id) { _lsSet('agent_conversation_id', id); } else { _lsDel('agent_conversation_id'); }
     set({ conversationId: id });
   },
 
@@ -160,10 +191,18 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   clearMessages: () => set({ messages: [] }),
 
   newConversation: () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('agent_conversation_id');
-    }
+    _lsDel('agent_conversation_id');
     set({ conversationId: null, messages: [], activeSkill: null });
+  },
+
+  setPersona: (personaId, customPrompt) => {
+    _lsSet('agent_persona_id', personaId);
+    if (customPrompt !== undefined) {
+      _lsSet('agent_persona_custom', customPrompt);
+      set({ personaId, customPersonaPrompt: customPrompt });
+    } else {
+      set({ personaId });
+    }
   },
 }));
 

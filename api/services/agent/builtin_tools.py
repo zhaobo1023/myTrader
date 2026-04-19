@@ -604,3 +604,42 @@ async def run_tech_scan(params: dict, ctx: AgentContext) -> dict:
     except Exception as e:
         logger.error('[run_tech_scan] failed: %s', e)
         return {"error": str(e)}
+
+
+# ============================================================
+# T12: switch_persona
+# ============================================================
+
+@builtin_tool(
+    name="switch_persona",
+    description=(
+        "切换交易助手的分析人设/投资风格。当用户说「切换到巴菲特」「用林奇的方式分析」"
+        "「换成默认助手」「切换人设」等时使用。"
+        "可选人设: default(默认助手), buffett(巴菲特), munger(查理芒格), "
+        "graham(格雷厄姆), lynch(彼得林奇), livermore(利弗莫尔), dalio(达利欧), custom(自定义)。"
+        "参数: persona_id (必填)"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "persona_id": {
+                "type": "string",
+                "description": "人设ID，可选: default, buffett, munger, graham, lynch, livermore, dalio, custom",
+                "enum": ["default", "buffett", "munger", "graham", "lynch", "livermore", "dalio", "custom"],
+            },
+        },
+        "required": ["persona_id"],
+    },
+    category="system",
+)
+async def switch_persona(params: dict, ctx: AgentContext) -> dict:
+    """Return a switch_persona action for the frontend to handle."""
+    from api.services.agent.prompts import PERSONAS
+    persona_id = params.get("persona_id", "default")
+    persona = PERSONAS.get(persona_id, PERSONAS["default"])
+    return {
+        "action": "switch_persona",
+        "persona_id": persona_id,
+        "persona_name": persona["name"],
+        "message": f"已切换到「{persona['name']}」分析模式。",
+    }
