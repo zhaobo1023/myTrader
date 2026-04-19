@@ -3,6 +3,9 @@
 import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { positionsApi, PositionItem } from '@/lib/api-client';
+import { useAddToCandidate } from '@/hooks/useStockAdd';
+import StockSearchInput from '@/components/stock/StockSearchInput';
+import type { StockSearchResult } from '@/lib/api-client';
 
 const LEVELS = ['L1', 'L2', 'L3'];
 
@@ -11,6 +14,10 @@ export default function PositionsContent() {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState({ stock_code: '', stock_name: '', level: 'L2', shares: '', cost_price: '', account: '', note: '' });
+  const [movingId, setMovingId] = useState<number | null>(null);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
+
+  const addCand = useAddToCandidate();
 
   const { data, isLoading } = useQuery({
     queryKey: ['positions'],
@@ -69,6 +76,32 @@ export default function PositionsContent() {
     });
   };
 
+  async function moveToCandidate(p: PositionItem) {
+    setMovingId(p.id);
+    setActionMsg(null);
+    try {
+      await addCand.mutateAsync({
+        stock_code: p.stock_code,
+        stock_name: p.stock_name || p.stock_code,
+        source_type: 'manual',
+        source_detail: `从实盘${p.level || ''}移入`,
+        memo: p.note || null,
+      });
+      const shouldRemove = confirm(`${p.stock_name || p.stock_code} 已加入候选观察，是否同时从实盘持仓移除？`);
+      if (shouldRemove) {
+        try {
+          await deleteMut.mutateAsync(p.id);
+        } catch {
+          setActionMsg('从实盘移除失败，请手动删除');
+        }
+      }
+    } catch {
+      setActionMsg('加入候选观察失败');
+    } finally {
+      setMovingId(null);
+    }
+  }
+
   const items = data?.items || [];
   const grouped = LEVELS.map(lv => ({
     level: lv,
@@ -98,10 +131,29 @@ export default function PositionsContent() {
             {editId ? '编辑持仓' : '添加持仓'}
           </h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '10px' }}>
-            <input placeholder="股票代码 *" value={form.stock_code} onChange={e => setForm({ ...form, stock_code: e.target.value })} disabled={!!editId}
-              style={{ padding: '6px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px', background: editId ? 'var(--bg-canvas)' : 'var(--bg-panel)' }} />
-            <input placeholder="股票名称" value={form.stock_name} onChange={e => setForm({ ...form, stock_name: e.target.value })}
-              style={{ padding: '6px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px' }} />
+            {/* Stock search / display */}
+            {editId ? (
+              <div style={{ padding: '6px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px', background: 'var(--bg-canvas)', color: 'var(--text-muted)' }}>
+                {form.stock_name ? `${form.stock_name} (${form.stock_code})` : form.stock_code}
+              </div>
+            ) : (
+              form.stock_code ? (
+                <div
+                  onClick={() => setForm({ ...form, stock_code: '', stock_name: '' })}
+                  title="点击重新选择"
+                  style={{ padding: '6px 10px', fontSize: '13px', border: '1px solid var(--accent)', borderRadius: '6px', background: 'color-mix(in srgb, var(--accent) 8%, transparent)', color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                >
+                  <span>{form.stock_name ? `${form.stock_name} ${form.stock_code}` : form.stock_code}</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>x</span>
+                </div>
+              ) : (
+                <StockSearchInput
+                  placeholder="搜索股票代码或名称"
+                  width="100%"
+                  onSelect={(s: StockSearchResult) => setForm({ ...form, stock_code: s.stock_code, stock_name: s.stock_name })}
+                />
+              )
+            )}
             <select value={form.level} onChange={e => setForm({ ...form, level: e.target.value })}
               style={{ padding: '6px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px' }}>
               {LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
@@ -115,14 +167,24 @@ export default function PositionsContent() {
           </div>
           <input placeholder="备注" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })}
             style={{ width: '100%', padding: '6px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px', marginTop: '10px' }} />
-          <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
-            <button onClick={handleSubmit} style={{ padding: '6px 16px', fontSize: '13px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
-              {editId ? '保存' : '添加'}
+          <div style={{ marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button
+              onClick={handleSubmit}
+              disabled={!form.stock_code || createMut.isPending || updateMut.isPending}
+              style={{ padding: '6px 16px', fontSize: '13px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '6px', cursor: form.stock_code ? 'pointer' : 'not-allowed', opacity: form.stock_code ? 1 : 0.5 }}
+            >
+              {(createMut.isPending || updateMut.isPending) ? '保存中...' : (editId ? '保存' : '添加')}
             </button>
             <button onClick={resetForm} style={{ padding: '6px 16px', fontSize: '13px', background: 'var(--bg-canvas)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', borderRadius: '6px', cursor: 'pointer' }}>
               取消
             </button>
           </div>
+        </div>
+      )}
+
+      {actionMsg && (
+        <div style={{ marginBottom: '12px', padding: '8px 14px', borderRadius: '6px', background: 'rgba(229,83,75,0.06)', border: '1px solid rgba(229,83,75,0.2)', fontSize: '12px', color: '#e5534b' }}>
+          {actionMsg}
         </div>
       )}
 
@@ -152,8 +214,15 @@ export default function PositionsContent() {
                     <td style={{ padding: '8px', textAlign: 'right', color: 'var(--text-primary)' }}>{p.shares ?? '-'}</td>
                     <td style={{ padding: '8px', textAlign: 'right', color: 'var(--text-primary)' }}>{p.cost_price?.toFixed(2) ?? '-'}</td>
                     <td style={{ padding: '8px', color: 'var(--text-muted)' }}>{p.account || '-'}</td>
-                    <td style={{ padding: '8px', textAlign: 'right' }}>
+                    <td style={{ padding: '8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button onClick={() => startEdit(p)} style={{ fontSize: '12px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', marginRight: '8px' }}>编辑</button>
+                      <button
+                        onClick={() => moveToCandidate(p)}
+                        disabled={movingId === p.id}
+                        style={{ fontSize: '12px', color: '#5e6ad2', background: 'none', border: 'none', cursor: movingId === p.id ? 'default' : 'pointer', marginRight: '8px' }}
+                      >
+                        {movingId === p.id ? '移动中...' : '移至候选'}
+                      </button>
                       <button onClick={() => { if (confirm('确认删除?')) deleteMut.mutate(p.id); }} style={{ fontSize: '12px', color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer' }}>删除</button>
                     </td>
                   </tr>
@@ -166,7 +235,7 @@ export default function PositionsContent() {
 
       {!isLoading && items.length === 0 && (
         <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '40px 0', fontSize: '14px' }}>
-          暂无持仓数据，点击"添加持仓"开始管理你的投资组合
+          暂无持仓数据，点击「添加持仓」搜索股票后开始管理你的投资组合
         </div>
       )}
     </div>
