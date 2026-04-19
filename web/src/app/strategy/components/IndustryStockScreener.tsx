@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+import QuickAddMenu from '@/components/stock/QuickAddMenu';
+import { candidatePoolApi } from '@/lib/candidate-pool-api';
 
 interface IndustryStock {
   stock_code: string;
@@ -32,8 +32,6 @@ export default function IndustryStockScreener() {
   const [stocks, setStocks] = useState<IndustryStock[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingIndustries, setLoadingIndustries] = useState(false);
-  const [addingCode, setAddingCode] = useState<string | null>(null);
-  const [addedCodes, setAddedCodes] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -41,9 +39,8 @@ export default function IndustryStockScreener() {
     if (industries.length > 0) return;
     setLoadingIndustries(true);
     try {
-      const res = await fetch(`${API_BASE}/api/candidate-pool/industries`);
-      const j = await res.json();
-      setIndustries(j.data || []);
+      const res = await candidatePoolApi.industries();
+      setIndustries((res.data as { data?: string[] }).data || []);
     } catch {
       // ignore
     } finally {
@@ -56,50 +53,17 @@ export default function IndustryStockScreener() {
     setLoading(true);
     setMsg(null);
     try {
-      const params = new URLSearchParams({ industry_name: selectedIndustry, sort_by: sortBy });
-      if (minRps) params.set('min_rps', minRps);
-      const res = await fetch(`${API_BASE}/api/candidate-pool/industry-stocks?${params}`);
-      const j = await res.json();
-      setStocks(j.data || []);
-      // collect in-pool codes
-      const inPool = new Set<string>((j.data || []).filter((s: IndustryStock) => s.in_pool).map((s: IndustryStock) => s.stock_code));
-      setAddedCodes(inPool);
+      const params: { industry_name: string; sort_by?: string; min_rps?: string } = {
+        industry_name: selectedIndustry,
+        sort_by: sortBy,
+      };
+      if (minRps) params.min_rps = minRps;
+      const res = await candidatePoolApi.industryStocks(params);
+      setStocks((res.data as { data?: IndustryStock[] }).data || []);
     } catch {
       setMsg('查询失败');
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function addToPool(stock: IndustryStock) {
-    setAddingCode(stock.stock_code);
-    setMsg(null);
-    try {
-      const snapshot = {
-        rps_250: stock.rps_250,
-        rps_120: stock.rps_120,
-        close: stock.close,
-        industry_name: selectedIndustry,
-      };
-      const res = await fetch(`${API_BASE}/api/candidate-pool/stocks`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stock_code: stock.stock_code,
-          stock_name: stock.stock_name,
-          source_type: 'industry',
-          source_detail: selectedIndustry,
-          entry_snapshot: snapshot,
-        }),
-      });
-      if (res.ok) {
-        setAddedCodes(prev => new Set([...prev, stock.stock_code]));
-        setMsg(`${stock.stock_name} 已加入候选池`);
-      }
-    } catch {
-      setMsg('加入失败');
-    } finally {
-      setAddingCode(null);
     }
   }
 
@@ -223,10 +187,7 @@ export default function IndustryStockScreener() {
                   </tr>
                 </thead>
                 <tbody>
-                  {stocks.map((stock, i) => {
-                    const inPool = addedCodes.has(stock.stock_code);
-                    const isAdding = addingCode === stock.stock_code;
-                    return (
+                  {stocks.map((stock, i) => (
                       <tr
                         key={stock.stock_code}
                         style={{ background: i % 2 === 0 ? 'transparent' : 'var(--bg-card)', borderBottom: '1px solid var(--border-subtle)' }}
@@ -251,27 +212,21 @@ export default function IndustryStockScreener() {
                           {stock.rps_slope != null ? (stock.rps_slope > 0 ? '+' : '') + stock.rps_slope.toFixed(2) : '--'}
                         </td>
                         <td style={{ padding: '8px 12px' }}>
-                          {inPool ? (
-                            <span style={{ fontSize: '11px', color: '#27a644', fontWeight: 510 }}>已在池</span>
-                          ) : (
-                            <button
-                              onClick={() => addToPool(stock)}
-                              disabled={isAdding}
-                              style={{
-                                fontSize: '11px', padding: '3px 10px', borderRadius: '4px',
-                                background: isAdding ? 'transparent' : 'rgba(94,106,210,0.1)',
-                                border: '1px solid rgba(94,106,210,0.3)',
-                                color: isAdding ? 'var(--text-muted)' : 'var(--accent)',
-                                cursor: isAdding ? 'default' : 'pointer', fontWeight: 510,
-                              }}
-                            >
-                              {isAdding ? '加入中...' : '+ 候选池'}
-                            </button>
-                          )}
+                          <QuickAddMenu
+                            stockCode={stock.stock_code}
+                            stockName={stock.stock_name}
+                            sourceType="industry"
+                            sourceDetail={selectedIndustry}
+                            snapshot={{
+                              rps_250: stock.rps_250,
+                              rps_120: stock.rps_120,
+                              close: stock.close,
+                              industry_name: selectedIndustry,
+                            }}
+                          />
                         </td>
                       </tr>
-                    );
-                  })}
+                  ))}
                 </tbody>
               </table>
               <div style={{ padding: '8px 12px', background: 'var(--bg-panel)', borderTop: '1px solid var(--border-subtle)', fontSize: '11px', color: 'var(--text-muted)' }}>

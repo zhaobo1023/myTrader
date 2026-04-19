@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import apiClient from '@/lib/api-client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import QuickAddMenu from '@/components/stock/QuickAddMenu';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
@@ -115,95 +116,6 @@ function marketBadge(ms: string): React.CSSProperties {
 function fmt(v: number | null | undefined, digits = 2): string {
   if (v == null) return '--';
   return v.toFixed(digits);
-}
-
-// ---------------------------------------------------------------------------
-// Add-to-pool button
-// ---------------------------------------------------------------------------
-
-function AddToPoolButton({ sig, strategyName }: { sig: SignalRow; strategyName: string }) {
-  const [state, setState] = useState<'idle' | 'confirm' | 'adding' | 'done' | 'error'>('idle');
-  const [memo, setMemo] = useState('');
-
-  const doAdd = useCallback(async () => {
-    setState('adding');
-    try {
-      const snapshot: Record<string, unknown> = {
-        strategy_name: strategyName,
-        close: sig.close,
-        rps_250: sig.rps,
-        ma20: sig.ma20,
-        ma250: sig.ma250,
-        volume_ratio: sig.volume_ratio,
-        signal_type: sig.signal_type,
-      };
-      if (sig.total_mv != null) snapshot.total_mv = sig.total_mv;
-
-      await fetch(`${API_BASE}/api/candidate-pool/stocks`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stock_code: sig.stock_code,
-          stock_name: sig.stock_name || sig.stock_code,
-          source_type: 'strategy',
-          source_detail: strategyName,
-          entry_snapshot: snapshot,
-          memo: memo || null,
-        }),
-      });
-      setState('done');
-    } catch {
-      setState('error');
-    }
-  }, [sig, strategyName, memo]);
-
-  if (state === 'done') {
-    return <span style={{ fontSize: '11px', color: '#27a644', fontWeight: 510 }}>已加入</span>;
-  }
-  if (state === 'error') {
-    return <span style={{ fontSize: '11px', color: '#e5534b' }}>失败</span>;
-  }
-  if (state === 'confirm') {
-    return (
-      <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }} onClick={e => e.stopPropagation()}>
-        <input
-          value={memo}
-          onChange={e => setMemo(e.target.value)}
-          placeholder='备注(选填)'
-          style={{
-            fontSize: '11px', padding: '2px 6px', borderRadius: '4px', width: '100px',
-            border: '1px solid var(--border-std)', background: 'var(--bg-input)',
-            color: 'var(--text-primary)',
-          }}
-        />
-        <button
-          onClick={doAdd}
-          style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '4px', background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer' }}
-        >
-          确认
-        </button>
-        <button
-          onClick={() => setState('idle')}
-          style={{ fontSize: '11px', padding: '2px 6px', borderRadius: '4px', background: 'none', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', cursor: 'pointer' }}
-        >
-          取消
-        </button>
-      </div>
-    );
-  }
-  return (
-    <button
-      onClick={e => { e.stopPropagation(); setState('confirm'); }}
-      disabled={state === 'adding'}
-      style={{
-        fontSize: '11px', padding: '2px 8px', borderRadius: '4px',
-        background: 'rgba(94,106,210,0.1)', border: '1px solid rgba(94,106,210,0.3)',
-        color: 'var(--accent)', cursor: 'pointer', fontWeight: 510, whiteSpace: 'nowrap',
-      }}
-    >
-      {state === 'adding' ? '加入中...' : '+ 候选池'}
-    </button>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -542,8 +454,8 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                                   <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse', minWidth: '480px' }}>
                                     <thead>
                                       <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                                        {['#', '代码', '名称', '总市值(亿)', '流通市值(亿)', 'PE-TTM', 'PB'].map((h) => (
-                                          <th key={h} style={{ padding: '5px 10px', textAlign: h === '代码' || h === '名称' ? 'left' : 'right', color: 'var(--text-muted)', fontWeight: 400 }}>
+                                        {['#', '代码', '名称', '总市值(亿)', '流通市值(亿)', 'PE-TTM', 'PB', ''].map((h) => (
+                                          <th key={h} style={{ padding: '5px 10px', textAlign: h === '代码' || h === '名称' || h === '' ? 'left' : 'right', color: 'var(--text-muted)', fontWeight: 400 }}>
                                             {h}
                                           </th>
                                         ))}
@@ -568,6 +480,21 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                                           </td>
                                           <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.pe_ttm, 1)}</td>
                                           <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.pb, 2)}</td>
+                                          <td style={{ padding: '5px 10px' }}>
+                                            <QuickAddMenu
+                                              stockCode={sig.stock_code}
+                                              stockName={sig.stock_name || sig.stock_code}
+                                              sourceType="strategy"
+                                              sourceDetail={card.meta.name}
+                                              snapshot={{
+                                                strategy_name: card.meta.name,
+                                                total_mv: sig.total_mv,
+                                                circ_mv: sig.circ_mv,
+                                                pe_ttm: sig.pe_ttm,
+                                                pb: sig.pb,
+                                              }}
+                                            />
+                                          </td>
                                         </tr>
                                       ))}
                                     </tbody>
@@ -622,7 +549,22 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                                             ) : '--'}
                                           </td>
                                           <td style={{ padding: '5px 10px' }}>
-                                            <AddToPoolButton sig={sig} strategyName={card.meta.name} />
+                                            <QuickAddMenu
+                                              stockCode={sig.stock_code}
+                                              stockName={sig.stock_name || sig.stock_code}
+                                              sourceType="strategy"
+                                              sourceDetail={card.meta.name}
+                                              snapshot={{
+                                                strategy_name: card.meta.name,
+                                                close: sig.close,
+                                                rps_250: sig.rps,
+                                                ma20: sig.ma20,
+                                                ma250: sig.ma250,
+                                                volume_ratio: sig.volume_ratio,
+                                                signal_type: sig.signal_type,
+                                                ...(sig.total_mv != null ? { total_mv: sig.total_mv } : {}),
+                                              }}
+                                            />
                                           </td>
                                         </tr>
                                       ))}

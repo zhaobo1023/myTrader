@@ -100,6 +100,7 @@ function AIBriefingCard() {
   const [session, setSession] = useState<'morning' | 'evening'>(() => {
     return new Date().getHours() < 15 ? 'morning' : 'evening';
   });
+  const [cardOpen, setCardOpen] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
@@ -182,40 +183,58 @@ function AIBriefingCard() {
       background: 'linear-gradient(135deg, var(--bg-card), var(--bg-elevated))',
       border: '1px solid var(--border-subtle)',
       borderRadius: '12px',
-      padding: '18px 22px',
+      padding: cardOpen ? '18px 22px' : '12px 22px',
       marginBottom: '20px',
       boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+      transition: 'padding 0.2s',
     }}>
       {/* Header row */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{
-            fontSize: '11px', fontWeight: 700, letterSpacing: '0.8px',
-            color: 'var(--accent)', textTransform: 'uppercase',
-          }}>
-            AI {sessionLabel}
-          </span>
-          <div style={{ display: 'flex', gap: '2px' }}>
-            {(['morning', 'evening'] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => setSession(s)}
-                style={{
-                  padding: '3px 10px', fontSize: '10px', borderRadius: '10px',
-                  border: session === s ? '1px solid var(--accent)' : '1px solid transparent',
-                  background: session === s ? 'var(--accent)12' : 'transparent',
-                  color: session === s ? 'var(--accent)' : 'var(--text-muted)',
-                  cursor: 'pointer', fontWeight: 520, transition: 'all 0.15s',
-                }}
-              >
-                {s === 'morning' ? '08:30 盘前' : '18:00 盘后'}
-              </button>
-            ))}
-          </div>
-          {briefing?.date && !isLoading && (
+          <button
+            onClick={() => setCardOpen(!cardOpen)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px',
+              background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+            }}
+          >
+            <svg
+              width="12" height="12" viewBox="0 0 24 24" fill="none"
+              stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              style={{ transition: 'transform 0.2s', transform: cardOpen ? 'rotate(90deg)' : 'rotate(0deg)', flexShrink: 0 }}
+            >
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+            <span style={{
+              fontSize: '11px', fontWeight: 700, letterSpacing: '0.8px',
+              color: 'var(--accent)', textTransform: 'uppercase',
+            }}>
+              AI {sessionLabel}
+            </span>
+          </button>
+          {cardOpen && (
+            <div style={{ display: 'flex', gap: '2px' }}>
+              {(['morning', 'evening'] as const).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setSession(s)}
+                  style={{
+                    padding: '3px 10px', fontSize: '10px', borderRadius: '10px',
+                    border: session === s ? '1px solid var(--accent)' : '1px solid transparent',
+                    background: session === s ? 'var(--accent)12' : 'transparent',
+                    color: session === s ? 'var(--accent)' : 'var(--text-muted)',
+                    cursor: 'pointer', fontWeight: 520, transition: 'all 0.15s',
+                  }}
+                >
+                  {s === 'morning' ? '08:30 盘前' : '18:00 盘后'}
+                </button>
+              ))}
+            </div>
+          )}
+          {cardOpen && briefing?.date && !isLoading && (
             <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{briefing.date}</span>
           )}
-          {briefing?.cached && hasContent && (
+          {cardOpen && briefing?.cached && hasContent && (
             <span style={{
               fontSize: '9px', fontWeight: 500, padding: '1px 6px',
               borderRadius: '8px',
@@ -225,7 +244,7 @@ function AIBriefingCard() {
               {isHistorical ? `${briefing.date}` : 'cached'}
             </span>
           )}
-          {briefing?.data_quality && !isLoading && (
+          {cardOpen && briefing?.data_quality && !isLoading && (
             <span style={{
               fontSize: '9px', fontWeight: 500, padding: '1px 6px',
               borderRadius: '8px',
@@ -238,23 +257,26 @@ function AIBriefingCard() {
             </span>
           )}
         </div>
-        <button
-          onClick={() => hasContent ? forceRefetch() : refetch()}
-          disabled={showLoading}
-          style={{
-            fontSize: '11px', padding: '4px 14px', borderRadius: '6px',
-            border: '1px solid var(--accent)40',
-            background: showLoading ? 'var(--bg-card)' : 'var(--accent)10',
-            color: 'var(--accent)', cursor: showLoading ? 'wait' : 'pointer',
-            fontWeight: 520, opacity: showLoading ? 0.6 : 1,
-            transition: 'all 0.15s',
-          }}
-        >
-          {showLoading ? 'AI 分析中...' : hasContent ? '重新生成' : '生成解读'}
-        </button>
+        {cardOpen && (
+          <button
+            onClick={() => hasContent ? forceRefetch() : refetch()}
+            disabled={showLoading}
+            style={{
+              fontSize: '11px', padding: '4px 14px', borderRadius: '6px',
+              border: '1px solid var(--accent)40',
+              background: showLoading ? 'var(--bg-card)' : 'var(--accent)10',
+              color: 'var(--accent)', cursor: showLoading ? 'wait' : 'pointer',
+              fontWeight: 520, opacity: showLoading ? 0.6 : 1,
+              transition: 'all 0.15s',
+            }}
+          >
+            {showLoading ? 'AI 分析中...' : hasContent ? '重新生成' : '生成解读'}
+          </button>
+        )}
       </div>
 
       {/* Content */}
+      {!cardOpen ? null : (<>
       {showLoading && (
         <div style={{
           fontSize: '12px', color: 'var(--text-muted)', padding: '16px 0 4px',
@@ -357,6 +379,7 @@ function AIBriefingCard() {
           </div>
         );
       })()}
+      </>)}
     </div>
   );
 }

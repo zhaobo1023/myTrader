@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+import { useAddToPositions } from '@/hooks/useStockAdd';
+import { candidatePoolApi } from '@/lib/candidate-pool-api';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -131,9 +131,8 @@ function HistoryPanel({ stockCode, stockName }: { stockCode: string; stockName: 
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API_BASE}/api/candidate-pool/stocks/${stockCode}/history?days=30`)
-      .then(r => r.json())
-      .then(j => setData((j.data || []).reverse()))
+    candidatePoolApi.history(stockCode, 30)
+      .then(r => setData(((r.data as { data?: HistoryRow[] }).data || []).reverse()))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [stockCode]);
@@ -186,24 +185,29 @@ function StockRow({
   onToggleExpand,
   onStatusChange,
   onRemove,
+  onUpgrade,
+  upgrading,
 }: {
   stock: CandidateStock;
   expanded: boolean;
   onToggleExpand: () => void;
   onStatusChange: (code: string, status: string) => void;
   onRemove: (code: string) => void;
+  onUpgrade: (stock: CandidateStock, level: string) => void;
+  upgrading: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [memo, setMemo] = useState(stock.memo || '');
   const [saving, setSaving] = useState(false);
+  const [showLevelPicker, setShowLevelPicker] = useState(false);
 
   async function saveMemo() {
     setSaving(true);
-    await fetch(`${API_BASE}/api/candidate-pool/stocks/${stock.stock_code}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ memo }),
-    });
+    try {
+      await candidatePoolApi.updateMemo(stock.stock_code, memo);
+    } catch {
+      // ignore
+    }
     setSaving(false);
     setEditing(false);
   }
@@ -289,6 +293,39 @@ function StockRow({
                   </button>
                 ))}
                 <div style={{ flex: 1 }} />
+                {showLevelPicker ? (
+                  <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>级别：</span>
+                    {['L1', 'L2', 'L3'].map(lv => (
+                      <button
+                        key={lv}
+                        onClick={() => { onUpgrade(stock, lv); setShowLevelPicker(false); }}
+                        disabled={upgrading}
+                        style={{
+                          fontSize: '11px', padding: '3px 8px', borderRadius: '4px',
+                          border: '1px solid var(--accent)', background: 'rgba(94,106,210,0.08)',
+                          color: 'var(--accent)', cursor: upgrading ? 'default' : 'pointer', fontWeight: 510,
+                        }}
+                      >
+                        {lv}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setShowLevelPicker(false)}
+                      style={{ fontSize: '11px', padding: '3px 6px', borderRadius: '4px', background: 'none', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', cursor: 'pointer' }}
+                    >
+                      取消
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowLevelPicker(true)}
+                    disabled={upgrading}
+                    style={{ fontSize: '11px', color: '#27a644', background: 'none', border: '1px solid rgba(39,166,68,0.3)', borderRadius: '6px', padding: '3px 10px', cursor: upgrading ? 'default' : 'pointer', marginRight: '6px' }}
+                  >
+                    {upgrading ? '升级中...' : '升级持仓'}
+                  </button>
+                )}
                 <button
                   onClick={() => onRemove(stock.stock_code)}
                   style={{ fontSize: '11px', color: '#e5534b', background: 'none', border: '1px solid rgba(229,83,75,0.3)', borderRadius: '6px', padding: '3px 10px', cursor: 'pointer' }}
@@ -368,6 +405,7 @@ function StockRow({
 // ---------------------------------------------------------------------------
 
 export default function CandidatePoolContent() {
+  const addPos = useAddToPositions();
   const [stocks, setStocks] = useState<CandidateStock[]>([]);
   const [loading, setLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string>('');
@@ -376,16 +414,16 @@ export default function CandidatePoolContent() {
   const [triggering, setTriggering] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [upgradingCode, setUpgradingCode] = useState<string | null>(null);
 
   const loadStocks = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (filterStatus) params.set('status', filterStatus);
-      if (filterSource) params.set('source_type', filterSource);
-      const res = await fetch(`${API_BASE}/api/candidate-pool/stocks?${params}`);
-      const j = await res.json();
-      setStocks(j.data || []);
+      const params: { status?: string; source_type?: string } = {};
+      if (filterStatus) params.status = filterStatus;
+      if (filterSource) params.source_type = filterSource;
+      const res = await candidatePoolApi.list(params);
+      setStocks((res.data as { data?: CandidateStock[] }).data || []);
     } catch {
       // ignore
     } finally {
@@ -396,27 +434,58 @@ export default function CandidatePoolContent() {
   useEffect(() => { loadStocks(); }, [loadStocks]);
 
   async function handleStatusChange(code: string, status: string) {
-    await fetch(`${API_BASE}/api/candidate-pool/stocks/${code}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    });
-    loadStocks();
+    try {
+      await candidatePoolApi.updateStatus(code, status);
+      loadStocks();
+    } catch {
+      setActionMsg('状态更新失败');
+    }
   }
 
   async function handleRemove(code: string) {
     if (!confirm('确认将该股票移出观察池？')) return;
-    await fetch(`${API_BASE}/api/candidate-pool/stocks/${code}`, { method: 'DELETE' });
-    setExpandedCode(null);
-    loadStocks();
+    try {
+      await candidatePoolApi.remove(code);
+      setExpandedCode(null);
+      loadStocks();
+    } catch {
+      setActionMsg('移除失败');
+    }
+  }
+
+  async function handleUpgrade(stock: CandidateStock, level: string) {
+    setUpgradingCode(stock.stock_code);
+    try {
+      await addPos.mutateAsync({
+        stock_code: stock.stock_code,
+        stock_name: stock.stock_name,
+        level,
+      });
+      const shouldRemove = confirm(
+        `${stock.stock_name} 已加入实盘持仓(${level})，是否同时从候选观察移除？`
+      );
+      if (shouldRemove) {
+        try {
+          await candidatePoolApi.remove(stock.stock_code);
+          setExpandedCode(null);
+          loadStocks();
+        } catch {
+          setActionMsg('从候选观察移除失败，请手动移除');
+        }
+      }
+    } catch {
+      setActionMsg('升级持仓失败');
+    } finally {
+      setUpgradingCode(null);
+    }
   }
 
   async function handleTriggerMonitor() {
     setTriggering(true);
     setActionMsg(null);
     try {
-      const res = await fetch(`${API_BASE}/api/candidate-pool/monitor/trigger`, { method: 'POST' });
-      const j = await res.json();
+      const res = await candidatePoolApi.triggerMonitor();
+      const j = res.data as { monitored?: number; trade_date?: string };
       setActionMsg(`监控完成：${j.monitored} 只股票，${j.trade_date || ''}`);
       loadStocks();
     } catch {
@@ -430,8 +499,8 @@ export default function CandidatePoolContent() {
     setPushing(true);
     setActionMsg(null);
     try {
-      const res = await fetch(`${API_BASE}/api/candidate-pool/monitor/push`, { method: 'POST' });
-      const j = await res.json();
+      const res = await candidatePoolApi.pushFeishu();
+      const j = res.data as { success?: boolean };
       setActionMsg(j.success ? '飞书推送成功' : '飞书推送失败（检查 webhook 配置）');
     } catch {
       setActionMsg('推送请求失败');
@@ -582,6 +651,8 @@ export default function CandidatePoolContent() {
                     onToggleExpand={() => setExpandedCode(prev => prev === stock.stock_code ? null : stock.stock_code)}
                     onStatusChange={handleStatusChange}
                     onRemove={handleRemove}
+                    onUpgrade={handleUpgrade}
+                    upgrading={upgradingCode === stock.stock_code}
                   />
                 ))}
               </tbody>
