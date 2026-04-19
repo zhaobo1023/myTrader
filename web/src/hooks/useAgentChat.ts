@@ -78,11 +78,11 @@ export function useAgentChat() {
 
         if (!resp.ok) {
           const errText = await resp.text().catch(() => '');
-          throw new Error(`Request failed: ${resp.status} ${errText}`);
+          throw new Error(`请求失败: ${resp.status} ${errText}`);
         }
 
         const reader = resp.body?.getReader();
-        if (!reader) throw new Error('Response body not readable');
+        if (!reader) throw new Error('响应数据不可读');
 
         const decoder = new TextDecoder();
         let buffer = '';
@@ -154,7 +154,7 @@ export function useAgentChat() {
 
                 case 'error':
                   updateLastAssistantContent(
-                    `\n\n[ERROR] ${event.message || 'Unknown error'}`,
+                    `\n\n[错误] ${event.message || '未知错误'}`,
                   );
                   break;
               }
@@ -163,10 +163,10 @@ export function useAgentChat() {
         }
       } catch (err: unknown) {
         if ((err as Error).name === 'AbortError') {
-          updateLastAssistantContent('\n\n[INFO] 请求已取消。');
+          updateLastAssistantContent('\n\n[提示] 请求已取消。');
         } else {
           updateLastAssistantContent(
-            `\n\n[ERROR] ${(err as Error).message || '网络错误'}`,
+            `\n\n[错误] ${(err as Error).message || '网络错误'}`,
           );
         }
       } finally {

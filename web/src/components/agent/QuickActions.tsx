@@ -10,38 +10,38 @@ interface QuickAction {
 
 const PAGE_ACTIONS: Record<string, QuickAction[]> = {
   market: [
-    { label: 'Technical Analysis', message: 'Help me analyze the technical indicators of this stock' },
-    { label: 'Add to Watchlist', message: 'Help me add this stock to my watchlist' },
-    { label: 'AI Interpretation', message: 'Help me interpret the current trend of this stock' },
+    { label: '技术分析', message: '帮我分析这只股票的技术指标' },
+    { label: '加入自选', message: '帮我把这只股票加入自选' },
+    { label: 'AI解读', message: '帮我解读这只股票当前的走势' },
   ],
   dashboard: [
-    { label: 'Portfolio Diagnosis', message: 'Help me diagnose my current portfolio' },
-    { label: 'Risk Check', message: 'Check my portfolio risk levels' },
-    { label: 'Rebalance Advice', message: 'Give me rebalancing suggestions' },
+    { label: '持仓诊断', message: '帮我诊断一下当前持仓情况' },
+    { label: '风险检查', message: '检查一下我的持仓风险水平' },
+    { label: '调仓建议', message: '给我一些仓位再平衡的建议' },
   ],
   analysis: [
-    { label: 'Deep Analysis', message: 'Perform a deep analysis on this stock' },
-    { label: 'Buffett View', message: 'Analyze this stock from Buffett value investing perspective' },
-    { label: 'Compare', message: 'Help me compare with industry peers' },
+    { label: '深度分析', message: '对这只股票做深度分析' },
+    { label: '巴菲特视角', message: '从巴菲特价值投资角度分析这只股票' },
+    { label: '同业对比', message: '帮我与同行业股票做对比分析' },
   ],
   strategy: [
-    { label: 'Strategy Review', message: 'Evaluate the performance of this strategy' },
-    { label: 'Optimize Params', message: 'Suggest parameter optimization for this strategy' },
+    { label: '策略评估', message: '评估一下这个策略的表现' },
+    { label: '参数优化', message: '为这个策略提供参数优化建议' },
   ],
   sentiment: [
-    { label: 'Hot Topics', message: 'Interpret current market hot topics and sentiment' },
-    { label: 'Impact Analysis', message: 'Analyze how current news impacts my portfolio' },
+    { label: '热点解读', message: '解读当前市场热点和情绪' },
+    { label: '影响分析', message: '分析当前新闻对我持仓的影响' },
   ],
   positions: [
-    { label: 'Position Scan', message: 'Scan my positions for technical signals' },
-    { label: 'Risk Alert', message: 'Check if any positions need attention' },
+    { label: '技术扫描', message: '扫描我的持仓技术信号' },
+    { label: '风险预警', message: '检查是否有持仓需要关注' },
   ],
 };
 
 const DEFAULT_ACTIONS: QuickAction[] = [
-  { label: 'Portfolio Overview', message: 'Show me my portfolio overview' },
-  { label: 'Market Sentiment', message: 'What is the current market sentiment?' },
-  { label: 'Hot Sectors', message: 'Which sectors are hot today?' },
+  { label: '持仓总览', message: '展示我的持仓概况' },
+  { label: '市场情绪', message: '当前市场情绪如何？' },
+  { label: '热门板块', message: '今天哪些板块最热？' },
 ];
 
 interface QuickActionsProps {
@@ -62,7 +62,7 @@ export default function QuickActions({ onSend }: QuickActionsProps) {
     if (stockCode) {
       acts = acts.map((a) => ({
         ...a,
-        message: a.message.replace('this stock', `stock ${stockCode}`),
+        message: a.message.replace('这只股票', `${stockCode}`),
       }));
     }
     return acts;

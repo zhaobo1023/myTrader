@@ -96,14 +96,14 @@ export default function ChatPanel() {
           <button
             className="agent-panel-btn"
             onClick={newConversation}
-            title="New conversation"
+            title="新对话"
           >
             +
           </button>
           <button
             className="agent-panel-btn"
             onClick={() => setMode(isFullscreen ? 'floating' : 'fullscreen')}
-            title={isFullscreen ? 'Minimize' : 'Fullscreen'}
+            title={isFullscreen ? '收起' : '展开'}
           >
             {isFullscreen ? '[-]' : '[+]'}
           </button>
@@ -113,7 +113,7 @@ export default function ChatPanel() {
               if (isStreaming) cancel();
               setOpen(false);
             }}
-            title="Close"
+            title="关闭"
           >
             x
           </button>
