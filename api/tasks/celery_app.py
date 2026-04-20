@@ -14,9 +14,13 @@ if 'CELERY_BROKER_URL' in os.environ:
 if 'CELERY_RESULT_BACKEND' in os.environ:
     del os.environ['CELERY_RESULT_BACKEND']
 
-# Build Redis URLs directly from settings (without password)
-broker_url = f'redis://{settings.redis_host}:{settings.redis_port}/1'
-backend_url = f'redis://{settings.redis_host}:{settings.redis_port}/2'
+# Build Redis URLs directly from settings
+if settings.redis_password:
+    broker_url = f'redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/1'
+    backend_url = f'redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/2'
+else:
+    broker_url = f'redis://{settings.redis_host}:{settings.redis_port}/1'
+    backend_url = f'redis://{settings.redis_host}:{settings.redis_port}/2'
 
 celery_app = Celery(
     'mytrader',
