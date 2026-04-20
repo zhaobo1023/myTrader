@@ -290,11 +290,11 @@ function SignalBadge({ label, count, color }: { label: string; count: number; co
 }
 
 const SIGNAL_DEFS: Record<string, { label: string; bg: string; color: string; tip: string }> = {
-  '过热':   { label: '过热',     bg: '#e5534b', color: '#fff', tip: '长期分位>85，年线历史极高位，注意止盈' },
-  '降温':   { label: '高位降温', bg: '#e67e22', color: '#fff', tip: '上周过热，本周跌破阈值，趋势可能反转' },
-  '长强短弱': { label: '高位退潮', bg: '#c69026', color: '#fff', tip: '年线强但月线动能已失，减仓信号' },
-  '连续上升': { label: '持续上升', bg: '#2980b9', color: '#fff', tip: '近3周连续上升>=5分位，趋势跟随' },
-  '短强长弱': { label: '趋势启动', bg: '#27a644', color: '#fff', tip: '短期突然发力但历史低位，可能是趋势初期' },
+  '过热':   { label: '过热',     bg: '#e5534b', color: '#fff', tip: '长期(250日)分位>=85 且 短期(20日)分位>=60，处于历史极高位且当前仍强势，注意止盈' },
+  '降温':   { label: '高位降温', bg: '#e67e22', color: '#fff', tip: '上周长期分位>=85(过热)，本周跌破阈值，趋势可能反转' },
+  '长强短弱': { label: '高位退潮', bg: '#c69026', color: '#fff', tip: '长期(250日)分位>=70 但 短期(20日)分位<=35，长期高位但近期动能衰竭，减仓信号' },
+  '连续上升': { label: '持续上升', bg: '#2980b9', color: '#fff', tip: '近3周周度分位持续递增且累计升幅>=5个分位点，趋势跟随信号' },
+  '短强长弱': { label: '趋势启动', bg: '#27a644', color: '#fff', tip: '短期(20日)分位>=60 但 长期(250日)分位<=40，短期突然发力但历史低位，可能是趋势初期' },
 };
 
 function SignalTag({ name }: { name: string }) {
@@ -598,14 +598,37 @@ function SwRotationCard() {
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             申万31行业 20日/250日历史分位 + 截面排名，每周五收盘后生成
           </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.7 }}>
+            <b style={{ color: 'var(--text-secondary)' }}>短期分位</b>: 行业近20日涨跌幅在过去250日中的排名位置 &nbsp;
+            <b style={{ color: 'var(--text-secondary)' }}>长期分位</b>: 近250日涨跌幅在过去3年中的排名位置 &nbsp;
+            <b style={{ color: 'var(--text-secondary)' }}>截面分位</b>: 当日行业在31个行业中的相对强弱排名
+          </div>
           {latestRun?.status === 'done' && latestRun.industry_count > 0 && (
-            <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap' }}>
+            <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
               <SignalBadge label="过热" count={latestRun.hot_count} color="#e5534b" />
               <SignalBadge label="上升" count={latestRun.rising_count} color="#2980b9" />
               <SignalBadge label="启动候选" count={latestRun.startup_count} color="#27a644" />
               <SignalBadge label="退潮" count={latestRun.retreat_count} color="#c69026" />
             </div>
           )}
+          {/* Signal explanation - always visible */}
+          <div style={{
+            marginTop: '10px', padding: '10px 14px', borderRadius: '6px',
+            background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '6px 16px',
+            fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6,
+          }}>
+            {Object.entries(SIGNAL_DEFS).map(([, def]) => (
+              <div key={def.label} style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                <span style={{
+                  display: 'inline-block', padding: '1px 6px', borderRadius: '4px',
+                  background: def.bg, color: def.color, fontWeight: 600, fontSize: '10px',
+                  flexShrink: 0,
+                }}>{def.label}</span>
+                <span>{def.tip}</span>
+              </div>
+            ))}
+          </div>
           {latestRun?.status === 'failed' && latestRun.error_msg && (
             <div style={{
               marginTop: '8px', padding: '8px 12px', borderRadius: '6px',
