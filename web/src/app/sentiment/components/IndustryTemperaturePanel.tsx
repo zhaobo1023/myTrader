@@ -100,8 +100,10 @@ function MiniLineChart({ history, bands }: { history: IndustryHistoryPoint[]; ba
 function IndustryValuationHeatmap() {
   const [expanded, setExpanded] = useState(false);
   const [selectedIndustry, setSelectedIndustry] = useState<string | null>(null);
+  const [triggeringValuation, setTriggeringValuation] = useState(false);
+  const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery<ValuationTemperatureResponse>({
+  const { data, isLoading, refetch } = useQuery<ValuationTemperatureResponse>({
     queryKey: ['valuation-temperature'],
     queryFn: () => apiClient.get('/api/analysis/valuation/temperature').then(r => r.data),
     staleTime: 300000,
@@ -128,6 +130,29 @@ function IndustryValuationHeatmap() {
         <span style={{ fontSize: '15px', fontWeight: 590, color: 'var(--text-primary)' }}>行业估值温度</span>
         {data?.date && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{data.date}</span>}
         <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>按 5年PE分位 升序，绿=低估 红=高估</span>
+        <button
+          disabled={triggeringValuation}
+          onClick={async () => {
+            setTriggeringValuation(true);
+            setTriggerMsg(null);
+            try {
+              const res = await fetch(`${API_BASE}/api/analysis/valuation/trigger`, { method: 'POST' });
+              const j = await res.json();
+              if (!res.ok) { setTriggerMsg(j.detail || '触发失败'); return; }
+              setTriggerMsg(j.message || '计算完成');
+              refetch();
+            } catch { setTriggerMsg('请求失败'); }
+            finally { setTriggeringValuation(false); }
+          }}
+          style={{
+            padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 510,
+            background: 'var(--accent)', color: '#fff', border: 'none',
+            cursor: triggeringValuation ? 'wait' : 'pointer', opacity: triggeringValuation ? 0.6 : 1,
+          }}
+        >
+          {triggeringValuation ? '计算中...' : '手动计算'}
+        </button>
+        {triggerMsg && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{triggerMsg}</span>}
       </div>
 
       {isLoading && <div style={{ color: 'var(--text-muted)', fontSize: '13px', padding: '16px 0' }}>加载中...</div>}
@@ -1193,8 +1218,8 @@ export default function IndustryTemperaturePanel() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       <IndustryValuationHeatmap />
-      <LogBiasCard />
       <SwRotationCard />
+      <LogBiasCard />
     </div>
   );
 }

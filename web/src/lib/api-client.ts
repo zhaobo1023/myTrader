@@ -19,18 +19,81 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// Redirect to login on 401 Unauthorized
+// Auto-refresh token on 401 Unauthorized
+let isRefreshing = false;
+let pendingRequests: Array<{ resolve: (token: string) => void; reject: (err: unknown) => void }> = [];
+
+function onRefreshSuccess(newAccessToken: string) {
+  pendingRequests.forEach(({ resolve }) => resolve(newAccessToken));
+  pendingRequests = [];
+}
+
+function onRefreshFailure(err: unknown) {
+  pendingRequests.forEach(({ reject }) => reject(err));
+  pendingRequests = [];
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
-      // Skip redirect if already on auth pages
+  async (error) => {
+    const originalRequest = error.config;
+
+    if (
+      error.response?.status === 401 &&
+      typeof window !== 'undefined' &&
+      !originalRequest._retried
+    ) {
       const path = window.location.pathname;
-      if (path !== '/login' && path !== '/register') {
+      if (path === '/login' || path === '/register') {
+        return Promise.reject(error);
+      }
+
+      const refreshToken = localStorage.getItem('refresh_token');
+      if (!refreshToken) {
         localStorage.removeItem('access_token');
         window.location.href = '/login';
+        return Promise.reject(error);
+      }
+
+      if (isRefreshing) {
+        // Queue this request until refresh completes
+        return new Promise((resolve, reject) => {
+          pendingRequests.push({
+            resolve: (token: string) => {
+              originalRequest.headers.Authorization = `Bearer ${token}`;
+              originalRequest._retried = true;
+              resolve(apiClient(originalRequest));
+            },
+            reject: (err: unknown) => reject(err),
+          });
+        });
+      }
+
+      isRefreshing = true;
+      originalRequest._retried = true;
+
+      try {
+        const res = await axios.post(`${BASE_URL}/api/auth/refresh`, {
+          refresh_token: refreshToken,
+        });
+        const { access_token: newAccess, refresh_token: newRefresh } = res.data;
+        localStorage.setItem('access_token', newAccess);
+        localStorage.setItem('refresh_token', newRefresh);
+
+        originalRequest.headers.Authorization = `Bearer ${newAccess}`;
+        onRefreshSuccess(newAccess);
+        return apiClient(originalRequest);
+      } catch (refreshError) {
+        onRefreshFailure(refreshError);
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        window.location.href = '/login';
+        return Promise.reject(refreshError);
+      } finally {
+        isRefreshing = false;
       }
     }
+
     return Promise.reject(error);
   }
 );

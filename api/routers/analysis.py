@@ -824,6 +824,24 @@ async def get_annual_report_ingest_status(code: str = Query(..., description='6-
 # 估值分位 API
 # ---------------------------------------------------------------------------
 
+@router.post('/valuation/trigger')
+async def trigger_valuation_calc():
+    """Trigger incremental sw_industry_valuation calculation (run_daily)."""
+    import asyncio
+
+    def _run():
+        from data_analyst.fetchers.sw_industry_valuation_fetcher import run_daily
+        return run_daily()
+
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, _run)
+        return result
+    except Exception as exc:
+        logger.error('[valuation] trigger run_daily failed: %s', exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get('/valuation/temperature')
 async def industry_valuation_temperature(
     date: str = Query(None, description='交易日 YYYY-MM-DD，不传则取最新'),

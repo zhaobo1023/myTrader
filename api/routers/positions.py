@@ -147,6 +147,34 @@ async def delete_position(
     logger.info('[POSITIONS] user=%s deactivated position=%s', current_user.id, position_id)
 
 
+@router.post('/risk-scan')
+async def risk_scan(
+    current_user: User = Depends(get_current_user),
+):
+    """Trigger a risk scan for the current user's portfolio."""
+    import asyncio
+
+    def _do_scan(user_id: int):
+        import sys
+        import os
+        # Add trader project to path for risk_manager.scanner
+        trader_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'trader')
+        trader_path = os.path.normpath(trader_path)
+        if trader_path not in sys.path:
+            sys.path.insert(0, trader_path)
+
+        from risk_manager.scanner import scan_portfolio
+        return scan_portfolio(user_id=user_id, env='online')
+
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, _do_scan, current_user.id)
+        return result
+    except Exception as exc:
+        logger.error('[POSITIONS] risk_scan failed for user=%s: %s', current_user.id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.post('/import', status_code=status.HTTP_201_CREATED)
 async def import_positions(
     req: PositionImportRequest,
