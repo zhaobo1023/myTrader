@@ -241,12 +241,16 @@ class StockFundamentalAssessor(BaseAssessor):
         except Exception as e:
             logger.warning("trade_stock_factor 批量查询失败: %s", e)
 
-        # --- 批量计算 MA60（从 trade_stock_daily 最近60条）---
+        # --- 批量查询最新收盘价 + MA60（从 trade_stock_daily）---
+        # trade_stock_factor 可能延迟较大，优先从 trade_stock_daily 取收盘价
+        latest_close_map: Dict[str, float] = {}
         ma60_map: Dict[str, float] = {}
         try:
             rows = self._query(
                 """
-                SELECT stock_code, AVG(close_price) AS ma60
+                SELECT stock_code,
+                       MAX(CASE WHEN rn = 1 THEN close_price END) AS latest_close,
+                       AVG(CASE WHEN rn <= 60 THEN close_price END) AS ma60
                 FROM (
                     SELECT stock_code, close_price,
                            ROW_NUMBER() OVER (PARTITION BY stock_code ORDER BY trade_date DESC) AS rn
@@ -259,10 +263,12 @@ class StockFundamentalAssessor(BaseAssessor):
                 tuple(codes),
             )
             for r in rows:
+                if r['latest_close'] is not None:
+                    latest_close_map[r['stock_code']] = float(r['latest_close'])
                 if r['ma60'] is not None:
                     ma60_map[r['stock_code']] = float(r['ma60'])
         except Exception as e:
-            logger.warning("MA60 计算失败: %s", e)
+            logger.warning("trade_stock_daily 收盘价/MA60 查询失败: %s", e)
 
         # --- 批量查询 RPS（取每只最近1条）---
         rps_map: Dict[str, Dict] = {}
@@ -299,9 +305,9 @@ class StockFundamentalAssessor(BaseAssessor):
                 SELECT stock_code, sentiment, sentiment_strength
                 FROM trade_news_sentiment
                 WHERE stock_code IN ({})
-                  AND publish_time >= '{}'
-                """.format(placeholders, seven_days_ago),
-                tuple(codes),
+                  AND publish_time >= %s
+                """.format(placeholders),
+                tuple(codes) + (seven_days_ago,),
             )
             for r in rows:
                 news_map.setdefault(r['stock_code'], []).append(r['sentiment'])
@@ -316,9 +322,9 @@ class StockFundamentalAssessor(BaseAssessor):
                 SELECT stock_code, `signal`, event_category
                 FROM trade_event_signal
                 WHERE stock_code IN ({})
-                  AND trade_date >= '{}'
-                """.format(placeholders, seven_days_ago),
-                tuple(codes),
+                  AND trade_date >= %s
+                """.format(placeholders),
+                tuple(codes) + (seven_days_ago,),
             )
             for r in rows:
                 event_map.setdefault(r['stock_code'], []).append(r.get('signal', ''))
@@ -377,7 +383,8 @@ class StockFundamentalAssessor(BaseAssessor):
 
             # 技术止损 (25%)
             tech = technical_map.get(code, {})
-            close = tech.get('close')
+            # 优先使用 trade_stock_daily 的最新收盘价（更及时），回退到 factor 表
+            close = latest_close_map.get(code) or tech.get('close')
             ma60 = ma60_map.get(code)
             macd_signal = tech.get('macd_signal')
             # macd_signal > 0 表示金叉, < 0 表示死叉

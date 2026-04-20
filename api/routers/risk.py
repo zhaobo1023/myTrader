@@ -116,7 +116,7 @@ async def risk_stock(
         }
 
         # close_price from tech indicator — reused for personalized section
-        _tech_close_price: float | None = None
+        _tech_close_price = None
 
         # --- 通用：技术指标 (trade_stock_factor + MA from trade_stock_daily) ---
         try:
@@ -354,7 +354,7 @@ async def risk_stock(
                                 all_lookup = list(set(top_codes + cluster_codes))
                                 lookup_ph = ', '.join(['%s'] * len(all_lookup))
                                 lookup_rows = execute_query(
-                                    f"SELECT stock_code, stock_name, sw_level1 FROM trade_stock_basic WHERE stock_code IN ({lookup_ph})",
+                                    "SELECT stock_code, stock_name, sw_level1 FROM trade_stock_basic WHERE stock_code IN ({})".format(lookup_ph),
                                     tuple(all_lookup),
                                     env='online',
                                 )
