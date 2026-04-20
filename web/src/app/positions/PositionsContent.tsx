@@ -9,123 +9,240 @@ import type { StockSearchResult } from '@/lib/api-client';
 
 const LEVELS = ['L1', 'L2', 'L3'];
 
-// 风控规则标识符 -> 中文描述
-const RISK_RULE_LABELS: Record<string, string> = {
-  atr_position_scaler: 'ATR仓位过大',
-  max_position_pct: '单仓超限',
-  max_drawdown: '回撤超限',
-  stop_loss: '触及止损',
-  stop_profit: '触及止盈',
-  concentration: '集中度过高',
-  sector_concentration: '行业集中',
-  liquidity: '流动性不足',
-  price_drop: '价格大跌',
-  volume_anomaly: '成交量异常',
-  ma_break: '跌破均线',
-  rps_weak: 'RPS走弱',
-  no_price_data: '无法获取价格',
-  data_missing: '数据缺失',
+// 风险等级颜色映射
+const LEVEL_COLOR: Record<string, string> = {
+  LOW: '#16a34a',
+  MEDIUM: '#ca8a04',
+  HIGH: '#ea580c',
+  CRITICAL: '#dc2626',
 };
 
-function translateAlert(raw: string): string {
-  // 去掉前缀 [WARN] / [REJECT]
-  const stripped = raw.replace(/^\[(WARN|REJECT|HALT|INFO)\]\s*/i, '').trim();
-  // 冒号前是规则key，冒号后是详情
-  const colonIdx = stripped.indexOf(':');
-  if (colonIdx === -1) {
-    // 整段就是规则key
-    return RISK_RULE_LABELS[stripped] ?? stripped;
-  }
-  const key = stripped.slice(0, colonIdx).trim();
-  const detail = stripped.slice(colonIdx + 1).trim();
-  const label = RISK_RULE_LABELS[key] ?? key;
-  return detail ? `${label}：${detail}` : label;
+const LEVEL_BG: Record<string, string> = {
+  LOW: 'rgba(22,163,74,0.07)',
+  MEDIUM: 'rgba(202,138,4,0.07)',
+  HIGH: 'rgba(234,88,12,0.07)',
+  CRITICAL: 'rgba(220,38,38,0.08)',
+};
+
+const LEVEL_BORDER: Record<string, string> = {
+  LOW: 'rgba(22,163,74,0.22)',
+  MEDIUM: 'rgba(202,138,4,0.22)',
+  HIGH: 'rgba(234,88,12,0.22)',
+  CRITICAL: 'rgba(220,38,38,0.25)',
+};
+
+const LEVEL_LABEL: Record<string, string> = {
+  LOW: '低风险',
+  MEDIUM: '中等风险',
+  HIGH: '偏高风险',
+  CRITICAL: '极高风险',
+};
+
+// 分层风控扫描结果类型（V2）
+type DataStatus = {
+  name: string;
+  latest_date: string;
+  delay_days: number;
+  status: string;
+};
+
+type LayerResult = {
+  score: number;
+  level: string;
+  details: Record<string, unknown>;
+  suggestions: string[];
+};
+
+type MacroResult = LayerResult & { suggested_max_exposure: number };
+type RegimeResult = LayerResult & { market_state: string; avg_correlation: number; high_corr_pairs: [string, string, number][] };
+type SectorResult = LayerResult & { industry_breakdown: Record<string, number>; overvalued_industries: string[] };
+
+type StockResult = {
+  stock_code: string;
+  stock_name: string;
+  score: number;
+  sub_scores: Record<string, number>;
+  alerts: string[];
+  stop_loss_hit: boolean;
+};
+
+type LayeredRiskResult = {
+  scan_time: string;
+  user_id: number;
+  overall_score: number;
+  overall_suggestions: string[];
+  data_status: DataStatus[];
+  macro: MacroResult;
+  regime: RegimeResult;
+  sector: SectorResult;
+  stocks: StockResult[];
+};
+
+function levelColor(level: string) { return LEVEL_COLOR[level] ?? '#888'; }
+function levelBg(level: string) { return LEVEL_BG[level] ?? 'transparent'; }
+function levelBorder(level: string) { return LEVEL_BORDER[level] ?? 'rgba(0,0,0,0.1)'; }
+function levelLabel(level: string) { return LEVEL_LABEL[level] ?? level; }
+
+function ScoreChip({ score, level }: { score: number; level: string }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: '4px',
+      padding: '2px 8px', borderRadius: '4px',
+      background: levelBg(level), border: `1px solid ${levelBorder(level)}`,
+      fontSize: '12px', fontWeight: 600, color: levelColor(level),
+    }}>
+      {Math.round(score)} · {levelLabel(level)}
+    </span>
+  );
 }
 
-type ScanResult = {
-  portfolio_summary: Record<string, unknown>;
-  stock_alerts: Array<{ stock_code: string; stock_name: string; level: string; alerts: string[] }>;
-  portfolio_alerts: string[];
-};
+function LayerCard({ title, score, level, children }: { title: string; score: number; level: string; children?: React.ReactNode }) {
+  return (
+    <div style={{
+      borderRadius: '6px', border: `1px solid ${levelBorder(level)}`,
+      background: levelBg(level), padding: '10px 14px', marginBottom: '8px',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: children ? '8px' : 0 }}>
+        <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{title}</span>
+        <ScoreChip score={score} level={level} />
+      </div>
+      {children}
+    </div>
+  );
+}
 
-function ScanResultPanel({ result, onClose }: { result: ScanResult; onClose: () => void }) {
-  const isReject = (level: string) => level === 'REJECT' || level === 'HALT';
-  const rejectCount = result.stock_alerts.filter(sa => isReject(sa.level)).length;
-  const warnCount = result.stock_alerts.filter(sa => !isReject(sa.level)).length;
+function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClose: () => void }) {
+  const overallLevel =
+    result.overall_score >= 70 ? 'CRITICAL' :
+    result.overall_score >= 50 ? 'HIGH' :
+    result.overall_score >= 30 ? 'MEDIUM' : 'LOW';
+
+  const triggeredStocks = result.stocks.filter(s => s.stop_loss_hit || s.alerts.length > 0);
+  const normalStocks = result.stocks.filter(s => !s.stop_loss_hit && s.alerts.length === 0);
 
   return (
     <div style={{ marginBottom: '16px', borderRadius: '8px', background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', overflow: 'hidden' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>风控扫描结果</span>
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-            {String(result.portfolio_summary?.total_positions ?? '')}只持仓 · {String(result.portfolio_summary?.scan_date ?? '')}
-          </span>
-          {rejectCount > 0 && (
-            <span style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '4px', background: 'rgba(229,83,75,0.1)', color: '#e5534b', fontWeight: 600 }}>
-              {rejectCount}只需注意
-            </span>
-          )}
-          {warnCount > 0 && (
-            <span style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '4px', background: 'rgba(198,144,38,0.1)', color: '#c69026', fontWeight: 600 }}>
-              {warnCount}只有提示
-            </span>
-          )}
+          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>风控扫描结果 (V2)</span>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{result.scan_time}</span>
+          <ScoreChip score={result.overall_score} level={overallLevel} />
         </div>
         <button onClick={onClose} style={{ fontSize: '12px', color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px' }}>关闭</button>
       </div>
 
-      {result.portfolio_alerts.length === 0 && result.stock_alerts.length === 0 ? (
-        <div style={{ padding: '14px 16px', fontSize: '13px', color: '#27a644' }}>所有持仓通过风控检查，无异常。</div>
-      ) : (
-        <div style={{ padding: '12px 16px' }}>
-          {/* 组合级别告警 */}
-          {result.portfolio_alerts.length > 0 && (
-            <div style={{ marginBottom: '12px' }}>
-              {result.portfolio_alerts.map((a, i) => (
-                <div key={i} style={{ fontSize: '13px', color: '#c69026', padding: '6px 10px', background: 'rgba(198,144,38,0.06)', borderRadius: '5px', marginBottom: '4px' }}>
-                  {translateAlert(a)}
-                </div>
-              ))}
+      <div style={{ padding: '12px 16px' }}>
+        {/* L1 宏观 */}
+        <LayerCard title="L1 宏观环境" score={result.macro.score} level={result.macro.level}>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            建议最大仓位: {Math.round(result.macro.suggested_max_exposure * 100)}%
+          </div>
+          {result.macro.suggestions.length > 0 && (
+            <ul style={{ margin: '4px 0 0 0', paddingLeft: '16px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+              {result.macro.suggestions.map((s, i) => <li key={i}>{s}</li>)}
+            </ul>
+          )}
+        </LayerCard>
+
+        {/* L2 市场状态 */}
+        <LayerCard title="L2 市场状态" score={result.regime.score} level={result.regime.level}>
+          {result.regime.market_state && (
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              市场状态: {result.regime.market_state}
+              {' · '}平均相关性: {result.regime.avg_correlation.toFixed(3)}
             </div>
           )}
+          {result.regime.suggestions.length > 0 && (
+            <ul style={{ margin: '4px 0 0 0', paddingLeft: '16px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+              {result.regime.suggestions.map((s, i) => <li key={i}>{s}</li>)}
+            </ul>
+          )}
+        </LayerCard>
 
-          {/* 个股告警列表 */}
-          {result.stock_alerts.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {result.stock_alerts.map((sa, i) => {
-                const reject = isReject(sa.level);
-                return (
+        {/* L3 行业暴露 */}
+        <LayerCard title="L3 行业暴露" score={result.sector.score} level={result.sector.level}>
+          {Object.keys(result.sector.industry_breakdown).length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '4px' }}>
+              {Object.entries(result.sector.industry_breakdown)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 6)
+                .map(([ind, ratio]) => (
+                  <span key={ind} style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px', background: 'var(--bg-canvas)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)' }}>
+                    {ind} {(ratio * 100).toFixed(0)}%
+                  </span>
+                ))}
+            </div>
+          )}
+          {result.sector.suggestions.length > 0 && (
+            <ul style={{ margin: '4px 0 0 0', paddingLeft: '16px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+              {result.sector.suggestions.map((s, i) => <li key={i}>{s}</li>)}
+            </ul>
+          )}
+        </LayerCard>
+
+        {/* L4 个股预警 */}
+        {result.stocks.length > 0 && (
+          <div style={{ borderRadius: '6px', border: '1px solid var(--border-subtle)', padding: '10px 14px', marginBottom: '8px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+              L4 个股预警
+              {triggeredStocks.length > 0 && (
+                <span style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 400, color: '#ea580c' }}>{triggeredStocks.length}只触发预警</span>
+              )}
+            </div>
+
+            {triggeredStocks.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '8px' }}>
+                {triggeredStocks.map((s, i) => (
                   <div key={i} style={{
                     display: 'flex', alignItems: 'flex-start', gap: '10px',
-                    padding: '8px 10px', borderRadius: '6px',
-                    background: reject ? 'rgba(229,83,75,0.05)' : 'rgba(198,144,38,0.04)',
-                    border: `1px solid ${reject ? 'rgba(229,83,75,0.18)' : 'rgba(198,144,38,0.15)'}`,
+                    padding: '7px 10px', borderRadius: '5px',
+                    background: s.stop_loss_hit ? 'rgba(220,38,38,0.05)' : 'rgba(234,88,12,0.05)',
+                    border: `1px solid ${s.stop_loss_hit ? 'rgba(220,38,38,0.2)' : 'rgba(234,88,12,0.18)'}`,
                   }}>
-                    {/* 股票名 */}
                     <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', minWidth: '72px', whiteSpace: 'nowrap' }}>
-                      {sa.stock_name || sa.stock_code}
+                      {s.stock_name || s.stock_code}
                     </span>
-                    {/* 告警标签 */}
+                    <span style={{ fontSize: '12px', color: 'var(--text-muted)', minWidth: '34px' }}>
+                      {Math.round(s.score)}分
+                    </span>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                      {sa.alerts.map((a, j) => (
-                        <span key={j} style={{
-                          fontSize: '12px', padding: '2px 7px', borderRadius: '4px',
-                          background: reject ? 'rgba(229,83,75,0.1)' : 'rgba(198,144,38,0.1)',
-                          color: reject ? '#e5534b' : '#c69026',
-                        }}>
-                          {translateAlert(a)}
-                        </span>
+                      {s.stop_loss_hit && (
+                        <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px', background: 'rgba(220,38,38,0.1)', color: '#dc2626' }}>触及止损</span>
+                      )}
+                      {s.alerts.map((a, j) => (
+                        <span key={j} style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px', background: 'rgba(234,88,12,0.1)', color: '#ea580c' }}>{a}</span>
                       ))}
                     </div>
                   </div>
-                );
-              })}
+                ))}
+              </div>
+            )}
+
+            {normalStocks.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                {normalStocks.map((s, i) => (
+                  <span key={i} style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '3px', background: 'rgba(22,163,74,0.07)', border: '1px solid rgba(22,163,74,0.18)', color: '#16a34a' }}>
+                    {s.stock_name || s.stock_code} {Math.round(s.score)}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 综合建议 */}
+        {result.overall_suggestions.length > 0 && (
+          <div style={{ borderRadius: '6px', border: `1px solid ${levelBorder(overallLevel)}`, background: levelBg(overallLevel), padding: '10px 14px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: levelColor(overallLevel), marginBottom: '6px' }}>
+              综合建议 · 总分 {Math.round(result.overall_score)}
             </div>
-          )}
-        </div>
-      )}
+            <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+              {result.overall_suggestions.map((s, i) => <li key={i} style={{ marginBottom: '3px' }}>{s}</li>)}
+            </ul>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -138,7 +255,7 @@ export default function PositionsContent() {
   const [movingId, setMovingId] = useState<number | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
-  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [scanResult, setScanResult] = useState<LayeredRiskResult | null>(null);
 
   const addCand = useAddToCandidate();
 
@@ -246,7 +363,7 @@ export default function PositionsContent() {
               setScanning(true);
               setScanResult(null);
               try {
-                const res = await apiClient.post('/api/positions/risk-scan', {}, { timeout: 60000 });
+                const res = await apiClient.get('/api/risk/scan', { timeout: 90000 });
                 setScanResult(res.data);
               } catch { setActionMsg('风控扫描失败'); }
               finally { setScanning(false); }
@@ -329,7 +446,7 @@ export default function PositionsContent() {
       )}
 
       {scanResult && (
-        <ScanResultPanel result={scanResult} onClose={() => setScanResult(null)} />
+        <RiskScanV2Panel result={scanResult} onClose={() => setScanResult(null)} />
       )}
 
       {isLoading && <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>加载中...</div>}

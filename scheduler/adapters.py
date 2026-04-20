@@ -553,3 +553,23 @@ def run_dashboard_compute(dry_run: bool = False, env: str = 'online'):
             logger.info("[OK] Dashboard cache warmed in Redis")
         except Exception as e:
             logger.warning("[WARN] Failed to warm Redis cache: %s", e)
+
+
+def run_risk_assessment(user_id: int = 7, dry_run: bool = False, env: str = 'online'):
+    """Daily risk assessment scan and report generation."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_risk_assessment: would scan portfolio for user_id=%d (env=%s)", user_id, env)
+        return
+
+    from scheduler.task_logger import TaskLogger
+    from data_analyst.risk_assessment.scanner import scan_portfolio_v2
+    from data_analyst.risk_assessment.report import generate_report_v2
+    from data_analyst.risk_assessment.storage import save_scan_result
+
+    with TaskLogger('risk_assessment', 'risk', env=env):
+        result = scan_portfolio_v2(user_id=user_id, env=env)
+        generate_report_v2(result)
+        report_path = save_scan_result(result, env=env)
+        logger.info("[OK] risk assessment done: overall_score=%.1f level=%s saved to %s",
+                    result.overall_score, result.macro.level if result.macro else '?', report_path)
+        return report_path

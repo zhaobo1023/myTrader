@@ -34,6 +34,7 @@ from api.routers.theme_pool import router as theme_pool_router
 from api.routers.candidate_pool import router as candidate_pool_router
 from api.routers.sim_pool import router as sim_pool_router
 from api.routers.positions import router as positions_router
+from api.routers.risk import router as risk_router
 from api.routers.inbox import router as inbox_router
 from api.routers.agent import router as agent_router
 
@@ -149,6 +150,7 @@ app.include_router(theme_pool_router)
 app.include_router(candidate_pool_router)
 app.include_router(sim_pool_router)
 app.include_router(positions_router)
+app.include_router(risk_router)
 app.include_router(inbox_router)
 app.include_router(documents_router)
 app.include_router(agent_router)

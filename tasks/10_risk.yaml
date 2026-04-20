@@ -1,0 +1,15 @@
+# 10_risk.yaml - 风控扫描调度
+# 每日收盘后触发，依赖技术指标和 RPS 计算完成
+
+tasks:
+  - id: risk_scan_report
+    name: "每日风控扫描报告"
+    module: scheduler.adapters
+    func: run_risk_assessment
+    tags: [risk, daily]
+    schedule: "after_gate"
+    depends_on:
+      - calc_technical
+      - calc_rps
+    params:
+      user_id: 7
