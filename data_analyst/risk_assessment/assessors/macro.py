@@ -3,7 +3,7 @@
 import logging
 from data_analyst.risk_assessment.assessors.base import BaseAssessor
 from data_analyst.risk_assessment.schemas import MacroRiskResult, score_to_level
-from data_analyst.risk_assessment.config import MACRO_WEIGHTS, MACRO_POSITION_LIMITS
+from data_analyst.risk_assessment.config import MACRO_WEIGHTS, MACRO_POSITION_LIMITS, BULL_BEAR_REGIME_SCORES
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +256,22 @@ class MacroRiskAssessor(BaseAssessor):
                 scores['volume'] = 70  # 缩量 -> 观望/萎靡
             interpretations['volume'] = self._interpret_volume(vol_today, vol_avg5)
 
+        # --- 9. 牛熊三指标状态 ---
+        try:
+            rows = self._query(
+                "SELECT regime, composite_score FROM trade_bull_bear_signal "
+                "ORDER BY calc_date DESC LIMIT 1"
+            )
+            if rows and rows[0]['regime']:
+                regime = rows[0]['regime']
+                composite = int(rows[0]['composite_score'] or 0)
+                raw_values['bull_bear_regime'] = regime
+                raw_values['bull_bear_composite'] = composite
+                scores['bull_bear_regime'] = float(BULL_BEAR_REGIME_SCORES.get(regime, 50))
+                interpretations['bull_bear_regime'] = self._interpret_bull_bear(regime, composite)
+        except Exception as e:
+            logger.warning("trade_bull_bear_signal 查询失败: %s", e)
+
         # --- 加权合并 ---
         available_keys = [k for k in MACRO_WEIGHTS if k in scores]
         if not available_keys:
@@ -372,3 +388,10 @@ class MacroRiskAssessor(BaseAssessor):
     @staticmethod
     def _interpret_volume(vol_today, vol_avg5) -> str:
         return "今日成交 {:.0f}亿，5日均量 {:.0f}亿".format(vol_today, vol_avg5)
+
+    @staticmethod
+    def _interpret_bull_bear(regime: str, composite: int) -> str:
+        regime_cn = {'BULL': '牛市', 'BEAR': '熊市', 'NEUTRAL': '震荡'}
+        return "牛熊三指标判断: {} (综合分 {:+d})".format(
+            regime_cn.get(regime, regime), composite
+        )

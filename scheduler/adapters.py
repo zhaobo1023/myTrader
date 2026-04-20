@@ -555,6 +555,59 @@ def run_dashboard_compute(dry_run: bool = False, env: str = 'online'):
             logger.warning("[WARN] Failed to warm Redis cache: %s", e)
 
 
+# ---------------------------------------------------------------------------
+# Bull/Bear + Crowding + Strategy Weights adapters
+# ---------------------------------------------------------------------------
+
+def run_bull_bear_monitor(dry_run: bool = False, env: str = 'online'):
+    """Calculate bull/bear three-indicator regime signals."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_bull_bear_monitor: would compute bull/bear regime signals (env=%s)", env)
+        return
+
+    from datetime import date, timedelta
+    from scheduler.task_logger import TaskLogger
+    from data_analyst.bull_bear_monitor.run_monitor import BullBearMonitor
+
+    with TaskLogger('calc_bull_bear_signal', 'macro', env=env):
+        monitor = BullBearMonitor(env=env)
+        start = (date.today() - timedelta(days=365)).strftime('%Y-%m-%d')
+        monitor.run(start_date=start, save_db=True, do_report=True)
+        logger.info("[OK] bull/bear monitor done")
+
+
+def run_crowding_monitor(dry_run: bool = False, env: str = 'online'):
+    """Calculate crowding concentration scores."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_crowding_monitor: would compute crowding scores (env=%s)", env)
+        return
+
+    from datetime import date, timedelta
+    from scheduler.task_logger import TaskLogger
+    from risk_manager.crowding.run_monitor import CrowdingMonitor
+
+    with TaskLogger('calc_crowding', 'risk', env=env):
+        monitor = CrowdingMonitor(env=env)
+        start = (date.today() - timedelta(days=90)).strftime('%Y-%m-%d')
+        monitor.run(start_date=start, save_db=True, do_report=True)
+        logger.info("[OK] crowding monitor done")
+
+
+def run_strategy_allocator(dry_run: bool = False, env: str = 'online'):
+    """Calculate strategy portfolio weights based on regime + crowding."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_strategy_allocator: would compute strategy weights (env=%s)", env)
+        return
+
+    from scheduler.task_logger import TaskLogger
+    from strategist.portfolio_allocator.run_allocator import PortfolioAllocator
+
+    with TaskLogger('calc_strategy_weights', 'strategy', env=env):
+        allocator = PortfolioAllocator(env=env)
+        allocator.run(save_db=True, do_report=True)
+        logger.info("[OK] strategy allocator done")
+
+
 def run_risk_assessment(user_id: int = 7, dry_run: bool = False, env: str = 'online'):
     """Daily risk assessment scan and report generation."""
     if dry_run:

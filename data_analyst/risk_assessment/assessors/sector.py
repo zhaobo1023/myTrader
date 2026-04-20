@@ -149,8 +149,22 @@ class SectorRiskAssessor(BaseAssessor):
         held_industries = list(industry_breakdown.keys())
         hedge_score = _hedge_score(held_industries)
 
-        # --- SVD 行业内聚性 (20%) - 暂时跳过，默认50分 ---
+        # --- SVD 行业内聚性 / 拥挤度 (20%) ---
         svd_cohesion_score = 50.0
+        try:
+            rows = self._query(
+                """
+                SELECT crowding_score, crowding_level
+                FROM trade_crowding_score
+                WHERE dimension = 'overall'
+                ORDER BY calc_date DESC
+                LIMIT 1
+                """
+            )
+            if rows and rows[0]['crowding_score'] is not None:
+                svd_cohesion_score = float(rows[0]['crowding_score'])
+        except Exception as e:
+            logger.warning("trade_crowding_score 查询失败，使用默认值: %s", e)
 
         # --- 加权合并 ---
         final_score = round(

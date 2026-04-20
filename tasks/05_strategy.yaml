@@ -14,6 +14,21 @@ tasks:
       - calc_quality_factor
     params: {}
 
+  - id: calc_strategy_weights
+    name: "Calculate strategy portfolio weights"
+    module: scheduler.adapters
+    func: run_strategy_allocator
+    tags: [strategy, daily]
+    schedule: "after_gate"
+    depends_on:
+      - calc_bull_bear_signal
+      - calc_crowding
+    params: {}
+    retry:
+      max_attempts: 2
+      delay_seconds: 30
+    timeout_seconds: 300
+
   - id: settle_paper_trading
     name: "Settle paper trading"
     module: scheduler.adapters

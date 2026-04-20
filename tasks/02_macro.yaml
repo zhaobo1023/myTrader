@@ -36,6 +36,20 @@ tasks:
       delay_seconds: 60
     timeout_seconds: 300
 
+  - id: calc_bull_bear_signal
+    name: "Calculate bull/bear regime signals"
+    module: scheduler.adapters
+    func: run_bull_bear_monitor
+    tags: [macro, risk, daily]
+    schedule: "after_gate"
+    depends_on:
+      - fetch_macro_data
+    params: {}
+    retry:
+      max_attempts: 2
+      delay_seconds: 30
+    timeout_seconds: 300
+
   - id: calc_market_overview
     name: "Compute market overview signals"
     module: data_analyst.market_overview.calculator

@@ -55,7 +55,28 @@ class RegimeRiskAssessor(BaseAssessor):
         sub_scores['mutation'] = mutation_score
         details['is_mutation'] = is_mutation
 
-        # --- 持仓相关性 (45%) ---
+        # --- 拥挤度 (20%) ---
+        crowding_score = 50.0
+        try:
+            rows = self._query(
+                """
+                SELECT crowding_score, crowding_level
+                FROM trade_crowding_score
+                WHERE dimension = 'overall'
+                ORDER BY calc_date DESC
+                LIMIT 1
+                """
+            )
+            if rows and rows[0]['crowding_score'] is not None:
+                crowding_score = float(rows[0]['crowding_score'])
+                details['crowding_level'] = rows[0]['crowding_level'] or ''
+                details['crowding_score'] = crowding_score
+        except Exception as e:
+            logger.warning("trade_crowding_score 查询失败: %s", e)
+
+        sub_scores['crowding'] = crowding_score
+
+        # --- 持仓相关性 (35%) ---
         avg_corr = 0.0
         corr_score = 25.0
         high_corr_pairs: List[Tuple[str, str, float]] = []
@@ -105,9 +126,12 @@ class RegimeRiskAssessor(BaseAssessor):
         details['avg_correlation'] = avg_corr
         details['high_corr_pairs_count'] = len(high_corr_pairs)
 
-        # --- 加权合并 ---
+        # --- 加权合并 (SVD 30% + 突变 10% + 拥挤度 20% + 相关性 40%) ---
         final_score = round(
-            svd_score * 0.40 + mutation_score * 0.15 + corr_score * 0.45,
+            svd_score * 0.30
+            + mutation_score * 0.10
+            + crowding_score * 0.20
+            + corr_score * 0.40,
             2,
         )
         level = score_to_level(final_score)
@@ -126,6 +150,14 @@ class RegimeRiskAssessor(BaseAssessor):
             )
         if is_mutation:
             suggestions.append("市场结构发生突变，建议谨慎操作")
+        if crowding_score >= 75:
+            suggestions.append(
+                "市场拥挤度达到 CRITICAL 水平 ({:.0f}分)，动量策略需减仓".format(crowding_score)
+            )
+        elif crowding_score >= 50:
+            suggestions.append(
+                "市场拥挤度偏高 ({:.0f}分)，注意趋势策略的回撤风险".format(crowding_score)
+            )
 
         details['sub_scores'] = sub_scores
 

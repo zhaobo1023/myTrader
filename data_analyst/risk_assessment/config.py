@@ -9,18 +9,22 @@ MACRO_POSITION_LIMITS = {
     (85, 100): 0.3,
 }
 
-# L1 权重 (9维)
+# L1 权重 (10维)
 MACRO_WEIGHTS = {
-    'fear_index': 0.20,
-    'vix': 0.12,
-    'northflow': 0.10,
-    'yield_spread': 0.08,
-    'commodity_fx': 0.08,
-    'margin': 0.12,
-    'breadth': 0.12,
-    'equity_bond': 0.10,
-    'volume': 0.08,
+    'fear_index': 0.18,
+    'vix': 0.10,
+    'northflow': 0.09,
+    'yield_spread': 0.07,
+    'commodity_fx': 0.07,
+    'margin': 0.11,
+    'breadth': 0.11,
+    'equity_bond': 0.09,
+    'volume': 0.06,
+    'bull_bear_regime': 0.12,
 }
+
+# L1 牛熊状态风险映射
+BULL_BEAR_REGIME_SCORES = {'BULL': 20, 'NEUTRAL': 50, 'BEAR': 80}
 
 # L2 SVD 市场状态风险分
 SVD_STATE_SCORES = {'齐涨齐跌': 85, '板块分化': 50, '个股行情': 20}
@@ -49,4 +53,6 @@ DATA_MAX_DELAY_DAYS = {
     'trade_technical_indicator': 1,
     'trade_stock_rps': 1,
     'trade_news_sentiment': 3,
+    'trade_bull_bear_signal': 2,
+    'trade_crowding_score': 2,
 }

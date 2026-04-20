@@ -2,6 +2,20 @@
 # 每日收盘后触发，依赖技术指标和 RPS 计算完成
 
 tasks:
+  - id: calc_crowding
+    name: "Calculate crowding concentration scores"
+    module: scheduler.adapters
+    func: run_crowding_monitor
+    tags: [risk, daily]
+    schedule: "after_gate"
+    depends_on:
+      - calc_svd_monitor
+    params: {}
+    retry:
+      max_attempts: 2
+      delay_seconds: 30
+    timeout_seconds: 300
+
   - id: risk_scan_report
     name: "每日风控扫描报告"
     module: scheduler.adapters
@@ -11,5 +25,7 @@ tasks:
     depends_on:
       - calc_technical
       - calc_rps
+      - calc_crowding
+      - calc_bull_bear_signal
     params:
       user_id: 7

@@ -823,27 +823,38 @@ async def trigger_task(
         raise HTTPException(status_code=400, detail='task_id is required')
 
     def _run():
+        import os
         from scheduler.loader import load_tasks
         from scheduler.executor import execute_task
-        from scheduler.watchdog import _today_runs
+        from scheduler.state import ensure_table
+
+        env = os.getenv('DB_ENV', 'local')
 
         tasks = load_tasks()
         task = next((t for t in tasks if t['id'] == task_id), None)
         if task is None:
             raise ValueError(f'Task not found: {task_id}')
 
-        today_map = _today_runs(env='local')
+        # Ensure task_runs table exists before querying it
+        ensure_table(env=env)
+
         if force:
             # Pretend all deps succeeded
             completed = {d: 'success' for d in task.get('depends_on', [])}
         else:
-            completed = dict(today_map)
+            from scheduler.watchdog import _today_runs
+            try:
+                today_map = _today_runs(env=env)
+                completed = dict(today_map)
+            except Exception as e:
+                logger.warning('[SCHEDULER] _today_runs failed, forcing: %s', e)
+                completed = {d: 'success' for d in task.get('depends_on', [])}
 
         result = execute_task(
             task,
             completed=completed,
             dry_run=False,
-            env='local',
+            env=env,
             triggered_by=f'admin:{current_user.username}',
         )
         return result
@@ -867,8 +878,12 @@ async def run_watchdog(
     import asyncio
 
     def _check():
+        import os
+        from scheduler.state import ensure_table
         from scheduler.watchdog import check_missed_runs
-        missed = check_missed_runs(env='local', dry_run=False)
+        env = os.getenv('DB_ENV', 'local')
+        ensure_table(env=env)
+        missed = check_missed_runs(env=env, dry_run=False)
         return [
             {
                 'id': t['id'],
