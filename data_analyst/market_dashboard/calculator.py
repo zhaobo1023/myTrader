@@ -464,7 +464,7 @@ def _get_latest_svd() -> dict:
             "FROM trade_svd_market_state "
             "WHERE universe_type=%s AND window_size=%s "
             "ORDER BY calc_date DESC LIMIT 1",
-            ('全A', 60),
+            ('全A', 20),
         )
         if rows:
             r = rows[0]
