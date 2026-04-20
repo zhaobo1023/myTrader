@@ -10,6 +10,7 @@ tasks:
     schedule: "17:30"
     depends_on: []
     params: {}
+    alert_on_failure: true
 
   - id: calc_macro_factors
     name: "Calculate macro factors"

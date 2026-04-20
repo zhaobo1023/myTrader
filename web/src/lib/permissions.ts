@@ -15,7 +15,6 @@ export interface RouteConfig {
 // Routes that require specific permissions
 export const PROTECTED_ROUTES: Record<string, RoutePermission> = {
   '/data-health': {
-    tier: ['pro'],
     role: ['admin'],
   },
   '/admin': {
@@ -26,7 +25,6 @@ export const PROTECTED_ROUTES: Record<string, RoutePermission> = {
 // Navigation items with their permission requirements
 export const NAV_PERMISSIONS: Record<string, RoutePermission> = {
   '/data-health': {
-    tier: ['pro'],
     role: ['admin'],
   },
 };

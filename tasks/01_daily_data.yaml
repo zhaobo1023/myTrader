@@ -23,3 +23,4 @@ tasks:
       max_attempts: 2
       delay_seconds: 120
     timeout_seconds: 7200   # ~5000 stocks * 0.5s / 3 workers ~ 14 min; allow 2h for backfill
+    alert_on_failure: true

@@ -12,6 +12,7 @@ tasks:
       - _gate_daily_price
     params:
       env: online
+    alert_on_failure: true
 
   - id: calc_svd_monitor
     name: "SVD market state monitor"
@@ -42,6 +43,7 @@ tasks:
     depends_on:
       - _gate_daily_price
     params: {}
+    alert_on_failure: true
 
   - id: monitor_candidate_pool
     name: "Candidate pool daily monitor + Feishu push"

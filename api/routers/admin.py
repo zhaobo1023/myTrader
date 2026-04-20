@@ -696,3 +696,167 @@ async def list_log_files(current_user: User = Depends(require_admin)):
         else:
             result.append({'file': name, 'size_bytes': 0, 'size_kb': 0})
     return {'logs': result}
+
+
+# ============================================================
+# Scheduler management
+# ============================================================
+
+@router.get('/scheduler/tasks')
+async def list_scheduler_tasks(
+    current_user: User = Depends(require_admin),
+):
+    """
+    Return all scheduler tasks with schedule config, today's run status,
+    last run info, and whether dependencies are satisfied.
+    """
+    import asyncio
+    from datetime import datetime
+
+    def _build():
+        from scheduler.loader import load_tasks
+        from scheduler.watchdog import _today_runs
+        from config.db import execute_query
+
+        tasks = load_tasks()
+        today_map = _today_runs(env='local')
+
+        # Latest run per task (any day)
+        latest_map: dict = {}
+        try:
+            rows = execute_query(
+                """
+                SELECT r.task_id, r.status, r.started_at, r.finished_at,
+                       r.duration_s, r.error_msg, r.triggered_by
+                FROM task_runs r
+                INNER JOIN (
+                    SELECT task_id, MAX(started_at) AS max_st
+                    FROM task_runs
+                    GROUP BY task_id
+                ) mx ON r.task_id = mx.task_id AND r.started_at = mx.max_st
+                """,
+                env='local',
+            )
+            for row in rows:
+                latest_map[row['task_id']] = {
+                    'status': row['status'],
+                    'started_at': str(row['started_at']) if row['started_at'] else None,
+                    'finished_at': str(row['finished_at']) if row['finished_at'] else None,
+                    'duration_s': float(row['duration_s'] or 0),
+                    'error_msg': row['error_msg'],
+                    'triggered_by': row['triggered_by'],
+                }
+        except Exception as e:
+            logger.warning('[SCHEDULER] latest run query failed: %s', e)
+
+        # Build all-task id set for dep checks
+        all_task_ids = {t['id'] for t in tasks}
+        result = []
+        for task in tasks:
+            tid = task['id']
+            deps = task.get('depends_on', [])
+            deps_ok = all(today_map.get(d) in ('success',) for d in deps)
+            deps_detail = [
+                {'id': d, 'status': today_map.get(d, 'not_run')}
+                for d in deps
+            ]
+            today_status = today_map.get(tid)
+            result.append({
+                'id': tid,
+                'name': task.get('name', tid),
+                'group': task.get('tags', [''])[0] if task.get('tags') else '',
+                'schedule': task.get('schedule', ''),
+                'enabled': task.get('enabled', True),
+                'depends_on': deps,
+                'deps_detail': deps_detail,
+                'deps_ok': deps_ok or len(deps) == 0,
+                'today_status': today_status,
+                'latest_run': latest_map.get(tid),
+                'alert_on_failure': task.get('alert_on_failure', False),
+            })
+        return result
+
+    loop = asyncio.get_running_loop()
+    tasks = await loop.run_in_executor(None, _build)
+    return {'tasks': tasks, 'as_of': __import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+
+@router.post('/scheduler/trigger')
+async def trigger_task(
+    payload: dict,
+    current_user: User = Depends(require_admin),
+):
+    """
+    Manually trigger a task by ID.
+
+    Body: { "task_id": "fetch_stock_daily", "force": false }
+    force=true ignores dep checks and runs even if deps haven't run today.
+    """
+    import asyncio
+
+    task_id = payload.get('task_id', '').strip()
+    force = bool(payload.get('force', False))
+    if not task_id:
+        raise HTTPException(status_code=400, detail='task_id is required')
+
+    def _run():
+        from scheduler.loader import load_tasks
+        from scheduler.executor import execute_task
+        from scheduler.watchdog import _today_runs
+
+        tasks = load_tasks()
+        task = next((t for t in tasks if t['id'] == task_id), None)
+        if task is None:
+            raise ValueError(f'Task not found: {task_id}')
+
+        today_map = _today_runs(env='local')
+        if force:
+            # Pretend all deps succeeded
+            completed = {d: 'success' for d in task.get('depends_on', [])}
+        else:
+            completed = dict(today_map)
+
+        result = execute_task(
+            task,
+            completed=completed,
+            dry_run=False,
+            env='local',
+            triggered_by=f'admin:{current_user.username}',
+        )
+        return result
+
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _run)
+        return {'task_id': task_id, 'result': result}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error('[SCHEDULER] trigger failed for %s: %s', task_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post('/scheduler/watchdog')
+async def run_watchdog(
+    current_user: User = Depends(require_admin),
+):
+    """Run the missed-run watchdog check and return detected issues."""
+    import asyncio
+
+    def _check():
+        from scheduler.watchdog import check_missed_runs
+        missed = check_missed_runs(env='local', dry_run=False)
+        return [
+            {
+                'id': t['id'],
+                'name': t.get('name', t['id']),
+                'schedule': t.get('schedule', ''),
+                'missed_by_minutes': t.get('missed_by_minutes', 0),
+                'last_status_today': t.get('last_status_today'),
+            }
+            for t in missed
+        ]
+
+    loop = asyncio.get_running_loop()
+    missed = await loop.run_in_executor(None, _check)
+    return {'missed_count': len(missed), 'missed': missed}

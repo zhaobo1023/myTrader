@@ -14,3 +14,19 @@ tasks:
       prod:
         enabled: true
         timeout: 300
+
+  - id: watchdog_missed_runs
+    name: "Watchdog: detect and retry missed scheduled tasks"
+    module: scheduler.watchdog
+    func: check_missed_runs
+    tags: [health, daily]
+    schedule: "21:30"  # Run once late evening to catch any missed day tasks
+    depends_on: []
+    params:
+      dry_run: false
+    alert_on_failure: false  # Watchdog itself failing is not critical
+    env:
+      local:
+        enabled: false
+      prod:
+        enabled: true

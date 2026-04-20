@@ -15,6 +15,7 @@ tasks:
     retry:
       max_attempts: 1
     timeout_seconds: 3600
+    alert_on_failure: true
 
   - id: calc_basic_factor
     name: "Calculate basic factors"
@@ -25,6 +26,7 @@ tasks:
     depends_on:
       - _gate_daily_price
     params: {}
+    alert_on_failure: true
 
   - id: calc_extended_factor
     name: "Calculate extended factors"
