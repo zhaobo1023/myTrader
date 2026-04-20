@@ -1323,16 +1323,31 @@ function pnlColor(v: number | null): string {
   return v > 0 ? '#27a644' : v < 0 ? '#e5534b' : 'var(--text-muted)';
 }
 
-function RiskTab({ stock }: { stock: StockOption }) {
+// 判断当前是否在财报季（1-4月、7-9月）
+function isEarningsSeason(): boolean {
+  const m = new Date().getMonth() + 1;
+  return (m >= 1 && m <= 4) || (m >= 7 && m <= 9);
+}
+
+function RiskTab({ stock, onTabChange }: { stock: StockOption; onTabChange: (t: StockTab) => void }) {
   const [data, setData] = useState<StockRiskData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [newsStatus, setNewsStatus] = useState<'idle' | 'loading' | 'done'>('idle');
+  const [techStatus, setTechStatus] = useState<'idle' | 'loading' | 'done'>('idle');
+  const [fundStatus, setFundStatus] = useState<'idle' | 'loading' | 'done' | 'skipped'>('skipped');
+  const inEarnings = isEarningsSeason();
 
   useEffect(() => {
     setLoading(true);
     setError(null);
     setData(null);
-    fetch(`${API_BASE}/api/risk/stock/${encodeURIComponent(stock.stock_code)}`)
+    const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    // 1. 拉取风控数据（主请求）
+    fetch(`${API_BASE}/api/risk/stock/${encodeURIComponent(stock.stock_code)}`, { headers })
       .then((r) => {
         if (!r.ok) throw new Error(`请求失败 (${r.status})`);
         return r.json();
@@ -1340,7 +1355,39 @@ function RiskTab({ stock }: { stock: StockOption }) {
       .then(setData)
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [stock.stock_code]);
+
+    // 2. 后台触发最新新闻拉取
+    setNewsStatus('loading');
+    fetch(`${API_BASE}/api/analysis/stock-news?code=${encodeURIComponent(stock.stock_code)}&days=7`, { headers })
+      .then(() => setNewsStatus('done'))
+      .catch(() => setNewsStatus('done'));
+
+    // 3. 后台触发技术面报告生成（fire-and-forget）
+    setTechStatus('loading');
+    fetch(`${API_BASE}/api/analysis/report/submit`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        stock_code: stock.stock_code,
+        stock_name: stock.stock_name || stock.stock_code,
+        report_type: 'technical_report',
+      }),
+    }).then(() => setTechStatus('done')).catch(() => setTechStatus('done'));
+
+    // 4. 财报季：触发基本面报告生成
+    if (inEarnings) {
+      setFundStatus('loading');
+      fetch(`${API_BASE}/api/analysis/report/submit`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          stock_code: stock.stock_code,
+          stock_name: stock.stock_name || stock.stock_code,
+          report_type: 'fundamental',
+        }),
+      }).then(() => setFundStatus('done')).catch(() => setFundStatus('done'));
+    }
+  }, [stock.stock_code, stock.stock_name, inEarnings]);
 
   if (loading) {
     return <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>加载风控数据中...</div>;
@@ -1353,8 +1400,47 @@ function RiskTab({ stock }: { stock: StockOption }) {
   const tech = common.technical;
   const val = common.valuation;
 
+  const statusDot = (s: 'idle' | 'loading' | 'done' | 'skipped') => {
+    if (s === 'loading') return <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', background: '#ca8a04', animation: 'pulse 1s infinite', marginLeft: '4px' }} />;
+    if (s === 'done') return <span style={{ color: '#27a644', marginLeft: '4px', fontSize: '11px' }}>已就绪</span>;
+    return null;
+  };
+
   return (
     <div>
+      {/* 分析快捷入口 */}
+      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '12px 16px', marginBottom: '16px' }}>
+        <div style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-primary)', marginBottom: '10px' }}>风控关联分析</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+          <button
+            onClick={() => onTabChange('news')}
+            style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', fontSize: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)', color: 'var(--text-secondary)', cursor: 'pointer' }}
+          >
+            个股动态
+            {statusDot(newsStatus)}
+          </button>
+          <button
+            onClick={() => onTabChange('technical')}
+            style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', fontSize: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)', color: 'var(--text-secondary)', cursor: 'pointer' }}
+          >
+            技术面分析
+            {statusDot(techStatus)}
+          </button>
+          {inEarnings && (
+            <button
+              onClick={() => onTabChange('fundamental')}
+              style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', fontSize: '12px', border: '1px solid rgba(94,106,210,0.4)', background: 'rgba(94,106,210,0.06)', color: '#5e6ad2', cursor: 'pointer' }}
+            >
+              财报季 · 基本面
+              {statusDot(fundStatus)}
+            </button>
+          )}
+        </div>
+        {inEarnings && (
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>当前处于财报季，已自动触发基本面报告生成</div>
+        )}
+      </div>
+
       {/* 通用：技术指标 */}
       <RiskSection title="技术指标">
         {!tech ? (
@@ -1558,7 +1644,7 @@ function StockDetail({
           />
         )}
         {activeTab === 'news' && <NewsTab stock={stock} />}
-        {activeTab === 'risk' && <RiskTab stock={stock} />}
+        {activeTab === 'risk' && <RiskTab stock={stock} onTabChange={onTabChange} />}
       </div>
     </div>
   );

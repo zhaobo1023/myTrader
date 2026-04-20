@@ -78,13 +78,16 @@ class SectorRiskAssessor(BaseAssessor):
         industry_map: Dict[str, str] = {}
         try:
             rows = self._query(
-                "SELECT stock_code, industry FROM trade_stock_basic WHERE stock_code IN ({})".format(
+                "SELECT stock_code, sw_level1, industry FROM trade_stock_basic WHERE stock_code IN ({})".format(
                     placeholders
                 ),
                 tuple(codes),
             )
             for r in rows:
-                industry_map[r['stock_code']] = r['industry'] or '未知'
+                # 优先用申万一级行业，fallback到industry字段，再fallback到未知
+                sw1 = (r['sw_level1'] or '').strip()
+                ind = (r['industry'] or '').strip()
+                industry_map[r['stock_code']] = sw1 or ind or '未知'
         except Exception as e:
             logger.warning("trade_stock_basic 查询失败: %s", e)
 
@@ -169,13 +172,25 @@ class SectorRiskAssessor(BaseAssessor):
         }
 
         suggestions = []
+        # 过滤掉"未知"后再看集中度
+        known_breakdown = {k: v for k, v in industry_breakdown.items() if k != '未知'}
+        known_max_ratio = max(known_breakdown.values()) if known_breakdown else max_ratio
         if max_ratio > 0.5:
             max_industry = max(industry_breakdown, key=industry_breakdown.get)
-            suggestions.append(
-                "行业集中度过高: {} 占比 {:.1f}%，建议分散配置".format(
-                    max_industry, max_ratio * 100
+            if max_industry != '未知':
+                suggestions.append(
+                    "行业集中度过高: {} 占比 {:.1f}%，建议分散配置".format(
+                        max_industry, max_ratio * 100
+                    )
                 )
-            )
+            elif known_breakdown:
+                # 未知占主导时，改为提示行业数据不全
+                suggestions.append(
+                    "部分持仓行业数据待补充，已识别行业: {}".format(
+                        "、".join(k for k in known_breakdown if known_breakdown[k] > 0.05)
+                    ) if any(v > 0.05 for v in known_breakdown.values()) else
+                    "部分持仓行业数据待补充，建议关注行业集中度"
+                )
         if overvalued_industries:
             suggestions.append(
                 "以下行业估值偏高(5年分位>70%): {}，注意回调风险".format(

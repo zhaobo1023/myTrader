@@ -114,9 +114,15 @@ class RegimeRiskAssessor(BaseAssessor):
 
         suggestions = []
         if high_corr_pairs:
-            pair_strs = ["{} & {} (corr={})".format(a, b, c) for a, b, c in high_corr_pairs[:5]]
+            # 统计高相关涉及的股票（去重），不在建议里放原始 code 对
+            involved = set()
+            for a, b, _ in high_corr_pairs:
+                involved.add(a)
+                involved.add(b)
             suggestions.append(
-                "以下持仓高度相关，注意分散风险: " + "; ".join(pair_strs)
+                "{}只持仓之间存在{}对高度相关（相关系数>0.6），注意分散风险".format(
+                    len(involved), len(high_corr_pairs)
+                )
             )
         if is_mutation:
             suggestions.append("市场结构发生突变，建议谨慎操作")

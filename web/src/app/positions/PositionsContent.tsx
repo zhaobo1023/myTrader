@@ -114,6 +114,19 @@ function LayerCard({ title, score, level, children }: { title: string; score: nu
   );
 }
 
+// 从扫描结果的 stocks 数组建立 code -> name 映射，方便相关性对展示
+function buildNameMap(stocks: StockResult[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const s of stocks) { map[s.stock_code] = s.stock_name || s.stock_code; }
+  return map;
+}
+
+function corrLabel(corr: number): { text: string; color: string } {
+  if (corr >= 0.8) return { text: '极高', color: '#dc2626' };
+  if (corr >= 0.7) return { text: '较高', color: '#ea580c' };
+  return { text: '偏高', color: '#ca8a04' };
+}
+
 function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClose: () => void }) {
   const overallLevel =
     result.overall_score >= 70 ? 'CRITICAL' :
@@ -122,6 +135,12 @@ function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClo
 
   const triggeredStocks = result.stocks.filter(s => s.stop_loss_hit || s.alerts.length > 0);
   const normalStocks = result.stocks.filter(s => !s.stop_loss_hit && s.alerts.length === 0);
+  const nameMap = buildNameMap(result.stocks);
+
+  // 过滤掉后端建议里已由前端结构化展示的内容（相关性对、行业未知）
+  const cleanSuggestions = result.overall_suggestions.filter(s =>
+    !s.includes('高度相关') && !s.includes('未知 占比')
+  );
 
   return (
     <div style={{ marginBottom: '16px', borderRadius: '8px', background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', overflow: 'hidden' }}>
@@ -151,9 +170,29 @@ function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClo
         {/* L2 市场状态 */}
         <LayerCard title="L2 市场状态" score={result.regime.score} level={result.regime.level}>
           {result.regime.market_state && (
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              市场状态: {result.regime.market_state}
-              {' · '}平均相关性: {result.regime.avg_correlation.toFixed(3)}
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+              市场结构: <span style={{ color: 'var(--text-secondary)', fontWeight: 510 }}>{result.regime.market_state}</span>
+              {' · '}持仓平均相关性: <span style={{ color: result.regime.avg_correlation > 0.6 ? '#ea580c' : result.regime.avg_correlation > 0.4 ? '#ca8a04' : '#16a34a', fontWeight: 510 }}>{result.regime.avg_correlation.toFixed(2)}</span>
+            </div>
+          )}
+          {result.regime.high_corr_pairs && result.regime.high_corr_pairs.length > 0 && (
+            <div style={{ marginBottom: '4px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>高相关持仓对（相关系数 &gt; 0.6）</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                {result.regime.high_corr_pairs.slice(0, 5).map(([a, b, corr], i) => {
+                  const { text, color } = corrLabel(corr);
+                  return (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>{nameMap[a] || a}</span>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>↔</span>
+                      <span style={{ color: 'var(--text-secondary)' }}>{nameMap[b] || b}</span>
+                      <span style={{ fontSize: '11px', padding: '0 5px', borderRadius: '3px', background: `${color}15`, color, border: `1px solid ${color}40` }}>
+                        {text} {corr.toFixed(2)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
           {result.regime.suggestions.length > 0 && (
@@ -163,23 +202,42 @@ function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClo
           )}
         </LayerCard>
 
-        {/* L3 行业暴露 */}
-        <LayerCard title="L3 行业暴露" score={result.sector.score} level={result.sector.level}>
-          {Object.keys(result.sector.industry_breakdown).length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '4px' }}>
-              {Object.entries(result.sector.industry_breakdown)
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 6)
-                .map(([ind, ratio]) => (
-                  <span key={ind} style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px', background: 'var(--bg-canvas)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)' }}>
-                    {ind} {(ratio * 100).toFixed(0)}%
-                  </span>
-                ))}
-            </div>
-          )}
-          {result.sector.suggestions.length > 0 && (
+        {/* L3 行业暴露（申万一级） */}
+        <LayerCard title="L3 行业暴露（申万一级）" score={result.sector.score} level={result.sector.level}>
+          {(() => {
+            const known = Object.entries(result.sector.industry_breakdown).filter(([ind]) => ind !== '未知').sort((a, b) => b[1] - a[1]);
+            const unknown = result.sector.industry_breakdown['未知'] || 0;
+            return (
+              <>
+                {known.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: known.length > 0 ? '6px' : 0 }}>
+                    {known.slice(0, 8).map(([ind, ratio]) => (
+                      <span key={ind} style={{
+                        fontSize: '12px', padding: '2px 8px', borderRadius: '4px',
+                        background: ratio > 0.5 ? 'rgba(234,88,12,0.08)' : 'var(--bg-canvas)',
+                        color: ratio > 0.5 ? '#ea580c' : 'var(--text-secondary)',
+                        border: `1px solid ${ratio > 0.5 ? 'rgba(234,88,12,0.25)' : 'var(--border-subtle)'}`,
+                        fontWeight: ratio > 0.3 ? 510 : 400,
+                      }}>
+                        {ind} <span style={{ opacity: 0.75 }}>{(ratio * 100).toFixed(0)}%</span>
+                      </span>
+                    ))}
+                    {unknown > 0.05 && (
+                      <span style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '4px', background: 'var(--bg-canvas)', color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', fontStyle: 'italic' }}>
+                        待补充 {(unknown * 100).toFixed(0)}%
+                      </span>
+                    )}
+                  </div>
+                )}
+                {known.length === 0 && (
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>行业数据待补充</div>
+                )}
+              </>
+            );
+          })()}
+          {result.sector.suggestions.filter(s => !s.includes('未知')).length > 0 && (
             <ul style={{ margin: '4px 0 0 0', paddingLeft: '16px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-              {result.sector.suggestions.map((s, i) => <li key={i}>{s}</li>)}
+              {result.sector.suggestions.filter(s => !s.includes('未知')).map((s, i) => <li key={i}>{s}</li>)}
             </ul>
           )}
         </LayerCard>
@@ -235,13 +293,13 @@ function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClo
         )}
 
         {/* 综合建议 */}
-        {result.overall_suggestions.length > 0 && (
+        {cleanSuggestions.length > 0 && (
           <div style={{ borderRadius: '6px', border: `1px solid ${levelBorder(overallLevel)}`, background: levelBg(overallLevel), padding: '10px 14px' }}>
             <div style={{ fontSize: '13px', fontWeight: 600, color: levelColor(overallLevel), marginBottom: '6px' }}>
               综合建议 · 总分 {Math.round(result.overall_score)}
             </div>
             <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-              {result.overall_suggestions.map((s, i) => <li key={i} style={{ marginBottom: '3px' }}>{s}</li>)}
+              {cleanSuggestions.map((s, i) => <li key={i} style={{ marginBottom: '3px' }}>{s}</li>)}
             </ul>
           </div>
         )}
