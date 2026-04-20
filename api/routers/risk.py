@@ -115,6 +115,9 @@ async def risk_stock(
             'personalized': None,
         }
 
+        # close_price from tech indicator — reused for personalized section
+        _tech_close_price: float | None = None
+
         # --- 通用：技术指标 ---
         try:
             rows = execute_query(
@@ -134,6 +137,7 @@ async def risk_stock(
             if rows:
                 r = rows[0]
                 close = float(r['close_price']) if r['close_price'] else None
+                _tech_close_price = close
                 ma20 = float(r['ma20']) if r['ma20'] else None
                 ma60 = float(r['ma60']) if r['ma60'] else None
                 ma250 = float(r['ma250']) if r['ma250'] else None
@@ -216,18 +220,18 @@ async def risk_stock(
                         WHERE stock_code = %s
                           AND pe_ttm > 0 AND pb > 0
                           AND trade_date >= DATE_SUB(CURDATE(), INTERVAL 3 YEAR)
-                        ORDER BY trade_date
                         """,
                         (stock_code,),
                         env='online',
                     )
                     if len(hist_rows) >= 60:
-                        pe_vals = sorted([float(r['pe_ttm']) for r in hist_rows if r['pe_ttm'] and float(r['pe_ttm']) > 0])
-                        pb_vals = sorted([float(r['pb']) for r in hist_rows if r['pb'] and float(r['pb']) > 0])
+                        import bisect
+                        pe_vals = sorted(float(r['pe_ttm']) for r in hist_rows)
+                        pb_vals = sorted(float(r['pb']) for r in hist_rows)
                         if pe and pe_vals:
-                            pe_pct = round(sum(1 for x in pe_vals if x <= pe) / len(pe_vals) * 100)
+                            pe_pct = round(bisect.bisect_right(pe_vals, pe) / len(pe_vals) * 100)
                         if pb and pb_vals:
-                            pb_pct = round(sum(1 for x in pb_vals if x <= pb) / len(pb_vals) * 100)
+                            pb_pct = round(bisect.bisect_right(pb_vals, pb) / len(pb_vals) * 100)
                 except Exception as e:
                     logger.warning('[RISK/stock] PE/PB percentile calc failed for %s: %s', stock_code, e)
 
@@ -264,22 +268,8 @@ async def risk_stock(
         if target_pos and target_pos['shares'] > 0 and target_pos['cost_price'] > 0:
             personalized: dict = {}
 
-            # 获取当前收盘价
-            close_price = None
-            try:
-                price_rows = execute_query(
-                    """
-                    SELECT close_price FROM trade_stock_daily
-                    WHERE stock_code = %s
-                    ORDER BY trade_date DESC LIMIT 1
-                    """,
-                    (stock_code,),
-                    env='online',
-                )
-                if price_rows and price_rows[0]['close_price']:
-                    close_price = float(price_rows[0]['close_price'])
-            except Exception as e:
-                logger.warning('[RISK/stock] price query failed: %s', e)
+            # 复用技术指标中的收盘价，避免重复查询
+            close_price = _tech_close_price
 
             cost = target_pos['cost_price']
             shares = target_pos['shares']
@@ -299,7 +289,7 @@ async def risk_stock(
 
             # 仓位占比
             total_val = sum(
-                (close_price if p['stock_code'] == stock_code else p['cost_price']) * p['shares']
+                ((close_price or p['cost_price']) if p['stock_code'] == stock_code else p['cost_price']) * p['shares']
                 for p in positions if p['shares'] > 0
             )
             if total_val > 0:
@@ -332,87 +322,79 @@ async def risk_stock(
                         returns = pivot.pct_change().dropna(how='all')
                         valid_cols = [c for c in returns.columns if returns[c].count() >= 30]
                         if stock_code in valid_cols and len(valid_cols) >= 2:
-                            corr_matrix = returns[valid_cols].corr()
-                            if stock_code in corr_matrix.columns:
-                                row = corr_matrix[stock_code].drop(stock_code)
-                                top_corr = row.abs().nlargest(3)
-                                top_codes = list(top_corr.index)
+                            other_valid = [c for c in valid_cols if c != stock_code]
+                            row = returns[other_valid].corrwith(returns[stock_code])
+                            top_corr = row.abs().nlargest(3)
+                            top_codes = list(top_corr.index)
 
-                                # Fetch stock names for the top correlated codes
+                            avg = float(row.mean())
+                            personalized['avg_portfolio_correlation'] = round(avg, 3)
+
+                            # --- 高相关持仓的行业集中度检查 ---
+                            high_corr_peers = [c for c in other_valid if abs(float(row.get(c, 0))) >= 0.5]
+                            cluster_codes = [stock_code] + high_corr_peers
+
+                            # Single query: fetch name + industry for all cluster codes
+                            try:
+                                all_lookup = list(set(top_codes + cluster_codes))
+                                lookup_ph = ', '.join(['%s'] * len(all_lookup))
+                                lookup_rows = execute_query(
+                                    f"SELECT stock_code, stock_name, sw_level1 FROM trade_stock_basic WHERE stock_code IN ({lookup_ph})",
+                                    tuple(all_lookup),
+                                    env='online',
+                                )
                                 name_map: dict = {}
+                                ind_map: dict = {}
+                                for lr in lookup_rows:
+                                    name_map[lr['stock_code']] = lr['stock_name']
+                                    ind_map[lr['stock_code']] = lr['sw_level1'] or '未知'
+                            except Exception:
+                                name_map = {}
+                                ind_map = {}
+
+                            personalized['correlations'] = [
+                                {
+                                    'stock_code': c,
+                                    'stock_name': name_map.get(c, c.split('.')[0]),
+                                    'correlation': round(float(row[c]), 3),
+                                }
+                                for c in top_codes
+                            ]
+
+                            # Sector concentration
+                            if total_val > 0:
                                 try:
-                                    name_ph = ', '.join(['%s'] * len(top_codes))
-                                    name_rows = execute_query(
-                                        f"SELECT stock_code, stock_name FROM trade_stock_basic WHERE stock_code IN ({name_ph})",
-                                        tuple(top_codes),
-                                        env='online',
-                                    )
-                                    for nr in name_rows:
-                                        name_map[nr['stock_code']] = nr['stock_name']
-                                except Exception:
-                                    pass
-
-                                personalized['correlations'] = [
-                                    {
-                                        'stock_code': c,
-                                        'stock_name': name_map.get(c, c.split('.')[0]),
-                                        'correlation': round(float(row[c]), 3),
-                                    }
-                                    for c in top_codes
-                                ]
-                                avg = float(row.mean())
-                                personalized['avg_portfolio_correlation'] = round(avg, 3)
-
-                                # --- 高相关持仓的行业集中度检查 ---
-                                # Find which corr peers are above threshold (>= 0.5)
-                                high_corr_peers = [c for c in valid_cols if c != stock_code and abs(float(row.get(c, 0))) >= 0.5]
-                                cluster_codes = [stock_code] + high_corr_peers
-                                try:
-                                    ind_ph = ', '.join(['%s'] * len(cluster_codes))
-                                    ind_rows = execute_query(
-                                        f"SELECT stock_code, sw_level1, stock_name FROM trade_stock_basic WHERE stock_code IN ({ind_ph})",
-                                        tuple(cluster_codes),
-                                        env='online',
-                                    )
-                                    # Build {code: {industry, name, weight}}
-                                    ind_map = {r['stock_code']: r['sw_level1'] or '未知' for r in ind_rows}
-                                    ind_name_map = {r['stock_code']: r['stock_name'] for r in ind_rows}
-
-                                    # Compute value weights for each code in the cluster
-                                    price_map = {stock_code: close_price or 1.0}
                                     cluster_val: dict = {}
                                     for pos in positions:
                                         if pos['stock_code'] in cluster_codes and pos['shares'] > 0:
-                                            pv = price_map.get(pos['stock_code'], pos['cost_price'])
-                                            cluster_val[pos['stock_code']] = pv * pos['shares']
+                                            pv = close_price if pos['stock_code'] == stock_code else pos['cost_price']
+                                            cluster_val[pos['stock_code']] = (pv or pos['cost_price']) * pos['shares']
 
-                                    # Portfolio total value
-                                    portfolio_total = total_val if total_val > 0 else 1
-
-                                    # Industry groups among cluster
                                     industry_cluster: dict = {}
                                     for code_c in cluster_codes:
+                                        if code_c not in cluster_val:
+                                            continue
                                         ind = ind_map.get(code_c, '未知')
-                                        val_c = cluster_val.get(code_c, 0)
+                                        if ind == '未知':
+                                            continue
+                                        val_c = cluster_val[code_c]
                                         if ind not in industry_cluster:
                                             industry_cluster[ind] = {'codes': [], 'total_val': 0}
                                         industry_cluster[ind]['codes'].append({
                                             'stock_code': code_c,
-                                            'stock_name': ind_name_map.get(code_c, code_c.split('.')[0]),
+                                            'stock_name': name_map.get(code_c, code_c.split('.')[0]),
                                         })
                                         industry_cluster[ind]['total_val'] += val_c
 
-                                    sector_concentration = []
-                                    for ind, info in industry_cluster.items():
-                                        if ind == '未知':
-                                            continue
-                                        weight_pct = round(info['total_val'] / portfolio_total * 100, 1)
-                                        sector_concentration.append({
+                                    sector_concentration = [
+                                        {
                                             'industry': ind,
                                             'stocks': info['codes'],
-                                            'weight_pct': weight_pct,
-                                            'alert': weight_pct > 40,
-                                        })
+                                            'weight_pct': round(info['total_val'] / total_val * 100, 1),
+                                            'alert': round(info['total_val'] / total_val * 100, 1) > 40,
+                                        }
+                                        for ind, info in industry_cluster.items()
+                                    ]
                                     sector_concentration.sort(key=lambda x: x['weight_pct'], reverse=True)
                                     if sector_concentration:
                                         personalized['sector_concentration'] = sector_concentration

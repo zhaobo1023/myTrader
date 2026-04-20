@@ -1263,6 +1263,28 @@ function StockCardGrid({ onSelect, version }: { onSelect: (s: StockOption) => vo
 // RiskTab — 风控情况（通用 + 个性化）
 // ---------------------------------------------------------------------------
 
+const FENG_HE_PRINCIPLES = [
+  '权重：从2%开仓，最高6%；估值高时压至1-2%，估值低时可加至4-6%',
+  '止损：缺陷一旦恶化，不论盈亏立刻出局，绝不留恋',
+  '分散：三低原则 — 低杠杆、低相关、低集中度',
+  '组合：不同篮子放不同卡车，核心持仓相关性应非常低',
+  '周期：逆短期基本面之势，顺长期基本面之势',
+];
+
+function ValuationBadge({ percentile }: { percentile: number }) {
+  const isHigh = percentile > 80;
+  const isLow = percentile < 30;
+  const bg = isHigh ? 'rgba(229,83,75,0.08)' : isLow ? 'rgba(39,166,68,0.08)' : 'rgba(0,0,0,0.04)';
+  const color = isHigh ? '#e5534b' : isLow ? '#27a644' : 'var(--text-muted)';
+  const border = isHigh ? 'rgba(229,83,75,0.2)' : isLow ? 'rgba(39,166,68,0.2)' : 'rgba(0,0,0,0.1)';
+  const label = isHigh ? '近3年偏高估' : isLow ? '近3年低估' : '近3年中位附近';
+  return (
+    <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px', background: bg, color, border: `1px solid ${border}` }}>
+      {label} {percentile}%分位
+    </span>
+  );
+}
+
 interface StockRiskData {
   stock_code: string;
   common: {
@@ -1553,13 +1575,7 @@ function PersonalizedRiskSection({ personalized: p, valuation }: { personalized:
       <div style={{ marginTop: '16px', padding: '12px 14px', borderRadius: '6px', background: 'rgba(94,106,210,0.04)', border: '1px solid rgba(94,106,210,0.15)' }}>
         <div style={{ fontSize: '12px', fontWeight: 600, color: '#5e6ad2', marginBottom: '8px' }}>风和投资原则</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-          {[
-            '权重：从2%开仓，最高6%；估值高时压至1-2%，估值低时可加至4-6%',
-            '止损：缺陷一旦恶化，不论盈亏立刻出局，绝不留恋',
-            '分散：三低原则 — 低杠杆、低相关、低集中度',
-            '组合：不同篮子放不同卡车，核心持仓相关性应非常低',
-            '周期：逆短期基本面之势，顺长期基本面之势',
-          ].map((rule, i) => (
+          {FENG_HE_PRINCIPLES.map((rule, i) => (
             <div key={i} style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', gap: '6px' }}>
               <span style={{ color: '#5e6ad2', flexShrink: 0 }}>{i + 1}.</span>
               <span>{rule}</span>
@@ -1590,7 +1606,7 @@ function RiskTab({ stock, onTabChange }: { stock: StockOption; onTabChange: (t: 
     setLoading(true);
     setError(null);
     setData(null);
-    const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+    const token = localStorage.getItem('access_token');
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (token) headers.Authorization = `Bearer ${token}`;
 
@@ -1737,15 +1753,7 @@ function RiskTab({ stock, onTabChange }: { stock: StockOption; onTabChange: (t: 
                       <span style={{ color: val.pe_percentile != null && val.pe_percentile > 80 ? '#e5534b' : val.pe_percentile != null && val.pe_percentile < 30 ? '#27a644' : 'var(--text-primary)' }}>
                         {val.pe_ttm.toFixed(1)}
                       </span>
-                      {val.pe_percentile != null && (
-                        <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px',
-                          background: val.pe_percentile > 80 ? 'rgba(229,83,75,0.08)' : val.pe_percentile < 30 ? 'rgba(39,166,68,0.08)' : 'rgba(0,0,0,0.04)',
-                          color: val.pe_percentile > 80 ? '#e5534b' : val.pe_percentile < 30 ? '#27a644' : 'var(--text-muted)',
-                          border: `1px solid ${val.pe_percentile > 80 ? 'rgba(229,83,75,0.2)' : val.pe_percentile < 30 ? 'rgba(39,166,68,0.2)' : 'rgba(0,0,0,0.1)'}`,
-                        }}>
-                          {val.pe_percentile > 80 ? '近3年偏高估' : val.pe_percentile < 30 ? '近3年低估' : '近3年中位附近'} {val.pe_percentile}%分位
-                        </span>
-                      )}
+                      {val.pe_percentile != null && <ValuationBadge percentile={val.pe_percentile} />}
                     </span>
                   )
                 }
@@ -1759,15 +1767,7 @@ function RiskTab({ stock, onTabChange }: { stock: StockOption; onTabChange: (t: 
                     <span style={{ color: val.pb_percentile != null && val.pb_percentile > 80 ? '#e5534b' : val.pb_percentile != null && val.pb_percentile < 30 ? '#27a644' : 'var(--text-primary)' }}>
                       {val.pb.toFixed(2)}
                     </span>
-                    {val.pb_percentile != null && (
-                      <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px',
-                        background: val.pb_percentile > 80 ? 'rgba(229,83,75,0.08)' : val.pb_percentile < 30 ? 'rgba(39,166,68,0.08)' : 'rgba(0,0,0,0.04)',
-                        color: val.pb_percentile > 80 ? '#e5534b' : val.pb_percentile < 30 ? '#27a644' : 'var(--text-muted)',
-                        border: `1px solid ${val.pb_percentile > 80 ? 'rgba(229,83,75,0.2)' : val.pb_percentile < 30 ? 'rgba(39,166,68,0.2)' : 'rgba(0,0,0,0.1)'}`,
-                      }}>
-                        {val.pb_percentile > 80 ? '近3年偏高估' : val.pb_percentile < 30 ? '近3年低估' : '近3年中位附近'} {val.pb_percentile}%分位
-                      </span>
-                    )}
+                    {val.pb_percentile != null && <ValuationBadge percentile={val.pb_percentile} />}
                   </span>
                 }
               />
