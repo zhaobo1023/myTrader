@@ -201,9 +201,9 @@ async def risk_stock(
                 v = val_rows[0]
                 pe = float(v['pe_ttm']) if v['pe_ttm'] else None
                 pb = float(v['pb']) if v['pb'] else None
-                # total_mv from DB is in 万元 (Tushare standard) -> convert to 亿元
-                total_mv_yi = round(float(v['total_mv']) / 10000, 2) if v['total_mv'] else None
-                circ_mv_yi = round(float(v['circ_mv']) / 10000, 2) if v['circ_mv'] else None
+                # total_mv in DB is already 亿元 (confirmed from live data)
+                total_mv_yi = round(float(v['total_mv']), 2) if v['total_mv'] else None
+                circ_mv_yi = round(float(v['circ_mv']), 2) if v['circ_mv'] else None
 
                 # Historical percentile: compare current PE/PB vs 3-year distribution
                 pe_pct = None
