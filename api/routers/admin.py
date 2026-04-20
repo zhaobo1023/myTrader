@@ -715,11 +715,29 @@ async def list_scheduler_tasks(
 
     def _build():
         from scheduler.loader import load_tasks
-        from scheduler.watchdog import _today_runs
         from config.db import execute_query
 
         tasks = load_tasks()
-        today_map = _today_runs(env='local')
+
+        # Today's runs
+        today_map: dict = {}
+        try:
+            rows = execute_query(
+                """
+                SELECT task_id, status
+                FROM task_runs
+                WHERE DATE(started_at) = CURDATE()
+                ORDER BY started_at ASC
+                """,
+                env='local',
+            )
+            priority = {'running': 4, 'success': 3, 'failed': 2, 'skipped': 1}
+            for r in rows:
+                tid, st = r['task_id'], r['status']
+                if priority.get(st, 0) > priority.get(today_map.get(tid, ''), 0):
+                    today_map[tid] = st
+        except Exception as e:
+            logger.warning('[SCHEDULER] today_runs query failed: %s', e)
 
         # Latest run per task (any day)
         latest_map: dict = {}
@@ -767,6 +785,7 @@ async def list_scheduler_tasks(
                 'group': task.get('tags', [''])[0] if task.get('tags') else '',
                 'schedule': task.get('schedule', ''),
                 'enabled': task.get('enabled', True),
+                'tags': task.get('tags', []),
                 'depends_on': deps,
                 'deps_detail': deps_detail,
                 'deps_ok': deps_ok or len(deps) == 0,
@@ -777,7 +796,11 @@ async def list_scheduler_tasks(
         return result
 
     loop = asyncio.get_running_loop()
-    tasks = await loop.run_in_executor(None, _build)
+    try:
+        tasks = await loop.run_in_executor(None, _build)
+    except Exception as e:
+        logger.error('[SCHEDULER] list tasks failed: %s', e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f'Scheduler tasks error: {e}')
     return {'tasks': tasks, 'as_of': __import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 

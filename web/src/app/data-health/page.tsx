@@ -241,17 +241,27 @@ function DataCompletenessTab() {
 // Tab 2: Task Run Status
 // ============================================================
 
+/** Returns true for Saturday (6) or Sunday (0) */
+function isWeekend(dateStr: string) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const day = d.getDay();
+  return day === 0 || day === 6;
+}
+
 function TaskRunStatusTab() {
   const [selectedCell, setSelectedCell] = useState<{ task: string; date: string; run: TaskRun } | null>(null);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<TaskRunData>({
     queryKey: ['task-runs'],
     queryFn: async () => {
-      const res = await apiClient.get('/api/admin/task-runs', { params: { days: 7 } });
+      const res = await apiClient.get('/api/admin/task-runs', { params: { days: 14 } });
       return res.data;
     },
-    staleTime: 60 * 60 * 1000, // match server-side 1h cache
+    staleTime: 60 * 60 * 1000,
   });
+
+  // Filter out weekends — show only trading-day columns
+  const tradingDates = data ? data.dates.filter((d) => !isWeekend(d)) : [];
 
   // Group tasks by task_group
   const grouped = data
@@ -282,15 +292,16 @@ function TaskRunStatusTab() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <div>
-          {data && (
+          {data && tradingDates[0] && (
             <div className="flex gap-3 text-xs">
-              {data.dates[0] && data.summary[data.dates[0]] && (
+              {data.summary[tradingDates[0]] && (
                 <>
-                  <span className="text-green-600">成功 {data.summary[data.dates[0]].success}</span>
-                  <span className="text-red-500">失败 {data.summary[data.dates[0]].failed}</span>
-                  <span className="text-yellow-600">运行中 {data.summary[data.dates[0]].running}</span>
+                  <span className="text-green-600">成功 {data.summary[tradingDates[0]].success}</span>
+                  <span className="text-red-500">失败 {data.summary[tradingDates[0]].failed}</span>
+                  <span className="text-yellow-600">运行中 {data.summary[tradingDates[0]].running}</span>
                 </>
               )}
+              <span className="text-gray-400">（已过滤周末，显示最近交易日）</span>
             </div>
           )}
         </div>
@@ -310,13 +321,13 @@ function TaskRunStatusTab() {
         </div>
       )}
 
-      {data && data.dates.length > 0 && (
+      {data && tradingDates.length > 0 && (
         <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-gray-50 text-gray-400 border-b border-gray-100">
                 <th className="text-left px-3 py-2 font-medium min-w-[140px] sticky left-0 bg-gray-50">任务</th>
-                {data.dates.map((d) => (
+                {tradingDates.map((d) => (
                   <th key={d} className="text-center px-2 py-2 font-medium whitespace-nowrap font-mono">
                     {d.slice(5)}
                   </th>
@@ -327,14 +338,14 @@ function TaskRunStatusTab() {
               {sortedGroups.map((group) => (
                 <Fragment key={`tg-${group}`}>
                   <tr className="bg-gray-50/60">
-                    <td colSpan={data.dates.length + 1} className="px-3 py-1.5 text-gray-400 font-medium text-xs">
+                    <td colSpan={tradingDates.length + 1} className="px-3 py-1.5 text-gray-400 font-medium text-xs">
                       {groupLabels[group] || group}
                     </td>
                   </tr>
                   {grouped[group].map((task) => (
                     <tr key={task.task_name} className="hover:bg-gray-50/50">
                       <td className="px-3 py-2 text-gray-700 sticky left-0 bg-white">{task.label}</td>
-                      {data.dates.map((d) => {
+                      {tradingDates.map((d) => {
                         const run = task.runs[d];
                         return (
                           <td
@@ -420,6 +431,7 @@ interface SchedulerTask {
   group: string;
   schedule: string;
   enabled: boolean;
+  tags: string[];
   depends_on: string[];
   deps_detail: DepDetail[];
   deps_ok: boolean;
@@ -433,6 +445,29 @@ interface SchedulerTask {
     triggered_by: string | null;
   } | null;
   alert_on_failure: boolean;
+}
+
+/** Infer frequency badge from schedule string and tags */
+function freqBadge(schedule: string, tags: string[]) {
+  if (!schedule || schedule === 'manual') return null;
+  // cron with day-of-week restriction (e.g. "0 8 * * 1-5") = weekly-ish or workday
+  // simple HH:MM or after_gate = daily
+  // cron "0 8 * * 0" or similar with specific day = weekly
+  const isCron = /\d+\s+\d+\s+\*\s+\*\s+\S+/.test(schedule.trim());
+  if (isCron) {
+    // check if it runs every day or only specific days
+    const parts = schedule.trim().split(/\s+/);
+    const dow = parts[4] || '*';
+    if (dow === '*' || dow === '1-5') {
+      return <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-500 border border-blue-100">日</span>;
+    }
+    return <span className="text-xs px-1.5 py-0.5 rounded bg-purple-50 text-purple-500 border border-purple-100">周</span>;
+  }
+  if (tags.includes('weekly')) {
+    return <span className="text-xs px-1.5 py-0.5 rounded bg-purple-50 text-purple-500 border border-purple-100">周</span>;
+  }
+  // HH:MM or after_gate = daily
+  return <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-500 border border-blue-100">日</span>;
 }
 
 interface SchedulerData {
@@ -602,7 +637,10 @@ function SchedulerTab() {
                     return (
                       <tr key={task.id} className="hover:bg-gray-50/50">
                         <td className="px-3 py-2">
-                          <div className="text-gray-700 font-medium">{task.name}</div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-gray-700 font-medium">{task.name}</span>
+                            {freqBadge(task.schedule, task.tags ?? [])}
+                          </div>
                           <div className="text-gray-300 font-mono">{task.id}</div>
                         </td>
                         <td className="px-3 py-2 text-center text-gray-500 font-mono">
