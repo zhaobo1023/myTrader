@@ -3,7 +3,7 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import apiClient, { positionsApi, PositionItem, PositionMarketData } from '@/lib/api-client';
+import { positionsApi, riskApi, PositionItem, PositionMarketData, RiskOverviewData } from '@/lib/api-client';
 import { useAddToCandidate } from '@/hooks/useStockAdd';
 import StockSearchInput from '@/components/stock/StockSearchInput';
 import type { StockSearchResult } from '@/lib/api-client';
@@ -176,6 +176,152 @@ function IndustryPieChart({ breakdown }: { breakdown: Record<string, number> }) 
           </span>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// RiskOverviewBar - 常驻风险概览条
+// ============================================================
+
+const SVD_STATE_COLORS: Record<string, { bg: string; border: string; text: string }> = {
+  '齐涨齐跌': { bg: 'rgba(234,88,12,0.07)', border: 'rgba(234,88,12,0.3)', text: '#ea580c' },
+  '板块分化': { bg: 'rgba(202,138,4,0.07)', border: 'rgba(202,138,4,0.3)', text: '#ca8a04' },
+  '个股行情': { bg: 'rgba(22,163,74,0.07)', border: 'rgba(22,163,74,0.3)', text: '#16a34a' },
+};
+const SVD_DEFAULT_COLOR = { bg: 'rgba(100,100,100,0.05)', border: 'rgba(100,100,100,0.2)', text: 'var(--text-muted)' };
+
+const QVIX_COLORS: Record<string, { bg: string; border: string; text: string }> = {
+  low:      { bg: 'rgba(22,163,74,0.07)',   border: 'rgba(22,163,74,0.3)',   text: '#16a34a' },
+  medium:   { bg: 'rgba(202,138,4,0.07)',   border: 'rgba(202,138,4,0.3)',   text: '#ca8a04' },
+  high:     { bg: 'rgba(234,88,12,0.07)',   border: 'rgba(234,88,12,0.3)',   text: '#ea580c' },
+  critical: { bg: 'rgba(220,38,38,0.07)',   border: 'rgba(220,38,38,0.3)',   text: '#dc2626' },
+};
+
+function OverviewChip({ label, value, color, sub }: { label: string; value: string; color: { bg: string; border: string; text: string }; sub?: string }) {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: '2px',
+      padding: '8px 12px', borderRadius: '6px',
+      background: color.bg, border: `1px solid ${color.border}`,
+      minWidth: '90px',
+    }}>
+      <span style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1 }}>{label}</span>
+      <span style={{ fontSize: '13px', fontWeight: 600, color: color.text, lineHeight: 1.3 }}>{value}</span>
+      {sub && <span style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1 }}>{sub}</span>}
+    </div>
+  );
+}
+
+function RiskOverviewBar({ data }: { data: RiskOverviewData }) {
+  const svdColor = data.svd ? (SVD_STATE_COLORS[data.svd.state] || SVD_DEFAULT_COLOR) : SVD_DEFAULT_COLOR;
+  const qvixColor = data.qvix ? (QVIX_COLORS[data.qvix.level] || QVIX_COLORS.medium) : QVIX_COLORS.medium;
+
+  const maxStock = data.concentration?.max_stock;
+  const overweightStocks = data.concentration?.overweight_stocks || [];
+  const overweightSectors = data.sector?.overweight_sectors || [];
+
+  const stockConcentrationColor = overweightStocks.length > 0
+    ? { bg: 'rgba(234,88,12,0.07)', border: 'rgba(234,88,12,0.3)', text: '#ea580c' }
+    : { bg: 'rgba(22,163,74,0.07)', border: 'rgba(22,163,74,0.3)', text: '#16a34a' };
+
+  const sectorConcentrationColor = overweightSectors.length > 0
+    ? { bg: 'rgba(234,88,12,0.07)', border: 'rgba(234,88,12,0.3)', text: '#ea580c' }
+    : { bg: 'rgba(22,163,74,0.07)', border: 'rgba(22,163,74,0.3)', text: '#16a34a' };
+
+  return (
+    <div style={{
+      marginBottom: '16px', padding: '12px 14px', borderRadius: '8px',
+      background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)',
+    }}>
+      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+        <span>风险概览</span>
+        {data.svd?.date && <span>{data.svd.date}</span>}
+      </div>
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+
+        {/* SVD 市场结构 */}
+        <OverviewChip
+          label="市场结构 (SVD)"
+          value={data.svd?.state || '暂无数据'}
+          color={svdColor}
+          sub={data.svd?.is_mutation ? '[结构突变]' : data.svd?.top1_ratio != null ? `F1占比 ${(data.svd.top1_ratio * 100).toFixed(0)}%` : undefined}
+        />
+
+        {/* QVIX 波动率 */}
+        <OverviewChip
+          label="QVIX 波动率"
+          value={data.qvix ? `${data.qvix.value.toFixed(1)} · ${data.qvix.label}` : '暂无数据'}
+          color={qvixColor}
+          sub={data.qvix ? `建议仓位 ${(data.qvix.suggested_exposure * 100).toFixed(0)}% 以内` : undefined}
+        />
+
+        {/* 单票集中度 */}
+        <OverviewChip
+          label="最高单票占比"
+          value={maxStock ? `${maxStock.stock_name} ${maxStock.weight}%` : '暂无数据'}
+          color={stockConcentrationColor}
+          sub={overweightStocks.length > 0 ? `${overweightStocks.length}只超25%` : '集中度正常'}
+        />
+
+        {/* 行业集中度 */}
+        {data.sector && data.sector.sector_weights.length > 0 && (
+          <OverviewChip
+            label="最高行业占比"
+            value={`${data.sector.sector_weights[0].industry} ${data.sector.sector_weights[0].weight}%`}
+            color={sectorConcentrationColor}
+            sub={overweightSectors.length > 0 ? `${overweightSectors.length}个行业超40%` : '行业分散正常'}
+          />
+        )}
+
+        {/* 行业分布迷你条 */}
+        {data.sector && data.sector.sector_weights.length > 0 && (
+          <div style={{
+            flex: 1, minWidth: '180px',
+            padding: '8px 12px', borderRadius: '6px',
+            background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)',
+          }}>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '6px' }}>行业分布</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+              {data.sector.sector_weights.slice(0, 5).map(s => (
+                <div key={s.industry} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
+                  <span style={{ color: 'var(--text-secondary)', minWidth: '60px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.industry}</span>
+                  <div style={{ flex: 1, height: '4px', borderRadius: '2px', background: 'var(--border-subtle)', overflow: 'hidden' }}>
+                    <div style={{ width: `${Math.min(s.weight, 100)}%`, height: '100%', borderRadius: '2px', background: s.weight > 40 ? '#ea580c' : s.weight > 25 ? '#ca8a04' : '#3b82f6' }} />
+                  </div>
+                  <span style={{ color: s.weight > 40 ? '#ea580c' : 'var(--text-muted)', fontWeight: s.weight > 40 ? 600 : 400, minWidth: '32px', textAlign: 'right' }}>{s.weight}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 预警提示 */}
+      {(data.svd?.is_mutation || overweightStocks.length > 0 || overweightSectors.length > 0 || (data.qvix && data.qvix.level === 'critical')) && (
+        <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          {data.svd?.is_mutation && (
+            <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '3px', background: 'rgba(220,38,38,0.08)', color: '#dc2626', border: '1px solid rgba(220,38,38,0.2)' }}>
+              市场结构突变，建议谨慎操作
+            </span>
+          )}
+          {data.qvix && data.qvix.level === 'critical' && (
+            <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '3px', background: 'rgba(220,38,38,0.08)', color: '#dc2626', border: '1px solid rgba(220,38,38,0.2)' }}>
+              QVIX极度恐慌，建议仓位控制在 {(data.qvix.suggested_exposure * 100).toFixed(0)}% 以内
+            </span>
+          )}
+          {overweightStocks.map(s => (
+            <span key={s.stock_code} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '3px', background: 'rgba(234,88,12,0.08)', color: '#ea580c', border: '1px solid rgba(234,88,12,0.2)' }}>
+              {s.stock_name} 仓位 {s.weight}% 超25%
+            </span>
+          ))}
+          {overweightSectors.map(s => (
+            <span key={s.industry} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '3px', background: 'rgba(234,88,12,0.08)', color: '#ea580c', border: '1px solid rgba(234,88,12,0.2)' }}>
+              {s.industry}行业 {s.weight}% 超40%
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -435,6 +581,13 @@ export default function PositionsContent() {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<LayeredRiskResult | null>(null);
 
+  const { data: overviewData, isLoading: overviewLoading } = useQuery({
+    queryKey: ['risk-overview'],
+    queryFn: () => riskApi.overview().then(r => r.data),
+    staleTime: 5 * 60 * 1000,
+    retry: 1,
+  });
+
   const addCand = useAddToCandidate();
 
   const { data, isLoading } = useQuery({
@@ -594,7 +747,7 @@ export default function PositionsContent() {
               setScanning(true);
               setScanResult(null);
               try {
-                const res = await apiClient.get('/api/risk/scan', { timeout: 90000 });
+                const res = await riskApi.scan();
                 setScanResult(res.data);
               } catch { setActionMsg('风控扫描失败'); }
               finally { setScanning(false); }
@@ -675,6 +828,14 @@ export default function PositionsContent() {
           {actionMsg}
         </div>
       )}
+
+      {/* 常驻风险概览 */}
+      {overviewLoading && (
+        <div style={{ marginBottom: '12px', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', fontSize: '12px', color: 'var(--text-muted)' }}>
+          加载风险概览...
+        </div>
+      )}
+      {overviewData && <RiskOverviewBar data={overviewData} />}
 
       {scanResult && (
         <RiskScanV2Panel result={scanResult} onClose={() => setScanResult(null)} />

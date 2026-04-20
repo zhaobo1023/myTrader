@@ -450,6 +450,43 @@ export const positionsApi = {
 };
 
 // ============================================================
+// Risk Overview API
+// ============================================================
+
+export interface RiskOverviewData {
+  svd: {
+    date: string;
+    state: string;
+    is_mutation: boolean;
+    top1_ratio: number | null;
+    top3_ratio: number | null;
+  } | null;
+  qvix: {
+    date: string;
+    value: number;
+    level: string;
+    label: string;
+    suggested_exposure: number;
+  } | null;
+  concentration: {
+    total_positions: number;
+    stock_weights: { stock_code: string; stock_name: string; weight: number }[];
+    max_stock: { stock_code: string; stock_name: string; weight: number } | null;
+    overweight_stocks: { stock_code: string; stock_name: string; weight: number }[];
+  } | null;
+  sector: {
+    sector_weights: { industry: string; weight: number }[];
+    overweight_sectors: { industry: string; weight: number }[];
+    unknown_pct: number;
+  } | null;
+}
+
+export const riskApi = {
+  overview: () => apiClient.get<RiskOverviewData>('/api/risk/overview'),
+  scan: () => apiClient.get('/api/risk/scan', { timeout: 90000 }),
+};
+
+// ============================================================
 // Trade Operation Log API (调仓日志)
 // ============================================================
 

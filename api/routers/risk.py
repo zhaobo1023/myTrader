@@ -417,6 +417,164 @@ async def risk_stock(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get('/overview')
+async def risk_overview(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    持仓页常驻风险概览：SVD市场状态 + QVIX + 单票集中度 + 行业集中度。
+    轻量接口，不触发完整扫描，响应 < 2s。
+    """
+    import asyncio
+
+    def _do_overview(user_id: int):
+        from config.db import execute_query
+
+        result: dict = {
+            'svd': None,
+            'qvix': None,
+            'concentration': None,
+            'sector': None,
+        }
+
+        # --- SVD 市场状态 ---
+        try:
+            rows = execute_query(
+                """
+                SELECT calc_date, market_state, is_mutation, top1_var_ratio, top3_var_ratio
+                FROM trade_svd_market_state
+                WHERE window_size = 20 AND universe_type = '全A'
+                ORDER BY calc_date DESC LIMIT 1
+                """,
+                env='online',
+            )
+            if rows:
+                r = rows[0]
+                result['svd'] = {
+                    'date': str(r['calc_date']),
+                    'state': r['market_state'] or '',
+                    'is_mutation': bool(r['is_mutation']),
+                    'top1_ratio': round(float(r['top1_var_ratio']), 4) if r['top1_var_ratio'] else None,
+                    'top3_ratio': round(float(r['top3_var_ratio']), 4) if r['top3_var_ratio'] else None,
+                }
+        except Exception as e:
+            logger.warning('[RISK/overview] SVD query failed: %s', e)
+
+        # --- QVIX ---
+        try:
+            rows = execute_query(
+                "SELECT date, value FROM macro_data WHERE indicator = 'qvix' ORDER BY date DESC LIMIT 1",
+                env='online',
+            )
+            if rows:
+                qvix_val = float(rows[0]['value'])
+                if qvix_val < 15:
+                    level, label, exposure = 'low', '平稳', 1.0
+                elif qvix_val < 20:
+                    level, label, exposure = 'medium', '焦虑', 0.77
+                elif qvix_val < 30:
+                    level, label, exposure = 'high', '恐慌', 0.47
+                elif qvix_val < 40:
+                    level, label, exposure = 'critical', '极度恐慌', 0.15
+                else:
+                    level, label, exposure = 'critical', '末日级别', 0.0
+                result['qvix'] = {
+                    'date': str(rows[0]['date']),
+                    'value': qvix_val,
+                    'level': level,
+                    'label': label,
+                    'suggested_exposure': exposure,
+                }
+        except Exception as e:
+            logger.warning('[RISK/overview] QVIX query failed: %s', e)
+
+        # --- 持仓集中度 ---
+        try:
+            pos_rows = execute_query(
+                "SELECT stock_code, stock_name, shares, cost_price FROM user_positions WHERE user_id = %s AND is_active = 1",
+                (user_id,),
+                env='local',
+            )
+            positions = [
+                {
+                    'stock_code': r['stock_code'],
+                    'stock_name': r['stock_name'] or r['stock_code'],
+                    'shares': int(r['shares'] or 0),
+                    'cost_price': float(r['cost_price'] or 0),
+                }
+                for r in pos_rows if r['shares'] and r['cost_price']
+            ]
+
+            if positions:
+                total_val = sum(p['shares'] * p['cost_price'] for p in positions)
+
+                # 单票集中度
+                stock_weights = [
+                    {
+                        'stock_code': p['stock_code'],
+                        'stock_name': p['stock_name'],
+                        'weight': round(p['shares'] * p['cost_price'] / total_val * 100, 1),
+                    }
+                    for p in positions
+                ] if total_val > 0 else []
+                stock_weights.sort(key=lambda x: x['weight'], reverse=True)
+                max_stock = stock_weights[0] if stock_weights else None
+                overweight_stocks = [s for s in stock_weights if s['weight'] > 25]
+
+                result['concentration'] = {
+                    'total_positions': len(positions),
+                    'stock_weights': stock_weights[:8],
+                    'max_stock': max_stock,
+                    'overweight_stocks': overweight_stocks,
+                }
+
+                # 行业集中度
+                codes = [p['stock_code'] for p in positions]
+                placeholders = ', '.join(['%s'] * len(codes))
+                try:
+                    ind_rows = execute_query(
+                        "SELECT stock_code, sw_level1, industry FROM trade_stock_basic WHERE stock_code IN ({})".format(placeholders),
+                        tuple(codes),
+                        env='online',
+                    )
+                    ind_map = {}
+                    for r in ind_rows:
+                        sw1 = (r['sw_level1'] or '').strip()
+                        ind = (r['industry'] or '').strip()
+                        ind_map[r['stock_code']] = sw1 or ind or '未知'
+
+                    sector_val: dict = {}
+                    for p in positions:
+                        ind = ind_map.get(p['stock_code'], '未知')
+                        sector_val[ind] = sector_val.get(ind, 0.0) + p['shares'] * p['cost_price']
+
+                    sector_weights = [
+                        {'industry': ind, 'weight': round(val / total_val * 100, 1)}
+                        for ind, val in sector_val.items() if ind != '未知'
+                    ] if total_val > 0 else []
+                    sector_weights.sort(key=lambda x: x['weight'], reverse=True)
+                    overweight_sectors = [s for s in sector_weights if s['weight'] > 40]
+
+                    result['sector'] = {
+                        'sector_weights': sector_weights[:8],
+                        'overweight_sectors': overweight_sectors,
+                        'unknown_pct': round(sector_val.get('未知', 0) / total_val * 100, 1) if total_val > 0 else 0,
+                    }
+                except Exception as e:
+                    logger.warning('[RISK/overview] sector query failed: %s', e)
+        except Exception as e:
+            logger.warning('[RISK/overview] positions query failed: %s', e)
+
+        return result
+
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _do_overview, current_user.id)
+    except Exception as exc:
+        logger.error('[RISK] overview failed for user=%s: %s', current_user.id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.post('/trigger-deps')
 async def trigger_deps(
     current_user: User = Depends(get_current_user),
