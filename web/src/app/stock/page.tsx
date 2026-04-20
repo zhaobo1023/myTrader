@@ -1345,22 +1345,28 @@ const ALERT_STYLE: Record<AlertLevel, { bg: string; border: string; color: strin
   tip:    { bg: 'rgba(94,106,210,0.06)', border: 'rgba(94,106,210,0.22)', color: '#5e6ad2', icon: '[提示]' },
 };
 
-function buildPersonalAlerts(p: NonNullable<StockRiskData['personalized']>): RiskAlert[] {
+// 胡猛原则：权重决策基于下行空间评估，而非上行潜力
+// 单一品种：2% 起建仓，最高 6%；估值高时压到 1-2%，估值低时可到 4-6%
+function buildPersonalAlerts(
+  p: NonNullable<StockRiskData['personalized']>,
+  valuation?: StockRiskData['common']['valuation'],
+): RiskAlert[] {
   const alerts: RiskAlert[] = [];
   const pnl = p.pnl_ratio;
   const weight = p.position_weight_pct;
   const corr = p.avg_portfolio_correlation;
+  const pePct = valuation?.pe_percentile ?? null;
 
-  // --- 盈亏判断 ---
+  // --- 盈亏 / 止损纪律（胡猛：缺陷恶化，不论盈亏立刻平仓出局） ---
   if (pnl !== null) {
     if (pnl <= -20) {
-      alerts.push({ level: 'danger', text: `浮亏 ${Math.abs(pnl).toFixed(1)}%，已超过20%，建议执行止损或重新评估持仓逻辑` });
+      alerts.push({ level: 'danger', text: `浮亏 ${Math.abs(pnl).toFixed(1)}%，超过20%止损线。胡猛原则：缺陷一旦恶化，不论盈亏平仓出局，绝不留恋` });
     } else if (pnl <= -10) {
-      alerts.push({ level: 'warn', text: `浮亏 ${Math.abs(pnl).toFixed(1)}%，接近止损区间，需密切关注` });
+      alerts.push({ level: 'warn', text: `浮亏 ${Math.abs(pnl).toFixed(1)}%，接近止损区间。需立即复核：买入缺陷是否正在恶化，还是可跟踪的短期波动？` });
     } else if (pnl <= -5) {
       alerts.push({ level: 'warn', text: `浮亏 ${Math.abs(pnl).toFixed(1)}%，建议复核买入逻辑是否仍然成立` });
     } else if (pnl >= 50) {
-      alerts.push({ level: 'tip', text: `浮盈 ${pnl.toFixed(1)}%，利润垫充足，可考虑分批减仓锁定部分收益` });
+      alerts.push({ level: 'tip', text: `浮盈 ${pnl.toFixed(1)}%，利润垫充足。胡猛原则：可分批减仓、降低集中度，锁定复利基础` });
     } else if (pnl >= 30) {
       alerts.push({ level: 'tip', text: `浮盈 ${pnl.toFixed(1)}%，有较厚利润垫，短期回调风险可控` });
     } else if (pnl >= 15) {
@@ -1370,46 +1376,59 @@ function buildPersonalAlerts(p: NonNullable<StockRiskData['personalized']>): Ris
     }
   }
 
-  // --- 仓位集中度 ---
+  // --- 仓位集中度（胡猛标准：从2%开仓，最高6%） ---
   if (weight !== null) {
-    if (weight > 40) {
-      alerts.push({ level: 'danger', text: `仓位占比 ${weight.toFixed(1)}%，高度集中，单票风险敞口过大，建议控制在30%以内` });
-    } else if (weight > 30) {
-      alerts.push({ level: 'warn', text: `仓位占比 ${weight.toFixed(1)}%，偏重，若股价大幅下跌对组合影响显著` });
-    } else if (weight > 20) {
-      alerts.push({ level: 'tip', text: `仓位占比 ${weight.toFixed(1)}%，中等集中，注意整体组合平衡` });
+    if (weight > 10) {
+      alerts.push({ level: 'danger', text: `仓位占比 ${weight.toFixed(1)}%，远超胡猛6%上限。单票高集中度意味着一旦判断失误损失惨重，需大幅减仓` });
+    } else if (weight > 6) {
+      alerts.push({ level: 'warn', text: `仓位占比 ${weight.toFixed(1)}%，超出胡猛建议上限6%。每增加1%都值得反复推敲下行空间` });
+    } else if (weight >= 4) {
+      alerts.push({ level: 'tip', text: `仓位占比 ${weight.toFixed(1)}%，处于胡猛4-6%的高确信区间，下行空间需充分评估` });
+    } else if (weight >= 2) {
+      alerts.push({ level: 'ok', text: `仓位占比 ${weight.toFixed(1)}%，符合胡猛2-4%建仓标准，风险分散合理` });
     } else {
-      alerts.push({ level: 'ok', text: `仓位占比 ${weight.toFixed(1)}%，分散合理` });
+      alerts.push({ level: 'tip', text: `仓位占比 ${weight.toFixed(1)}%，属于试探性建仓阶段（胡猛从2%开始）` });
     }
   }
 
-  // --- 盈亏 × 仓位联合判断 ---
+  // --- 估值 × 仓位联动（胡猛：估值高时1-2%，估值低时4-6%） ---
+  if (weight !== null && pePct !== null) {
+    if (pePct > 80 && weight > 2) {
+      alerts.push({ level: 'warn', text: `PE处于近3年${pePct}%高分位，胡猛原则：估值偏高时权重应压至1-2%，当前${weight.toFixed(1)}%偏重，建议减仓等待更好买点` });
+    } else if (pePct < 25 && weight < 4) {
+      alerts.push({ level: 'tip', text: `PE处于近3年${pePct}%低分位，胡猛原则：估值偏低时可加仓至4-6%，当前${weight.toFixed(1)}%存在加仓空间（需确认基本面未恶化）` });
+    } else if (pePct > 80 && weight <= 2) {
+      alerts.push({ level: 'ok', text: `PE处于近3年高分位，但仓位已控制在${weight.toFixed(1)}%，符合胡猛高估值轻仓原则` });
+    }
+  }
+
+  // --- 重仓浮亏联合 ---
   if (pnl !== null && weight !== null) {
-    if (pnl <= -10 && weight > 25) {
-      alerts.push({ level: 'danger', text: `重仓（${weight.toFixed(0)}%）且浮亏（${pnl.toFixed(1)}%），组合损失较大，需优先处理` });
-    } else if (pnl >= 30 && weight > 30) {
-      alerts.push({ level: 'tip', text: `重仓盈利：${weight.toFixed(0)}% 仓位 × ${pnl.toFixed(0)}% 盈利，可分批减仓降低集中度` });
+    if (pnl <= -10 && weight > 6) {
+      alerts.push({ level: 'danger', text: `重仓（${weight.toFixed(0)}%，超胡猛6%上限）且浮亏（${pnl.toFixed(1)}%），双重风险叠加，需优先评估是否止损出局` });
+    } else if (pnl >= 30 && weight > 6) {
+      alerts.push({ level: 'tip', text: `重仓浮盈：${weight.toFixed(0)}% 仓位 × ${pnl.toFixed(0)}% 盈利。胡猛原则：可逐步减仓至6%以内，降低集中度同时锁定收益` });
     }
   }
 
-  // --- 相关性 ---
+  // --- 相关性（胡猛：不同篮子放不同卡车，组合核心部分相关性要非常低） ---
   if (corr !== null) {
     if (corr >= 0.7) {
-      alerts.push({ level: 'warn', text: `与组合其他持仓极高相关（均值 ${corr.toFixed(2)}），市场下跌时大概率同步回调，分散效果很弱` });
+      alerts.push({ level: 'warn', text: `与组合持仓极高相关（均值 ${corr.toFixed(2)}）。胡猛警告：把不同篮子放同一辆卡车，卡车翻则全军覆没` });
     } else if (corr >= 0.55) {
-      alerts.push({ level: 'warn', text: `与组合其他持仓偏高相关（均值 ${corr.toFixed(2)}），协同下跌风险较高，建议适度分散` });
+      alerts.push({ level: 'warn', text: `与组合持仓偏高相关（均值 ${corr.toFixed(2)}），板块性风险未有效分散，建议寻找低相关品种对冲` });
     } else if (corr >= 0.4) {
-      alerts.push({ level: 'tip', text: `与组合持仓中度相关（均值 ${corr.toFixed(2)}），有一定分散效果` });
+      alerts.push({ level: 'tip', text: `与组合持仓中度相关（均值 ${corr.toFixed(2)}），有一定分散效果，可继续优化组合结构` });
     } else {
-      alerts.push({ level: 'ok', text: `与组合持仓相关性低（均值 ${corr.toFixed(2)}），分散化效果较好` });
+      alerts.push({ level: 'ok', text: `与组合持仓低相关（均值 ${corr.toFixed(2)}），符合胡猛"低相关、高分散"的组合配置原则` });
     }
   }
 
   return alerts;
 }
 
-function PersonalizedRiskSection({ personalized: p }: { personalized: NonNullable<StockRiskData['personalized']> }) {
-  const alerts = buildPersonalAlerts(p);
+function PersonalizedRiskSection({ personalized: p, valuation }: { personalized: NonNullable<StockRiskData['personalized']>; valuation?: StockRiskData['common']['valuation'] }) {
+  const alerts = buildPersonalAlerts(p, valuation);
 
   return (
     <RiskSection title="持仓风控（个人）">
@@ -1436,7 +1455,7 @@ function PersonalizedRiskSection({ personalized: p }: { personalized: NonNullabl
         {p.position_weight_pct != null && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '80px' }}>
             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>仓位占比</span>
-            <span style={{ fontSize: '14px', fontWeight: 600, color: p.position_weight_pct > 30 ? '#dc2626' : p.position_weight_pct > 20 ? '#ca8a04' : 'var(--text-primary)' }}>
+            <span style={{ fontSize: '14px', fontWeight: 600, color: p.position_weight_pct > 6 ? '#dc2626' : p.position_weight_pct >= 4 ? '#ca8a04' : 'var(--text-primary)' }}>
               {p.position_weight_pct.toFixed(1)}%
             </span>
           </div>
@@ -1529,6 +1548,25 @@ function PersonalizedRiskSection({ personalized: p }: { personalized: NonNullabl
           </div>
         </div>
       )}
+
+      {/* 风和投资原则 */}
+      <div style={{ marginTop: '16px', padding: '12px 14px', borderRadius: '6px', background: 'rgba(94,106,210,0.04)', border: '1px solid rgba(94,106,210,0.15)' }}>
+        <div style={{ fontSize: '12px', fontWeight: 600, color: '#5e6ad2', marginBottom: '8px' }}>风和投资原则</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+          {[
+            '权重：从2%开仓，最高6%；估值高时压至1-2%，估值低时可加至4-6%',
+            '止损：缺陷一旦恶化，不论盈亏立刻出局，绝不留恋',
+            '分散：三低原则 — 低杠杆、低相关、低集中度',
+            '组合：不同篮子放不同卡车，核心持仓相关性应非常低',
+            '周期：逆短期基本面之势，顺长期基本面之势',
+          ].map((rule, i) => (
+            <div key={i} style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', gap: '6px' }}>
+              <span style={{ color: '#5e6ad2', flexShrink: 0 }}>{i + 1}.</span>
+              <span>{rule}</span>
+            </div>
+          ))}
+        </div>
+      </div>
     </RiskSection>
   );
 }
@@ -1743,7 +1781,7 @@ function RiskTab({ stock, onTabChange }: { stock: StockOption; onTabChange: (t: 
 
       {/* 个性化：持仓风控 */}
       {personalized ? (
-        <PersonalizedRiskSection personalized={personalized} />
+        <PersonalizedRiskSection personalized={personalized} valuation={val} />
       ) : (
         <RiskSection title="持仓风控（个人）">
           <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>该股票不在您的实盘持仓中，暂无个性化风控数据</div>
