@@ -9,14 +9,17 @@ MACRO_POSITION_LIMITS = {
     (85, 100): 0.3,
 }
 
-# L1 权重
+# L1 权重 (9维)
 MACRO_WEIGHTS = {
-    'fear_index': 0.30,
-    'vix': 0.20,
-    'northflow': 0.15,
-    'yield_spread': 0.15,
-    'commodity': 0.10,
-    'fx': 0.10,
+    'fear_index': 0.20,
+    'vix': 0.12,
+    'northflow': 0.10,
+    'yield_spread': 0.08,
+    'commodity_fx': 0.08,
+    'margin': 0.12,
+    'breadth': 0.12,
+    'equity_bond': 0.10,
+    'volume': 0.08,
 }
 
 # L2 SVD 市场状态风险分

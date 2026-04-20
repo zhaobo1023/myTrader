@@ -13,6 +13,14 @@ logger = logging.getLogger(__name__)
 # trigger 格式: 'module.path.function'，None 表示无自动触发
 DEPENDENCIES = [
     {
+        'name': 'macro_data',
+        'table': 'macro_data',
+        'date_column': 'date',
+        'max_delay_days': 2,
+        'trigger': None,
+        'critical': True,
+    },
+    {
         'name': 'trade_stock_daily',
         'table': 'trade_stock_daily',
         'date_column': 'trade_date',
@@ -45,9 +53,9 @@ DEPENDENCIES = [
         'critical': False,
     },
     {
-        'name': 'trade_technical_indicator',
-        'table': 'trade_technical_indicator',
-        'date_column': 'trade_date',
+        'name': 'trade_stock_factor',
+        'table': 'trade_stock_factor',
+        'date_column': 'calc_date',
         'max_delay_days': 1,
         'trigger': None,
         'critical': False,
@@ -63,7 +71,7 @@ DEPENDENCIES = [
     {
         'name': 'trade_news_sentiment',
         'table': 'trade_news_sentiment',
-        'date_column': 'trade_date',
+        'date_column': 'publish_time',
         'max_delay_days': 3,
         'trigger': None,
         'critical': False,

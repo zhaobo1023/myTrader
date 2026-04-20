@@ -19,17 +19,19 @@ logger = logging.getLogger(__name__)
 
 
 def _query_positions(user_id: int, env: str) -> List[dict]:
-    """从 user_positions 取活跃持仓。user_positions 始终在 local 库。"""
+    """从 user_positions 取活跃持仓。优先从 local 库读取，失败时回退到 env 指定的库。"""
     from config.db import execute_query
-    rows = list(execute_query(
-        """
+    sql = """
         SELECT user_id, stock_code, stock_name, level, shares, cost_price
         FROM user_positions
         WHERE user_id = %s AND is_active = 1
-        """,
-        (user_id,),
-        env='local',
-    ))
+    """
+    params = (user_id,)
+    try:
+        rows = list(execute_query(sql, params, env='local'))
+    except Exception:
+        logger.warning("local 库读取 user_positions 失败，回退到 env=%s", env)
+        rows = list(execute_query(sql, params, env=env))
     return [
         {
             'user_id': r['user_id'],

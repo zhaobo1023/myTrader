@@ -123,22 +123,26 @@ def generate_report_v2(scan_result: LayeredRiskResult) -> str:
         _level_label(macro.level),
         macro.suggested_max_exposure * 100,
     ))
+    interpretations = macro.details.get('interpretations', {})
     dim_scores = macro.details.get('dimension_scores', {})
-    raw_values = macro.details.get('raw_values', {})
-    if dim_scores:
-        lines.append('| 维度 | 原始值 | 风险分 |')
-        lines.append('|------|--------|--------|')
+    if interpretations:
+        for k in ['fear_index', 'vix', 'northflow', 'margin', 'breadth',
+                   'equity_bond', 'yield_spread', 'commodity_fx', 'volume']:
+            interp = interpretations.get(k)
+            score = dim_scores.get(k)
+            if interp and score is not None:
+                lines.append('- {} (风险分: {:.0f})'.format(interp, score))
+        lines.append('')
+    elif dim_scores:
         dim_names = {
-            'fear_index': '恐慌贪婪指数',
-            'vix': 'VIX/QVIX',
-            'northflow': '北向资金(5日均)',
-            'yield_spread': '美债利差',
-            'commodity': '美元指数(DXY)',
-            'fx': '北向资金5日',
+            'fear_index': '恐慌贪婪指数', 'vix': 'VIX/QVIX',
+            'northflow': '北向资金', 'yield_spread': '美债利差',
+            'commodity_fx': '大宗/汇率', 'margin': '融资融券',
+            'breadth': '涨跌家数', 'equity_bond': '股债性价比',
+            'volume': '成交额',
         }
         for k, v in dim_scores.items():
-            raw = raw_values.get(k, '-')
-            lines.append('| {} | {} | {:.0f} |'.format(dim_names.get(k, k), raw, v))
+            lines.append('- {}: 风险分 {:.0f}'.format(dim_names.get(k, k), v))
         lines.append('')
     if macro.suggestions:
         for s in macro.suggestions:

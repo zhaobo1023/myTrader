@@ -118,34 +118,49 @@ async def risk_stock(
         # close_price from tech indicator — reused for personalized section
         _tech_close_price: float | None = None
 
-        # --- 通用：技术指标 ---
+        # --- 通用：技术指标 (trade_stock_factor + MA from trade_stock_daily) ---
         try:
             rows = execute_query(
                 """
-                SELECT t.trade_date, t.close_price,
-                       t.ma5, t.ma10, t.ma20, t.ma60, t.ma250,
-                       t.macd_dif, t.macd_dea, t.rsi_14,
-                       t.upper_band, t.lower_band, t.atr_14
-                FROM trade_technical_indicator t
+                SELECT t.calc_date, t.close, t.macd_signal AS macd_sig, t.rsi_14,
+                       t.bollinger_upper, t.bollinger_lower
+                FROM trade_stock_factor t
                 WHERE t.stock_code = %s
-                ORDER BY t.trade_date DESC
+                ORDER BY t.calc_date DESC
                 LIMIT 1
                 """,
                 (stock_code,),
                 env='online',
             )
+            # MA values from trade_stock_daily (recent 250 rows)
+            ma_rows = execute_query(
+                """
+                SELECT close_price FROM (
+                    SELECT close_price, ROW_NUMBER() OVER (ORDER BY trade_date DESC) AS rn
+                    FROM trade_stock_daily
+                    WHERE stock_code = %s
+                ) sub WHERE rn <= 250
+                """,
+                (stock_code,),
+                env='online',
+            )
+            ma_prices = [float(r['close_price']) for r in ma_rows if r['close_price'] is not None]
+            ma20 = round(sum(ma_prices[:20]) / 20, 3) if len(ma_prices) >= 20 else None
+            ma60 = round(sum(ma_prices[:60]) / 60, 3) if len(ma_prices) >= 60 else None
+            ma250 = round(sum(ma_prices[:250]) / 250, 3) if len(ma_prices) >= 250 else None
+
             if rows:
                 r = rows[0]
-                close = float(r['close_price']) if r['close_price'] else None
+                close = float(r['close']) if r['close'] else None
                 _tech_close_price = close
-                ma20 = float(r['ma20']) if r['ma20'] else None
-                ma60 = float(r['ma60']) if r['ma60'] else None
-                ma250 = float(r['ma250']) if r['ma250'] else None
                 rsi = float(r['rsi_14']) if r['rsi_14'] else None
-                macd_dif = float(r['macd_dif']) if r['macd_dif'] else None
-                macd_dea = float(r['macd_dea']) if r['macd_dea'] else None
-                upper = float(r['upper_band']) if r['upper_band'] else None
-                lower = float(r['lower_band']) if r['lower_band'] else None
+                macd_sig = float(r['macd_sig']) if r['macd_sig'] else None
+                upper = float(r['bollinger_upper']) if r.get('bollinger_upper') else None
+                lower = float(r['bollinger_lower']) if r.get('bollinger_lower') else None
+
+                # macd_signal > 0 means golden cross, < 0 means death cross
+                macd_dif = macd_sig
+                macd_dea = 0.0 if macd_sig is not None else None
 
                 ma_status = []
                 if close and ma20:
@@ -155,12 +170,12 @@ async def risk_stock(
                 if close and ma250:
                     ma_status.append('MA250以上' if close > ma250 else 'MA250以下')
 
-                macd_signal = None
-                if macd_dif is not None and macd_dea is not None:
-                    if macd_dif > macd_dea:
-                        macd_signal = '金叉区间' if macd_dif > 0 else '底部金叉'
+                macd_signal_text = None
+                if macd_sig is not None:
+                    if macd_sig > 0:
+                        macd_signal_text = '金叉区间'
                     else:
-                        macd_signal = '死叉区间' if macd_dif < 0 else '顶部死叉'
+                        macd_signal_text = '死叉区间'
 
                 boll_position = None
                 if close and upper and lower and upper > lower:
@@ -173,7 +188,7 @@ async def risk_stock(
                         boll_position = '布林中轨区间'
 
                 result['common']['technical'] = {
-                    'trade_date': str(r['trade_date']) if r['trade_date'] else None,
+                    'trade_date': str(r['calc_date']) if r['calc_date'] else None,
                     'close': close,
                     'ma20': ma20,
                     'ma60': ma60,
@@ -182,7 +197,7 @@ async def risk_stock(
                     'macd_dif': macd_dif,
                     'macd_dea': macd_dea,
                     'ma_status': ma_status,
-                    'macd_signal': macd_signal,
+                    'macd_signal': macd_signal_text,
                     'boll_position': boll_position,
                 }
         except Exception as e:
@@ -250,11 +265,11 @@ async def risk_stock(
 
         # --- 个性化：查找用户持仓 ---
         try:
-            pos_rows = execute_query(
-                "SELECT stock_code, shares, cost_price FROM user_positions WHERE user_id = %s AND is_active = 1",
-                (user_id,),
-                env='local',
-            )
+            _pos_sql = "SELECT stock_code, shares, cost_price FROM user_positions WHERE user_id = %s AND is_active = 1"
+            try:
+                pos_rows = execute_query(_pos_sql, (user_id,), env='local')
+            except Exception:
+                pos_rows = execute_query(_pos_sql, (user_id,), env='online')
             positions = [
                 {'stock_code': r['stock_code'], 'shares': int(r['shares'] or 0), 'cost_price': float(r['cost_price'] or 0)}
                 for r in pos_rows
@@ -490,11 +505,11 @@ async def risk_overview(
 
         # --- 持仓集中度 ---
         try:
-            pos_rows = execute_query(
-                "SELECT stock_code, stock_name, shares, cost_price FROM user_positions WHERE user_id = %s AND is_active = 1",
-                (user_id,),
-                env='local',
-            )
+            _pos_sql = "SELECT stock_code, stock_name, shares, cost_price FROM user_positions WHERE user_id = %s AND is_active = 1"
+            try:
+                pos_rows = execute_query(_pos_sql, (user_id,), env='local')
+            except Exception:
+                pos_rows = execute_query(_pos_sql, (user_id,), env='online')
             positions = [
                 {
                     'stock_code': r['stock_code'],
@@ -595,4 +610,82 @@ async def trigger_deps(
         return {'data_status': statuses}
     except Exception as exc:
         logger.error('[RISK] trigger-deps failed for user=%s: %s', current_user.id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get('/bull-bear')
+async def risk_bull_bear(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    返回最新牛熊三指标信号 + 近 30 日历史。
+    数据来源: trade_bull_bear_signal 表。
+    """
+    import asyncio
+
+    def _do_bull_bear():
+        from config.db import execute_query
+
+        result = {'latest': None, 'history': []}
+
+        rows = execute_query(
+            "SELECT * FROM trade_bull_bear_signal ORDER BY calc_date DESC LIMIT 30",
+            env='online',
+        )
+        if rows:
+            for r in rows:
+                r['calc_date'] = str(r['calc_date'])
+                for k in ('cn_10y_value', 'cn_10y_ma20', 'usdcny_value', 'usdcny_ma20',
+                          'dividend_relative', 'dividend_rel_ma20'):
+                    if r.get(k) is not None:
+                        r[k] = float(r[k])
+            result['latest'] = rows[0]
+            result['history'] = rows
+
+        return result
+
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _do_bull_bear)
+    except Exception as exc:
+        logger.error('[RISK] bull-bear failed for user=%s: %s', current_user.id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get('/crowding')
+async def risk_crowding(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    返回最新拥挤度评分 + 近 30 日历史。
+    数据来源: trade_crowding_score 表。
+    """
+    import asyncio
+
+    def _do_crowding():
+        from config.db import execute_query
+
+        result = {'latest': None, 'history': []}
+
+        rows = execute_query(
+            "SELECT * FROM trade_crowding_score WHERE dimension = 'overall' ORDER BY calc_date DESC LIMIT 30",
+            env='online',
+        )
+        if rows:
+            for r in rows:
+                r['calc_date'] = str(r['calc_date'])
+                for k in ('turnover_hhi', 'turnover_hhi_percentile', 'northbound_deviation',
+                          'margin_concentration', 'svd_top1_ratio', 'crowding_score'):
+                    if r.get(k) is not None:
+                        r[k] = float(r[k])
+            result['latest'] = rows[0]
+            result['history'] = rows
+
+        return result
+
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _do_crowding)
+    except Exception as exc:
+        logger.error('[RISK] crowding failed for user=%s: %s', current_user.id, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))

@@ -96,19 +96,19 @@ class SectorRiskAssessor(BaseAssessor):
         try:
             rows = self._query(
                 """
-                SELECT v.industry_name, v.pe_percentile_5y
+                SELECT v.sw_name, v.pe_pct_5y, v.valuation_score, v.valuation_label
                 FROM sw_industry_valuation v
                 INNER JOIN (
-                    SELECT industry_name, MAX(trade_date) AS max_date
+                    SELECT sw_name, MAX(trade_date) AS max_date
                     FROM sw_industry_valuation
-                    GROUP BY industry_name
-                ) latest ON v.industry_name = latest.industry_name
+                    GROUP BY sw_name
+                ) latest ON v.sw_name = latest.sw_name
                           AND v.trade_date = latest.max_date
                 """
             )
             for r in rows:
-                if r['pe_percentile_5y'] is not None:
-                    valuation_map[r['industry_name']] = float(r['pe_percentile_5y'])
+                if r['pe_pct_5y'] is not None:
+                    valuation_map[r['sw_name']] = float(r['pe_pct_5y'])
         except Exception as e:
             logger.warning("sw_industry_valuation 查询失败: %s", e)
 

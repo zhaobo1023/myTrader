@@ -59,7 +59,7 @@ class ExecutionRiskAssessor(BaseAssessor):
                     SELECT stock_code, stock_name
                     FROM trade_stock_basic
                     WHERE stock_code IN ({})
-                      AND stock_name LIKE '%ST%'
+                      AND stock_name LIKE '%%ST%%'
                     """.format(placeholders),
                     tuple(codes),
                 )

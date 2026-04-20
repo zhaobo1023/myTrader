@@ -136,6 +136,10 @@ def _momentum_score(rps_250: Optional[float]) -> float:
 class StockFundamentalAssessor(BaseAssessor):
     """L4 个股基本面与技术面风险评估器。"""
 
+    def assess(self, positions: List[Dict]) -> List[StockRiskResult]:
+        """实现 BaseAssessor 抽象方法，等同于 assess_batch。"""
+        return self.assess_batch(positions)
+
     def assess_stock(self, position: Dict) -> StockRiskResult:
         """评估单只股票风险。"""
         return self.assess_batch([position])[0]
@@ -150,27 +154,39 @@ class StockFundamentalAssessor(BaseAssessor):
         today = date.today()
         seven_days_ago = (today - timedelta(days=7)).strftime('%Y-%m-%d')
 
-        # --- 批量查询财务数据（取每只最新报告）---
+        # --- 批量查询财务数据（取每只最新两期报告，计算净利润同比）---
         financial_map: Dict[str, Dict] = {}
         try:
             rows = self._query(
                 """
-                SELECT f.stock_code, f.net_profit_yoy, f.roe
-                FROM trade_stock_financial f
-                INNER JOIN (
-                    SELECT stock_code, MAX(report_date) AS max_date
+                SELECT stock_code, report_date, net_profit, roe
+                FROM (
+                    SELECT stock_code, report_date, net_profit, roe,
+                           ROW_NUMBER() OVER (PARTITION BY stock_code ORDER BY report_date DESC) AS rn
                     FROM trade_stock_financial
                     WHERE stock_code IN ({})
-                    GROUP BY stock_code
-                ) latest ON f.stock_code = latest.stock_code
-                          AND f.report_date = latest.max_date
+                ) sub
+                WHERE rn <= 2
                 """.format(placeholders),
                 tuple(codes),
             )
+            # 按股票分组，计算同比
+            by_code: Dict[str, list] = {}
             for r in rows:
-                financial_map[r['stock_code']] = {
-                    'net_profit_yoy': float(r['net_profit_yoy']) if r['net_profit_yoy'] is not None else None,
-                    'roe': float(r['roe']) if r['roe'] is not None else None,
+                by_code.setdefault(r['stock_code'], []).append(r)
+            for code, reports in by_code.items():
+                reports.sort(key=lambda x: str(x['report_date']), reverse=True)
+                latest = reports[0]
+                roe = float(latest['roe']) if latest['roe'] is not None else None
+                net_profit_yoy = None
+                if len(reports) >= 2 and reports[1]['net_profit'] and reports[0]['net_profit']:
+                    prev_np = float(reports[1]['net_profit'])
+                    curr_np = float(reports[0]['net_profit'])
+                    if prev_np != 0:
+                        net_profit_yoy = (curr_np - prev_np) / abs(prev_np) * 100
+                financial_map[code] = {
+                    'net_profit_yoy': round(net_profit_yoy, 2) if net_profit_yoy is not None else None,
+                    'roe': float(roe) if roe is not None else None,
                 }
         except Exception as e:
             logger.warning("trade_stock_financial 批量查询失败: %s", e)
@@ -199,34 +215,54 @@ class StockFundamentalAssessor(BaseAssessor):
         except Exception as e:
             logger.warning("trade_stock_daily_basic 批量查询失败: %s", e)
 
-        # --- 批量查询技术指标（取每只最近1条）---
+        # --- 批量查询技术因子（trade_stock_factor，取每只最近1条）---
         technical_map: Dict[str, Dict] = {}
         try:
             rows = self._query(
                 """
-                SELECT t.stock_code, t.close, t.ma20, t.ma60, t.macd_dif, t.macd_dea, t.rsi_14
-                FROM trade_technical_indicator t
+                SELECT t.stock_code, t.close, t.macd_signal, t.rsi_14
+                FROM trade_stock_factor t
                 INNER JOIN (
-                    SELECT stock_code, MAX(trade_date) AS max_date
-                    FROM trade_technical_indicator
+                    SELECT stock_code, MAX(calc_date) AS max_date
+                    FROM trade_stock_factor
                     WHERE stock_code IN ({})
                     GROUP BY stock_code
                 ) latest ON t.stock_code = latest.stock_code
-                          AND t.trade_date = latest.max_date
+                          AND t.calc_date = latest.max_date
                 """.format(placeholders),
                 tuple(codes),
             )
             for r in rows:
                 technical_map[r['stock_code']] = {
                     'close': float(r['close']) if r['close'] is not None else None,
-                    'ma20': float(r['ma20']) if r['ma20'] is not None else None,
-                    'ma60': float(r['ma60']) if r['ma60'] is not None else None,
-                    'macd_dif': float(r['macd_dif']) if r['macd_dif'] is not None else None,
-                    'macd_dea': float(r['macd_dea']) if r['macd_dea'] is not None else None,
+                    'macd_signal': float(r['macd_signal']) if r['macd_signal'] is not None else None,
                     'rsi_14': float(r['rsi_14']) if r['rsi_14'] is not None else None,
                 }
         except Exception as e:
-            logger.warning("trade_technical_indicator 批量查询失败: %s", e)
+            logger.warning("trade_stock_factor 批量查询失败: %s", e)
+
+        # --- 批量计算 MA60（从 trade_stock_daily 最近60条）---
+        ma60_map: Dict[str, float] = {}
+        try:
+            rows = self._query(
+                """
+                SELECT stock_code, AVG(close_price) AS ma60
+                FROM (
+                    SELECT stock_code, close_price,
+                           ROW_NUMBER() OVER (PARTITION BY stock_code ORDER BY trade_date DESC) AS rn
+                    FROM trade_stock_daily
+                    WHERE stock_code IN ({})
+                ) sub
+                WHERE rn <= 60
+                GROUP BY stock_code
+                """.format(placeholders),
+                tuple(codes),
+            )
+            for r in rows:
+                if r['ma60'] is not None:
+                    ma60_map[r['stock_code']] = float(r['ma60'])
+        except Exception as e:
+            logger.warning("MA60 计算失败: %s", e)
 
         # --- 批量查询 RPS（取每只最近1条）---
         rps_map: Dict[str, Dict] = {}
@@ -277,7 +313,7 @@ class StockFundamentalAssessor(BaseAssessor):
         try:
             rows = self._query(
                 """
-                SELECT stock_code, signal, event_category
+                SELECT stock_code, `signal`, event_category
                 FROM trade_event_signal
                 WHERE stock_code IN ({})
                   AND trade_date >= '{}'
@@ -285,7 +321,7 @@ class StockFundamentalAssessor(BaseAssessor):
                 tuple(codes),
             )
             for r in rows:
-                event_map.setdefault(r['stock_code'], []).append(r['signal'])
+                event_map.setdefault(r['stock_code'], []).append(r.get('signal', ''))
         except Exception as e:
             logger.warning("trade_event_signal 批量查询失败: %s", e)
 
@@ -342,9 +378,12 @@ class StockFundamentalAssessor(BaseAssessor):
             # 技术止损 (25%)
             tech = technical_map.get(code, {})
             close = tech.get('close')
-            ma60 = tech.get('ma60')
-            macd_dif = tech.get('macd_dif')
-            macd_dea = tech.get('macd_dea')
+            ma60 = ma60_map.get(code)
+            macd_signal = tech.get('macd_signal')
+            # macd_signal > 0 表示金叉, < 0 表示死叉
+            # 转换为 dif/dea 格式: signal>0 -> dif>dea, signal<0 -> dif<dea
+            macd_dif = macd_signal if macd_signal is not None else None
+            macd_dea = 0.0 if macd_signal is not None else None
             tech_score, stop_loss_hit, loss_pct, distance_to_stop = _technical_score(
                 close, cost_price, level, ma60, macd_dif, macd_dea
             )
