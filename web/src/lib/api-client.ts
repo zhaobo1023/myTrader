@@ -483,7 +483,7 @@ export interface RiskOverviewData {
 
 export const riskApi = {
   overview: () => apiClient.get<RiskOverviewData>('/api/risk/overview'),
-  scan: () => apiClient.get<Record<string, unknown>>('/api/risk/scan', { timeout: 90000 }),
+  scan: () => apiClient.get('/api/risk/scan', { timeout: 90000 }),
 };
 
 // ============================================================
