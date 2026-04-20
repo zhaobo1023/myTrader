@@ -214,26 +214,41 @@ export default function PositionsContent() {
       {scanResult && (
         <div style={{ marginBottom: '16px', padding: '14px 16px', borderRadius: '8px', background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-            <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>风控扫描结果</span>
+            <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
+              风控扫描
+              <span style={{ fontSize: '11px', fontWeight: 400, color: 'var(--text-muted)', marginLeft: '8px' }}>
+                {scanResult.portfolio_summary?.total_positions}只 / {scanResult.portfolio_summary?.scan_date}
+              </span>
+            </span>
             <button onClick={() => setScanResult(null)} style={{ fontSize: '12px', color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}>关闭</button>
           </div>
           {scanResult.portfolio_alerts.length === 0 && scanResult.stock_alerts.length === 0 ? (
             <div style={{ fontSize: '13px', color: '#27a644' }}>所有持仓通过风控检查，无异常。</div>
           ) : (
             <>
-              {scanResult.portfolio_alerts.map((a, i) => (
-                <div key={i} style={{ fontSize: '12px', color: '#c69026', marginBottom: '4px' }}>{a}</div>
-              ))}
-              {scanResult.stock_alerts.map((sa, i) => (
-                <div key={i} style={{ fontSize: '12px', marginBottom: '6px' }}>
-                  <span style={{ fontWeight: 600, color: sa.level === 'REJECT' || sa.level === 'HALT' ? 'var(--red)' : '#c69026' }}>
-                    {sa.stock_code} {sa.stock_name}
-                  </span>
-                  {sa.alerts.map((a, j) => (
-                    <div key={j} style={{ marginLeft: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>{a}</div>
+              {scanResult.portfolio_alerts.length > 0 && (
+                <div style={{ fontSize: '12px', color: '#c69026', marginBottom: '8px', padding: '6px 10px', background: 'rgba(198,144,38,0.06)', borderRadius: '5px' }}>
+                  {scanResult.portfolio_alerts.map((a, i) => <div key={i}>{a}</div>)}
+                </div>
+              )}
+              {scanResult.stock_alerts.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                  {scanResult.stock_alerts.map((sa, i) => (
+                    <div key={i} title={sa.alerts.join('\n')} style={{
+                      fontSize: '11px', padding: '4px 8px', borderRadius: '5px',
+                      background: sa.level === 'REJECT' || sa.level === 'HALT' ? 'rgba(229,83,75,0.08)' : 'rgba(198,144,38,0.06)',
+                      border: `1px solid ${sa.level === 'REJECT' || sa.level === 'HALT' ? 'rgba(229,83,75,0.2)' : 'rgba(198,144,38,0.15)'}`,
+                      color: sa.level === 'REJECT' || sa.level === 'HALT' ? '#e5534b' : '#c69026',
+                      cursor: 'default',
+                    }}>
+                      <span style={{ fontWeight: 600 }}>{sa.stock_name || sa.stock_code}</span>
+                      <span style={{ marginLeft: '4px', opacity: 0.8 }}>
+                        {sa.alerts.map(a => a.replace(/^\[WARN\]\s*/, '').replace(/^\[REJECT\]\s*/, '').split(':')[0]).join(' / ')}
+                      </span>
+                    </div>
                   ))}
                 </div>
-              ))}
+              )}
             </>
           )}
         </div>
