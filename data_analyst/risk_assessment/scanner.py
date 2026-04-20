@@ -19,16 +19,16 @@ logger = logging.getLogger(__name__)
 
 
 def _query_positions(user_id: int, env: str) -> List[dict]:
-    """从 user_position 取活跃持仓。"""
+    """从 user_positions 取活跃持仓。user_positions 始终在 local 库。"""
     from config.db import execute_query
     rows = list(execute_query(
         """
         SELECT user_id, stock_code, stock_name, level, shares, cost_price
-        FROM user_position
+        FROM user_positions
         WHERE user_id = %s AND is_active = 1
         """,
         (user_id,),
-        env=env,
+        env='local',
     ))
     return [
         {
