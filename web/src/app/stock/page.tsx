@@ -1,13 +1,14 @@
 'use client';
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import AppShell from '@/components/layout/AppShell';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type StockTab = 'one-pager' | 'comprehensive' | 'technical' | 'fundamental' | 'news';
+type StockTab = 'one-pager' | 'comprehensive' | 'technical' | 'fundamental' | 'news' | 'risk';
 
 interface StockOption {
   stock_code: string;
@@ -64,6 +65,7 @@ const TAB_CONFIG: { key: StockTab; label: string }[] = [
   { key: 'technical',     label: '技术面分析' },
   { key: 'fundamental',   label: '基本面分析' },
   { key: 'news',          label: '个股动态' },
+  { key: 'risk',          label: '风控情况' },
 ];
 
 // Map tab -> report_type used by the unified API
@@ -73,6 +75,7 @@ const TAB_REPORT_TYPE: Record<StockTab, string> = {
   'technical':     'technical_report',
   'fundamental':   'fundamental',
   'news':          '',
+  'risk':          '',
 };
 
 type CapFilter = 'all' | 'large' | 'mid' | 'small';
@@ -1257,6 +1260,213 @@ function StockCardGrid({ onSelect, version }: { onSelect: (s: StockOption) => vo
 }
 
 // ---------------------------------------------------------------------------
+// RiskTab — 风控情况（通用 + 个性化）
+// ---------------------------------------------------------------------------
+
+interface StockRiskData {
+  stock_code: string;
+  common: {
+    technical?: {
+      trade_date: string | null;
+      close: number | null;
+      ma20: number | null;
+      ma60: number | null;
+      ma250: number | null;
+      rsi_14: number | null;
+      macd_dif: number | null;
+      macd_dea: number | null;
+      ma_status: string[];
+      macd_signal: string | null;
+      boll_position: string | null;
+    };
+    valuation?: {
+      trade_date: string | null;
+      pe_ttm: number | null;
+      pb: number | null;
+      ps_ttm: number | null;
+      total_mv: number | null;
+      circ_mv: number | null;
+    };
+  };
+  personalized: {
+    cost_price: number;
+    shares: number;
+    current_price: number | null;
+    cost_distance_pct: number | null;
+    pnl_ratio: number | null;
+    position_weight_pct: number | null;
+    avg_portfolio_correlation: number | null;
+    correlations?: { stock_code: string; correlation: number }[];
+  } | null;
+}
+
+function RiskInfoRow({ label, value, color }: { label: string; value: React.ReactNode; color?: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid var(--border-subtle)' }}>
+      <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{label}</span>
+      <span style={{ fontSize: '13px', fontWeight: 510, color: color || 'var(--text-primary)' }}>{value}</span>
+    </div>
+  );
+}
+
+function RiskSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '16px 20px', marginBottom: '16px' }}>
+      <div style={{ fontSize: '14px', fontWeight: 590, color: 'var(--text-primary)', marginBottom: '12px' }}>{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function pnlColor(v: number | null): string {
+  if (v === null) return 'var(--text-primary)';
+  return v > 0 ? '#27a644' : v < 0 ? '#e5534b' : 'var(--text-muted)';
+}
+
+function RiskTab({ stock }: { stock: StockOption }) {
+  const [data, setData] = useState<StockRiskData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    setData(null);
+    fetch(`${API_BASE}/api/risk/stock/${encodeURIComponent(stock.stock_code)}`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`请求失败 (${r.status})`);
+        return r.json();
+      })
+      .then(setData)
+      .catch((e) => setError(String(e)))
+      .finally(() => setLoading(false));
+  }, [stock.stock_code]);
+
+  if (loading) {
+    return <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>加载风控数据中...</div>;
+  }
+  if (error || !data) {
+    return <div style={{ padding: '40px 0', textAlign: 'center', color: '#e5534b', fontSize: '13px' }}>{error || '暂无数据'}</div>;
+  }
+
+  const { common, personalized } = data;
+  const tech = common.technical;
+  const val = common.valuation;
+
+  return (
+    <div>
+      {/* 通用：技术指标 */}
+      <RiskSection title="技术指标">
+        {!tech ? (
+          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>暂无技术指标数据</div>
+        ) : (
+          <>
+            {tech.trade_date && (
+              <RiskInfoRow label="数据日期" value={tech.trade_date} />
+            )}
+            {tech.close != null && (
+              <RiskInfoRow label="最新收盘价" value={`${tech.close.toFixed(2)}`} />
+            )}
+            {tech.ma_status.length > 0 && (
+              <RiskInfoRow label="均线位置" value={tech.ma_status.join(' / ')} />
+            )}
+            {tech.macd_signal && (
+              <RiskInfoRow label="MACD 信号" value={tech.macd_signal} />
+            )}
+            {tech.rsi_14 != null && (
+              <RiskInfoRow
+                label="RSI(14)"
+                value={tech.rsi_14.toFixed(1)}
+                color={tech.rsi_14 > 70 ? '#e5534b' : tech.rsi_14 < 30 ? '#27a644' : 'var(--text-primary)'}
+              />
+            )}
+            {tech.boll_position && (
+              <RiskInfoRow label="布林带位置" value={tech.boll_position} />
+            )}
+          </>
+        )}
+      </RiskSection>
+
+      {/* 通用：估值 */}
+      <RiskSection title="当前估值">
+        {!val ? (
+          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>暂无估值数据</div>
+        ) : (
+          <>
+            {val.trade_date && <RiskInfoRow label="数据日期" value={val.trade_date} />}
+            {val.pe_ttm != null && (
+              <RiskInfoRow
+                label="PE(TTM)"
+                value={val.pe_ttm > 0 ? val.pe_ttm.toFixed(1) : '亏损/负PE'}
+                color={val.pe_ttm > 0 && val.pe_ttm < 20 ? '#27a644' : val.pe_ttm > 50 ? '#e5534b' : 'var(--text-primary)'}
+              />
+            )}
+            {val.pb != null && (
+              <RiskInfoRow
+                label="PB"
+                value={val.pb > 0 ? val.pb.toFixed(2) : '-'}
+                color={val.pb > 0 && val.pb < 2 ? '#27a644' : val.pb > 5 ? '#e5534b' : 'var(--text-primary)'}
+              />
+            )}
+            {val.total_mv != null && (
+              <RiskInfoRow label="总市值" value={`${(val.total_mv / 10000).toFixed(1)} 亿`} />
+            )}
+          </>
+        )}
+      </RiskSection>
+
+      {/* 个性化：持仓风控 */}
+      {personalized ? (
+        <RiskSection title="持仓风控（个人）">
+          <RiskInfoRow label="持仓成本" value={`${personalized.cost_price.toFixed(2)}`} />
+          {personalized.current_price != null && (
+            <RiskInfoRow label="当前价格" value={`${personalized.current_price.toFixed(2)}`} />
+          )}
+          {personalized.pnl_ratio != null && (
+            <RiskInfoRow
+              label="浮动盈亏"
+              value={`${personalized.pnl_ratio > 0 ? '+' : ''}${personalized.pnl_ratio.toFixed(2)}%`}
+              color={pnlColor(personalized.pnl_ratio)}
+            />
+          )}
+          {personalized.position_weight_pct != null && (
+            <RiskInfoRow
+              label="仓位占比"
+              value={`${personalized.position_weight_pct.toFixed(1)}%`}
+              color={personalized.position_weight_pct > 30 ? '#e5534b' : personalized.position_weight_pct > 20 ? '#c69026' : 'var(--text-primary)'}
+            />
+          )}
+          {personalized.avg_portfolio_correlation != null && (
+            <RiskInfoRow
+              label="与组合平均相关性"
+              value={personalized.avg_portfolio_correlation.toFixed(3)}
+              color={personalized.avg_portfolio_correlation > 0.6 ? '#e5534b' : personalized.avg_portfolio_correlation > 0.4 ? '#c69026' : '#27a644'}
+            />
+          )}
+          {personalized.correlations && personalized.correlations.length > 0 && (
+            <div style={{ paddingTop: '8px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>相关性最高的其他持仓</div>
+              {personalized.correlations.map((c) => (
+                <div key={c.stock_code} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: '12px' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>{c.stock_code}</span>
+                  <span style={{ color: Math.abs(c.correlation) > 0.6 ? '#e5534b' : 'var(--text-primary)', fontWeight: 510 }}>
+                    {c.correlation.toFixed(3)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </RiskSection>
+      ) : (
+        <RiskSection title="持仓风控（个人）">
+          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>该股票不在您的实盘持仓中，暂无个性化风控数据</div>
+        </RiskSection>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Stock detail view
 // ---------------------------------------------------------------------------
 
@@ -1348,6 +1558,7 @@ function StockDetail({
           />
         )}
         {activeTab === 'news' && <NewsTab stock={stock} />}
+        {activeTab === 'risk' && <RiskTab stock={stock} />}
       </div>
     </div>
   );
@@ -1442,10 +1653,32 @@ function useTriggerAnnualReportIngest(stock: StockOption | null) {
   }, [stock?.stock_code]);
 }
 
-export default function StockPage() {
+function StockPageInner() {
+  const searchParams = useSearchParams();
+  const codeParam = searchParams.get('code');
+
   const [selectedStock, setSelectedStock] = useState<StockOption | null>(null);
   const [activeTab, setActiveTab] = useState<StockTab>('one-pager');
   const [watchlistVersion, setWatchlistVersion] = useState(0);
+
+  // If navigated with ?code=xxx, auto-select that stock
+  useEffect(() => {
+    if (!codeParam) return;
+    // Try to look up the name first; if unavailable just use code as name
+    fetch(`${API_BASE}/api/market/search?keyword=${encodeURIComponent(codeParam)}&limit=1`)
+      .then((r) => r.json())
+      .then((d) => {
+        const item = (d.data || [])[0];
+        if (item && item.stock_code === codeParam) {
+          setSelectedStock({ stock_code: item.stock_code, stock_name: item.stock_name });
+        } else {
+          setSelectedStock({ stock_code: codeParam, stock_name: null });
+        }
+      })
+      .catch(() => {
+        setSelectedStock({ stock_code: codeParam, stock_name: null });
+      });
+  }, [codeParam]);
 
   useTriggerAnnualReportIngest(selectedStock);
 
@@ -1482,5 +1715,13 @@ export default function StockPage() {
         </>
       )}
     </AppShell>
+  );
+}
+
+export default function StockPage() {
+  return (
+    <Suspense fallback={<AppShell><div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>加载中...</div></AppShell>}>
+      <StockPageInner />
+    </Suspense>
   );
 }

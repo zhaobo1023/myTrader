@@ -1,11 +1,14 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import apiClient, { positionsApi, PositionItem } from '@/lib/api-client';
 import { useAddToCandidate } from '@/hooks/useStockAdd';
 import StockSearchInput from '@/components/stock/StockSearchInput';
 import type { StockSearchResult } from '@/lib/api-client';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
 const LEVELS = ['L1', 'L2', 'L3'];
 
@@ -248,8 +251,10 @@ function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClo
 }
 
 export default function PositionsContent() {
+  const router = useRouter();
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
+  const [analyzingId, setAnalyzingId] = useState<number | null>(null);
   const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState({ stock_code: '', stock_name: '', level: 'L2', shares: '', cost_price: '', account: '', note: '' });
   const [movingId, setMovingId] = useState<number | null>(null);
@@ -340,6 +345,33 @@ export default function PositionsContent() {
     } finally {
       setMovingId(null);
     }
+  }
+
+  async function quickAnalyze(p: PositionItem) {
+    if (analyzingId === p.id) return;
+    setAnalyzingId(p.id);
+    const code = p.stock_code;
+    const name = p.stock_name || p.stock_code;
+    // Fire all report submissions in parallel; navigate to stock page afterwards
+    await Promise.allSettled([
+      fetch(`${API_BASE}/api/analysis/report/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stock_code: code, stock_name: name, report_type: 'one_pager' }),
+      }),
+      fetch(`${API_BASE}/api/analysis/report/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stock_code: code, stock_name: name, report_type: 'five_section' }),
+      }),
+      fetch(`${API_BASE}/api/analysis/report/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stock_code: code, stock_name: name, report_type: 'fundamental' }),
+      }),
+    ]);
+    setAnalyzingId(null);
+    router.push(`/stock?code=${encodeURIComponent(code)}`);
   }
 
   const items = data?.items || [];
@@ -458,12 +490,12 @@ export default function PositionsContent() {
           <div className="table-scroll" style={cardStyle}>
             <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
               <colgroup>
-                <col style={{ width: '15%' }} />
-                <col style={{ width: '20%' }} />
+                <col style={{ width: '13%' }} />
+                <col style={{ width: '17%' }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '10%' }} />
                 <col style={{ width: '12%' }} />
-                <col style={{ width: '12%' }} />
-                <col style={{ width: '15%' }} />
-                <col style={{ width: '26%' }} />
+                <col style={{ width: '38%' }} />
               </colgroup>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
@@ -478,13 +510,34 @@ export default function PositionsContent() {
               <tbody>
                 {g.items.map(p => (
                   <tr key={p.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                    <td style={{ padding: '6px 8px', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.stock_code}</td>
-                    <td style={{ padding: '6px 8px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.stock_name || '-'}</td>
+                    <td style={{ padding: '6px 8px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <a
+                        href={`/stock?code=${encodeURIComponent(p.stock_code)}`}
+                        style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: '13px' }}
+                      >
+                        {p.stock_code}
+                      </a>
+                    </td>
+                    <td style={{ padding: '6px 8px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <a
+                        href={`/stock?code=${encodeURIComponent(p.stock_code)}`}
+                        style={{ color: 'var(--text-secondary)', textDecoration: 'none', fontSize: '13px' }}
+                      >
+                        {p.stock_name || '-'}
+                      </a>
+                    </td>
                     <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text-primary)' }}>{p.shares ?? '-'}</td>
                     <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text-primary)' }}>{p.cost_price?.toFixed(2) ?? '-'}</td>
                     <td style={{ padding: '6px 8px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.account || '-'}</td>
                     <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button onClick={() => startEdit(p)} style={{ fontSize: '12px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', marginRight: '8px' }}>编辑</button>
+                      <button
+                        onClick={() => quickAnalyze(p)}
+                        disabled={analyzingId === p.id}
+                        style={{ fontSize: '12px', color: '#7c3aed', background: 'none', border: 'none', cursor: analyzingId === p.id ? 'default' : 'pointer', marginRight: '8px', opacity: analyzingId === p.id ? 0.5 : 1 }}
+                      >
+                        {analyzingId === p.id ? '提交中...' : '一键分析'}
+                      </button>
                       <button
                         onClick={() => moveToCandidate(p)}
                         disabled={movingId === p.id}
