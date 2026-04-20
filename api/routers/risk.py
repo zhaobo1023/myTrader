@@ -508,7 +508,8 @@ async def risk_overview(
             _pos_sql = "SELECT stock_code, stock_name, shares, cost_price FROM user_positions WHERE user_id = %s AND is_active = 1"
             try:
                 pos_rows = execute_query(_pos_sql, (user_id,), env='local')
-            except Exception:
+            except Exception as _e:
+                logger.warning('[RISK/overview] local positions query failed, falling back to online: %s', _e)
                 pos_rows = execute_query(_pos_sql, (user_id,), env='online')
             positions = [
                 {

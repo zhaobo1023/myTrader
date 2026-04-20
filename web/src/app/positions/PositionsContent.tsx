@@ -196,6 +196,7 @@ const QVIX_COLORS: Record<string, { bg: string; border: string; text: string }> 
   medium:   { bg: 'rgba(202,138,4,0.07)',   border: 'rgba(202,138,4,0.3)',   text: '#ca8a04' },
   high:     { bg: 'rgba(234,88,12,0.07)',   border: 'rgba(234,88,12,0.3)',   text: '#ea580c' },
   critical: { bg: 'rgba(220,38,38,0.07)',   border: 'rgba(220,38,38,0.3)',   text: '#dc2626' },
+  none:     { bg: 'rgba(100,100,100,0.05)', border: 'rgba(100,100,100,0.2)', text: 'var(--text-muted)' },
 };
 
 function OverviewChip({ label, value, color, sub }: { label: string; value: string; color: { bg: string; border: string; text: string }; sub?: string }) {
@@ -215,7 +216,7 @@ function OverviewChip({ label, value, color, sub }: { label: string; value: stri
 
 function RiskOverviewBar({ data }: { data: RiskOverviewData }) {
   const svdColor = data.svd ? (SVD_STATE_COLORS[data.svd.state] || SVD_DEFAULT_COLOR) : SVD_DEFAULT_COLOR;
-  const qvixColor = data.qvix ? (QVIX_COLORS[data.qvix.level] || QVIX_COLORS.medium) : QVIX_COLORS.medium;
+  const qvixColor = data.qvix ? (QVIX_COLORS[data.qvix.level] || QVIX_COLORS.medium) : QVIX_COLORS.none;
 
   const maxStock = data.concentration?.max_stock;
   const overweightStocks = data.concentration?.overweight_stocks || [];
@@ -581,10 +582,11 @@ export default function PositionsContent() {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<LayeredRiskResult | null>(null);
 
-  const { data: overviewData, isLoading: overviewLoading } = useQuery({
+  const { data: overviewData, isLoading: overviewLoading, isError: overviewError } = useQuery({
     queryKey: ['risk-overview'],
     queryFn: () => riskApi.overview().then(r => r.data),
     staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
     retry: 1,
   });
 
@@ -833,6 +835,11 @@ export default function PositionsContent() {
       {overviewLoading && (
         <div style={{ marginBottom: '12px', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', fontSize: '12px', color: 'var(--text-muted)' }}>
           加载风险概览...
+        </div>
+      )}
+      {overviewError && !overviewLoading && (
+        <div style={{ marginBottom: '12px', padding: '8px 14px', borderRadius: '8px', background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', fontSize: '12px', color: 'var(--text-muted)' }}>
+          风险概览加载失败，不影响持仓查看
         </div>
       )}
       {overviewData && <RiskOverviewBar data={overviewData} />}
