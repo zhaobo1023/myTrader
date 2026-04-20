@@ -192,6 +192,11 @@ def detect_signals_v2(weekly_hist: pd.DataFrame,
         diverge_dn = (pd.notna(cur_s) and pd.notna(cur_l)
                       and cur_l >= 70 and cur_s <= 35)
 
+        # 互斥: 高位退潮/过热优先，取消连续上升标记
+        # 语义上"退潮/过热"和"持续上升"矛盾，风险信号应优先展示
+        if diverge_dn or hot:
+            rising = False
+
         rows.append(dict(
             行业=name,
             短期分位=round(cur_s, 1) if pd.notna(cur_s) else None,
