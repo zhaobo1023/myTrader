@@ -679,9 +679,9 @@ async def get_stock_recent_reports(stock_code: str, days: int = 3) -> list:
 
 async def list_analyzed_stocks() -> dict:
     """
-    Return the latest tech report for each distinct stock, joined with the
-    most recent market cap from trade_stock_valuation_factor and industry
-    from trade_stock_basic.
+    Return the latest tech report for each distinct stock, PLUS all stocks
+    in user_watchlist that have no tech report yet.  Joined with market cap
+    and industry info.
     Used for the stock card grid.
     """
     # Latest report per stock
@@ -697,6 +697,26 @@ async def list_analyzed_stocks() -> dict:
         ORDER BY t.trade_date DESC, t.stock_code
     """
     rows = list(execute_query(sql))
+
+    report_codes = {r['stock_code'] for r in rows}
+
+    # Add watchlist stocks that have no tech report
+    wl_sql = """
+        SELECT DISTINCT stock_code, stock_name
+        FROM user_watchlist
+    """
+    wl_rows = list(execute_query(wl_sql))
+    for wl in wl_rows:
+        if wl['stock_code'] not in report_codes:
+            rows.append({
+                'stock_code': wl['stock_code'],
+                'stock_name': wl['stock_name'],
+                'latest_date': None,
+                'score': None,
+                'score_label': '',
+                'max_severity': 'NONE',
+                'summary': '',
+            })
 
     if not rows:
         return {'data': []}

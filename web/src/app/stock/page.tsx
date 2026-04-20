@@ -1079,7 +1079,7 @@ function IndustryFilterPanel({
   );
 }
 
-function StockCardGrid({ onSelect }: { onSelect: (s: StockOption) => void }) {
+function StockCardGrid({ onSelect, version }: { onSelect: (s: StockOption) => void; version: number }) {
   const [cards, setCards] = useState<StockCard[]>([]);
   const [tree, setTree] = useState<IndustryNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1130,7 +1130,7 @@ function StockCardGrid({ onSelect }: { onSelect: (s: StockOption) => void }) {
       })
       .catch(() => { setCards([]); setTree([]); })
       .finally(() => setLoading(false));
-  }, []);
+  }, [version]);
 
   const filtered = cards.filter((c) => {
     const l1 = c.sw_level1 || c.industry;
@@ -1478,7 +1478,7 @@ export default function StockPage() {
       ) : (
         <>
           <WatchlistBar onSelect={handleSelect} version={watchlistVersion} />
-          <StockCardGrid onSelect={handleSelect} />
+          <StockCardGrid onSelect={handleSelect} version={watchlistVersion} />
         </>
       )}
     </AppShell>
