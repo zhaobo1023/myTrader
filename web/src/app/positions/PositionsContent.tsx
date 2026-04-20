@@ -410,25 +410,45 @@ export default function PositionsContent() {
     setAnalyzingId(p.id);
     const code = p.stock_code;
     const name = p.stock_name || p.stock_code;
-    // Fire all report submissions in parallel; navigate to stock page afterwards
-    await Promise.allSettled([
-      fetch(`${API_BASE}/api/analysis/report/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stock_code: code, stock_name: name, report_type: 'one_pager' }),
-      }),
-      fetch(`${API_BASE}/api/analysis/report/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stock_code: code, stock_name: name, report_type: 'five_section' }),
-      }),
-      fetch(`${API_BASE}/api/analysis/report/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stock_code: code, stock_name: name, report_type: 'fundamental' }),
-      }),
-    ]);
-    setAnalyzingId(null);
+    const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+    const authHeader = token ? { 'Authorization': `Bearer ${token}` } : {};
+
+    try {
+      // Check which report types already have a valid cached/pending report today
+      const REPORT_TYPES = ['one_pager', 'five_section', 'fundamental'] as const;
+      const checks = await Promise.allSettled(
+        REPORT_TYPES.map(rt =>
+          fetch(`${API_BASE}/api/analysis/report/latest?code=${encodeURIComponent(code)}&report_type=${rt}`, {
+            headers: { ...authHeader },
+          }).then(r => r.json())
+        )
+      );
+
+      // Submit only missing/failed types
+      const submitTasks: Promise<unknown>[] = [];
+      checks.forEach((result, idx) => {
+        const rt = REPORT_TYPES[idx];
+        const data = result.status === 'fulfilled' ? result.value : null;
+        // Skip if today's report is cached, or a task is currently pending/running
+        const hasValid = data?.cached === true || data?.status === 'pending' || data?.status === 'running';
+        if (!hasValid) {
+          submitTasks.push(
+            fetch(`${API_BASE}/api/analysis/report/submit`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...authHeader },
+              body: JSON.stringify({ stock_code: code, stock_name: name, report_type: rt }),
+            })
+          );
+        }
+      });
+
+      if (submitTasks.length > 0) {
+        await Promise.allSettled(submitTasks);
+      }
+    } finally {
+      setAnalyzingId(null);
+    }
+
     router.push(`/stock?code=${encodeURIComponent(code)}`);
   }
 
@@ -594,7 +614,7 @@ export default function PositionsContent() {
                         disabled={analyzingId === p.id}
                         style={{ fontSize: '12px', color: '#7c3aed', background: 'none', border: 'none', cursor: analyzingId === p.id ? 'default' : 'pointer', marginRight: '8px', opacity: analyzingId === p.id ? 0.5 : 1 }}
                       >
-                        {analyzingId === p.id ? '提交中...' : '一键分析'}
+                        {analyzingId === p.id ? '检查中...' : '深度分析'}
                       </button>
                       <button
                         onClick={() => moveToCandidate(p)}
