@@ -2,6 +2,42 @@
 
 ---
 
+## 2026-04-20 Celery Redis 连接故障修复 + 监控体系建设
+
+### 故障概况
+
+凌晨 03:33 Celery Beat/Worker 容器重启后，无法连接 Redis broker，所有定时任务停摆约 8 小时。
+
+### 根因分析
+
+`celery_app.py` 启动时执行 `del os.environ['CELERY_BROKER_URL']`，意图让 Celery 使用 `settings.redis_host` 构建的 URL。但 Celery CLI (`celery -A ... beat`) 在 import app 模块前已缓存了环境变量，`del` 后 Celery 内部 finalize 阶段回退到 `settings.celery_broker_url` 的默认值 `redis://localhost:6379/1`，容器内解析为 `127.0.0.1`，而 Redis 运行在独立容器 `mytrader-redis` 上，连接永久失败。
+
+### 修复内容
+
+| 文件 | 变更 | 目的 |
+|------|------|------|
+| `api/tasks/celery_app.py` | `del` 改为 `os.environ[...] = broker_url` | 保证 Celery CLI 和 app 使用同一 broker 地址 |
+| `api/tasks/celery_app.py` | 新增 `broker_connection_retry_on_startup=True`, `broker_connection_max_retries=10`, `socket_keepalive`, `retry_on_timeout` | Redis 连接断开后自动重连 |
+| `api/tasks/celery_app.py` | 新增 `task_soft_time_limit=1800`, `task_time_limit=2400` | 全局任务超时保护，防止 worker 被卡死任务阻塞 |
+| `docker-compose.yml` | celery-worker 添加 healthcheck (`celery inspect ping`) | 容器 unhealthy 时 Docker 自动重启 |
+| `docker-compose.yml` | celery-beat 启动时 `rm -f celerybeat-schedule` + 添加 healthcheck (Redis ping) | 清理旧调度缓存 + 健康检测 |
+| `scripts/check_celery_health.sh` | 新增宿主机级监控脚本 | 独立于 Docker，crontab 每 5 分钟检查容器健康状态，异常推送飞书 webhook（含 10 分钟冷却防刷） |
+
+### 监控层级（修复后）
+
+```
+L1: Docker healthcheck + restart: unless-stopped   -> 容器自愈
+L2: 宿主机 crontab 探针 (check_celery_health.sh)   -> 飞书告警 (5min)
+L3: Celery Watchdog (scheduler/watchdog.py)        -> 漏执行检测 + 自动重试
+L4: Celery task on_failure + alert.py              -> 单任务失败飞书告警
+```
+
+### 补跑任务
+
+手动补发 16 个漏掉的定时任务（恐慌指数、晨报、Dashboard、SimPool、资金流向、融资融券、北向持仓、复盘、因子计算、指标计算、策略执行、主题池评分等），通过 `celery_app.send_task()` 入队执行。
+
+---
+
 ## 2026-04-19 Agent 交易助手 (P0-P6 全量实现)
 
 ### 背景
