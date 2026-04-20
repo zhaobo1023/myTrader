@@ -1286,6 +1286,8 @@ interface StockRiskData {
       ps_ttm: number | null;
       total_mv: number | null;
       circ_mv: number | null;
+      pe_percentile: number | null;
+      pb_percentile: number | null;
     };
   };
   personalized: {
@@ -1297,6 +1299,12 @@ interface StockRiskData {
     position_weight_pct: number | null;
     avg_portfolio_correlation: number | null;
     correlations?: { stock_code: string; stock_name?: string; correlation: number }[];
+    sector_concentration?: {
+      industry: string;
+      stocks: { stock_code: string; stock_name: string }[];
+      weight_pct: number;
+      alert: boolean;
+    }[];
   } | null;
 }
 
@@ -1497,6 +1505,30 @@ function PersonalizedRiskSection({ personalized: p }: { personalized: NonNullabl
           })}
         </div>
       )}
+
+      {/* 行业集中度（含高相关持仓） */}
+      {p.sector_concentration && p.sector_concentration.length > 0 && (
+        <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)' }}>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>含高相关持仓的行业集中度</div>
+          {p.sector_concentration.map((sc) => (
+            <div key={sc.industry} style={{ padding: '6px 0', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+                <span style={{ fontSize: '13px', fontWeight: 510, color: sc.alert ? '#e5534b' : 'var(--text-primary)' }}>{sc.industry}</span>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: sc.alert ? '#e5534b' : sc.weight_pct > 25 ? '#ca8a04' : '#27a644' }}>
+                  {sc.weight_pct}%
+                  {sc.alert && <span style={{ fontSize: '11px', marginLeft: '5px', color: '#e5534b' }}>[集中度过高]</span>}
+                </span>
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                {sc.stocks.map(s => s.stock_name).join(' · ')}
+              </div>
+            </div>
+          ))}
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px', fontStyle: 'italic' }}>
+            风控原则：单一行业建议不超过40%，分散持仓降低板块性风险
+          </div>
+        </div>
+      )}
     </RiskSection>
   );
 }
@@ -1661,19 +1693,49 @@ function RiskTab({ stock, onTabChange }: { stock: StockOption; onTabChange: (t: 
             {val.pe_ttm != null && (
               <RiskInfoRow
                 label="PE(TTM)"
-                value={val.pe_ttm > 0 ? val.pe_ttm.toFixed(1) : '亏损/负PE'}
-                color={val.pe_ttm > 0 && val.pe_ttm < 20 ? '#27a644' : val.pe_ttm > 50 ? '#e5534b' : 'var(--text-primary)'}
+                value={
+                  val.pe_ttm <= 0 ? <span style={{ color: 'var(--text-muted)' }}>亏损/负PE</span> : (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ color: val.pe_percentile != null && val.pe_percentile > 80 ? '#e5534b' : val.pe_percentile != null && val.pe_percentile < 30 ? '#27a644' : 'var(--text-primary)' }}>
+                        {val.pe_ttm.toFixed(1)}
+                      </span>
+                      {val.pe_percentile != null && (
+                        <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px',
+                          background: val.pe_percentile > 80 ? 'rgba(229,83,75,0.08)' : val.pe_percentile < 30 ? 'rgba(39,166,68,0.08)' : 'rgba(0,0,0,0.04)',
+                          color: val.pe_percentile > 80 ? '#e5534b' : val.pe_percentile < 30 ? '#27a644' : 'var(--text-muted)',
+                          border: `1px solid ${val.pe_percentile > 80 ? 'rgba(229,83,75,0.2)' : val.pe_percentile < 30 ? 'rgba(39,166,68,0.2)' : 'rgba(0,0,0,0.1)'}`,
+                        }}>
+                          {val.pe_percentile > 80 ? '近3年偏高估' : val.pe_percentile < 30 ? '近3年低估' : '近3年中位附近'} {val.pe_percentile}%分位
+                        </span>
+                      )}
+                    </span>
+                  )
+                }
               />
             )}
-            {val.pb != null && (
+            {val.pb != null && val.pb > 0 && (
               <RiskInfoRow
                 label="PB"
-                value={val.pb > 0 ? val.pb.toFixed(2) : '-'}
-                color={val.pb > 0 && val.pb < 2 ? '#27a644' : val.pb > 5 ? '#e5534b' : 'var(--text-primary)'}
+                value={
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ color: val.pb_percentile != null && val.pb_percentile > 80 ? '#e5534b' : val.pb_percentile != null && val.pb_percentile < 30 ? '#27a644' : 'var(--text-primary)' }}>
+                      {val.pb.toFixed(2)}
+                    </span>
+                    {val.pb_percentile != null && (
+                      <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px',
+                        background: val.pb_percentile > 80 ? 'rgba(229,83,75,0.08)' : val.pb_percentile < 30 ? 'rgba(39,166,68,0.08)' : 'rgba(0,0,0,0.04)',
+                        color: val.pb_percentile > 80 ? '#e5534b' : val.pb_percentile < 30 ? '#27a644' : 'var(--text-muted)',
+                        border: `1px solid ${val.pb_percentile > 80 ? 'rgba(229,83,75,0.2)' : val.pb_percentile < 30 ? 'rgba(39,166,68,0.2)' : 'rgba(0,0,0,0.1)'}`,
+                      }}>
+                        {val.pb_percentile > 80 ? '近3年偏高估' : val.pb_percentile < 30 ? '近3年低估' : '近3年中位附近'} {val.pb_percentile}%分位
+                      </span>
+                    )}
+                  </span>
+                }
               />
             )}
             {val.total_mv != null && (
-              <RiskInfoRow label="总市值" value={`${(val.total_mv / 10000).toFixed(1)} 亿`} />
+              <RiskInfoRow label="总市值" value={`${val.total_mv >= 1 ? val.total_mv.toFixed(1) : val.total_mv.toFixed(2)} 亿`} />
             )}
           </>
         )}
