@@ -440,6 +440,31 @@ export const positionsApi = {
 };
 
 // ============================================================
+// Trade Operation Log API (调仓日志)
+// ============================================================
+
+export interface TradeLogItem {
+  id: number;
+  operation_type: string;
+  stock_code: string;
+  stock_name: string | null;
+  detail: string | null;
+  before_value: string | null;
+  after_value: string | null;
+  source: string;
+  created_at: string;
+}
+
+export const tradeLogApi = {
+  list: (params?: { operation_type?: string; from_date?: string; to_date?: string; page?: number; page_size?: number }) =>
+    apiClient.get<{ items: TradeLogItem[]; total: number }>('/api/trade-logs', { params }),
+  create: (data: { stock_code?: string; stock_name?: string; detail?: string }) =>
+    apiClient.post<TradeLogItem>('/api/trade-logs', data),
+  stats: (days?: number) =>
+    apiClient.get<{ period_days: number; total: number; by_type: Record<string, number> }>('/api/trade-logs/stats', { params: { days } }),
+};
+
+// ============================================================
 // Inbox API
 // ============================================================
 

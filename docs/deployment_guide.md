@@ -93,7 +93,7 @@ cd web && npm run build
 rsync -avz --delete .next/ aliyun-ecs:/root/app/web/.next/
 
 # 服务器上 Docker 重建 runner 阶段 (不需要完整 build)
-ssh aliyun-ecs "cd /root/app/web && docker build -t mytrader-web . && docker rm -f mytrader-web && docker run -d --name mytrader-web --restart unless-stopped -p 127.0.0.1:3000:3000 -e NEXT_PUBLIC_API_BASE_URL= mytrader-web"
+ssh aliyun-ecs "cd /root/app/web && docker build -t mytrader-web . && docker rm -f mytrader-web && docker run -d --name mytrader-web --restart unless-stopped -p 127.0.0.1:3000:3000 --network app_mytrader-network -e NEXT_PUBLIC_API_BASE_URL= mytrader-web && docker restart mytrader-nginx"
 ```
 
 **方式 2: 服务器上 Docker 完整构建 (较慢但自包含)**
@@ -103,7 +103,9 @@ ssh aliyun-ecs
 cd /root/app && git pull
 cd web && docker build -t mytrader-web .
 docker rm -f mytrader-web
-docker run -d --name mytrader-web --restart unless-stopped -p 127.0.0.1:3000:3000 -e NEXT_PUBLIC_API_BASE_URL= mytrader-web
+docker run -d --name mytrader-web --restart unless-stopped -p 127.0.0.1:3000:3000 --network app_mytrader-network -e NEXT_PUBLIC_API_BASE_URL= mytrader-web
+# 重建后需重启 nginx 以刷新上游解析
+docker restart mytrader-nginx
 ```
 
 ### 前后端都改了
@@ -209,7 +211,13 @@ docker restart mytrader-redis
 # 重建前端镜像
 cd /root/app/web && docker build -t mytrader-web .
 docker rm -f mytrader-web
-docker run -d --name mytrader-web --restart unless-stopped -p 127.0.0.1:3000:3000 -e NEXT_PUBLIC_API_BASE_URL= mytrader-web
+# 注意: 必须指定 --network app_mytrader-network，否则 nginx 无法通过容器名解析
+docker run -d --name mytrader-web --restart unless-stopped \
+  -p 127.0.0.1:3000:3000 \
+  --network app_mytrader-network \
+  -e NEXT_PUBLIC_API_BASE_URL= mytrader-web
+# 重建后需重启 nginx 以刷新上游解析
+docker restart mytrader-nginx
 
 # 查看 Nginx 配置
 docker exec mytrader-nginx cat /etc/nginx/conf.d/default.conf

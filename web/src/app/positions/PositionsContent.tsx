@@ -411,7 +411,7 @@ export default function PositionsContent() {
     const code = p.stock_code;
     const name = p.stock_name || p.stock_code;
     const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-    const authHeader = token ? { 'Authorization': `Bearer ${token}` } : {};
+    const authHeader: Record<string, string> = token ? { 'Authorization': `Bearer ${token}` } : {};
 
     try {
       // Check which report types already have a valid cached/pending report today

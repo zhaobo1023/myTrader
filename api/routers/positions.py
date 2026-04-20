@@ -2,6 +2,7 @@
 """
 Positions router - user portfolio positions CRUD
 """
+import json
 import logging
 from typing import Optional
 
@@ -12,6 +13,7 @@ from sqlalchemy import select
 from api.dependencies import get_db
 from api.models.user import User
 from api.models.user_position import UserPosition
+from api.models.trade_operation_log import TradeOperationLog
 from api.middleware.auth import get_current_user
 from api.schemas.positions import (
     PositionCreate,
@@ -39,6 +41,15 @@ def _to_response(p: UserPosition) -> PositionResponse:
         created_at=p.created_at.isoformat() if p.created_at else '',
         updated_at=p.updated_at.isoformat() if p.updated_at else '',
     )
+
+
+def _build_detail(action: str, stock_name: str, stock_code: str, **kwargs) -> str:
+    """Build Chinese detail string for trade log."""
+    name = stock_name or stock_code
+    parts = [f'{action} {name}']
+    for k, v in kwargs.items():
+        parts.append(f'{k}={v}')
+    return ' '.join(parts)
 
 
 @router.get('', response_model=PositionListResponse)
@@ -98,6 +109,28 @@ async def create_position(
     db.add(position)
     await db.flush()
     await db.refresh(position)
+
+    # Auto-log: open position
+    after = {}
+    if req.shares is not None:
+        after['shares'] = req.shares
+    if req.cost_price is not None:
+        after['cost_price'] = req.cost_price
+    if req.level:
+        after['level'] = req.level
+    db.add(TradeOperationLog(
+        user_id=current_user.id,
+        operation_type='open_position',
+        stock_code=req.stock_code,
+        stock_name=req.stock_name,
+        detail=_build_detail('建仓', req.stock_name, req.stock_code,
+                             shares=f'{req.shares}股' if req.shares else '',
+                             cost=f'@{req.cost_price}' if req.cost_price else '',
+                             level=req.level or ''),
+        after_value=json.dumps(after) if after else None,
+        source='auto',
+    ))
+
     logger.info('[POSITIONS] user=%s added stock=%s', current_user.id, req.stock_code)
     return _to_response(position)
 
@@ -121,8 +154,48 @@ async def update_position(
         raise HTTPException(status_code=404, detail='Position not found')
 
     update_data = req.model_dump(exclude_unset=True)
+    if not update_data:
+        return _to_response(position)
+
+    # Snapshot old values before applying changes
+    old_values = {k: getattr(position, k) for k in update_data}
+
+    # Apply changes
     for key, value in update_data.items():
         setattr(position, key, value)
+
+    # Determine operation type and build log
+    name = position.stock_name or position.stock_code
+    shares_changed = 'shares' in update_data
+
+    if shares_changed:
+        old_s = old_values.get('shares') or 0
+        new_s = update_data.get('shares') or 0
+        direction = '加仓' if new_s > old_s else ('减仓' if new_s < old_s else '调整')
+        db.add(TradeOperationLog(
+            user_id=current_user.id,
+            operation_type='add_reduce',
+            stock_code=position.stock_code,
+            stock_name=position.stock_name,
+            detail=_build_detail(direction, name, position.stock_code,
+                                 shares=f'{old_s}->{new_s}股'),
+            before_value=json.dumps({'shares': old_s}),
+            after_value=json.dumps({'shares': new_s}),
+            source='auto',
+        ))
+    else:
+        changed_list = ', '.join(update_data.keys())
+        db.add(TradeOperationLog(
+            user_id=current_user.id,
+            operation_type='modify_info',
+            stock_code=position.stock_code,
+            stock_name=position.stock_name,
+            detail=_build_detail('修改', name, position.stock_code,
+                                 fields=changed_list),
+            before_value=json.dumps(old_values),
+            after_value=json.dumps(update_data),
+            source='auto',
+        ))
 
     return _to_response(position)
 
@@ -143,7 +216,30 @@ async def delete_position(
     position = result.scalar_one_or_none()
     if not position:
         raise HTTPException(status_code=404, detail='Position not found')
+
+    # Snapshot before deactivation
+    before = {}
+    if position.shares is not None:
+        before['shares'] = position.shares
+    if position.cost_price is not None:
+        before['cost_price'] = position.cost_price
+
     position.is_active = False
+
+    # Auto-log: close position
+    name = position.stock_name or position.stock_code
+    db.add(TradeOperationLog(
+        user_id=current_user.id,
+        operation_type='close_position',
+        stock_code=position.stock_code,
+        stock_name=position.stock_name,
+        detail=_build_detail('清仓', name, position.stock_code,
+                             shares=f'{position.shares}股' if position.shares else '',
+                             cost=f'@{position.cost_price}' if position.cost_price else ''),
+        before_value=json.dumps(before) if before else None,
+        source='auto',
+    ))
+
     logger.info('[POSITIONS] user=%s deactivated position=%s', current_user.id, position_id)
 
 
@@ -207,6 +303,24 @@ async def import_positions(
             note=item.note,
         )
         db.add(position)
+
+        # Auto-log each imported position
+        after = {}
+        if item.shares is not None:
+            after['shares'] = item.shares
+        if item.cost_price is not None:
+            after['cost_price'] = item.cost_price
+        db.add(TradeOperationLog(
+            user_id=current_user.id,
+            operation_type='open_position',
+            stock_code=item.stock_code,
+            stock_name=item.stock_name,
+            detail=_build_detail('批量建仓', item.stock_name, item.stock_code,
+                                 shares=f'{item.shares}股' if item.shares else ''),
+            after_value=json.dumps(after) if after else None,
+            source='auto',
+        ))
+
         created += 1
 
     await db.flush()
