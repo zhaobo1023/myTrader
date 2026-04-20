@@ -68,7 +68,7 @@ class RegimeRiskAssessor(BaseAssessor):
                 placeholders = ', '.join(['%s'] * len(position_codes))
                 rows = self._query(
                     """
-                    SELECT stock_code, trade_date, close
+                    SELECT stock_code, trade_date, close_price AS close
                     FROM trade_stock_daily
                     WHERE stock_code IN ({})
                       AND trade_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)

@@ -81,7 +81,7 @@ class ExecutionRiskAssessor(BaseAssessor):
             try:
                 rows = self._query(
                     """
-                    SELECT d.stock_code, d.close, prev.close AS prev_close
+                    SELECT d.stock_code, d.close_price AS close, prev.close_price AS prev_close
                     FROM trade_stock_daily d
                     INNER JOIN (
                         SELECT stock_code, MAX(trade_date) AS max_date
