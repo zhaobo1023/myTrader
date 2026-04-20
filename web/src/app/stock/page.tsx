@@ -1323,6 +1323,161 @@ function pnlColor(v: number | null): string {
   return v > 0 ? '#27a644' : v < 0 ? '#e5534b' : 'var(--text-muted)';
 }
 
+type AlertLevel = 'warn' | 'danger' | 'ok' | 'tip';
+
+interface RiskAlert {
+  level: AlertLevel;
+  text: string;
+}
+
+const ALERT_STYLE: Record<AlertLevel, { bg: string; border: string; color: string; icon: string }> = {
+  danger: { bg: 'rgba(220,38,38,0.06)',  border: 'rgba(220,38,38,0.25)',  color: '#dc2626', icon: '[高]' },
+  warn:   { bg: 'rgba(202,138,4,0.06)',  border: 'rgba(202,138,4,0.25)',  color: '#ca8a04', icon: '[注意]' },
+  ok:     { bg: 'rgba(22,163,74,0.06)',  border: 'rgba(22,163,74,0.22)',  color: '#16a34a', icon: '[好]' },
+  tip:    { bg: 'rgba(94,106,210,0.06)', border: 'rgba(94,106,210,0.22)', color: '#5e6ad2', icon: '[提示]' },
+};
+
+function buildPersonalAlerts(p: NonNullable<StockRiskData['personalized']>): RiskAlert[] {
+  const alerts: RiskAlert[] = [];
+  const pnl = p.pnl_ratio;
+  const weight = p.position_weight_pct;
+  const corr = p.avg_portfolio_correlation;
+
+  // --- 盈亏判断 ---
+  if (pnl !== null) {
+    if (pnl <= -20) {
+      alerts.push({ level: 'danger', text: `浮亏 ${Math.abs(pnl).toFixed(1)}%，已超过20%，建议执行止损或重新评估持仓逻辑` });
+    } else if (pnl <= -10) {
+      alerts.push({ level: 'warn', text: `浮亏 ${Math.abs(pnl).toFixed(1)}%，接近止损区间，需密切关注` });
+    } else if (pnl <= -5) {
+      alerts.push({ level: 'warn', text: `浮亏 ${Math.abs(pnl).toFixed(1)}%，建议复核买入逻辑是否仍然成立` });
+    } else if (pnl >= 50) {
+      alerts.push({ level: 'tip', text: `浮盈 ${pnl.toFixed(1)}%，利润垫充足，可考虑分批减仓锁定部分收益` });
+    } else if (pnl >= 30) {
+      alerts.push({ level: 'tip', text: `浮盈 ${pnl.toFixed(1)}%，有较厚利润垫，短期回调风险可控` });
+    } else if (pnl >= 15) {
+      alerts.push({ level: 'ok', text: `浮盈 ${pnl.toFixed(1)}%，持仓安全边际良好` });
+    } else if (pnl >= 0) {
+      alerts.push({ level: 'ok', text: `浮盈 ${pnl.toFixed(1)}%，成本区附近，持仓风险较低` });
+    }
+  }
+
+  // --- 仓位集中度 ---
+  if (weight !== null) {
+    if (weight > 40) {
+      alerts.push({ level: 'danger', text: `仓位占比 ${weight.toFixed(1)}%，高度集中，单票风险敞口过大，建议控制在30%以内` });
+    } else if (weight > 30) {
+      alerts.push({ level: 'warn', text: `仓位占比 ${weight.toFixed(1)}%，偏重，若股价大幅下跌对组合影响显著` });
+    } else if (weight > 20) {
+      alerts.push({ level: 'tip', text: `仓位占比 ${weight.toFixed(1)}%，中等集中，注意整体组合平衡` });
+    } else {
+      alerts.push({ level: 'ok', text: `仓位占比 ${weight.toFixed(1)}%，分散合理` });
+    }
+  }
+
+  // --- 盈亏 × 仓位联合判断 ---
+  if (pnl !== null && weight !== null) {
+    if (pnl <= -10 && weight > 25) {
+      alerts.push({ level: 'danger', text: `重仓（${weight.toFixed(0)}%）且浮亏（${pnl.toFixed(1)}%），组合损失较大，需优先处理` });
+    } else if (pnl >= 30 && weight > 30) {
+      alerts.push({ level: 'tip', text: `重仓盈利：${weight.toFixed(0)}% 仓位 × ${pnl.toFixed(0)}% 盈利，可分批减仓降低集中度` });
+    }
+  }
+
+  // --- 相关性 ---
+  if (corr !== null) {
+    if (corr > 0.6) {
+      alerts.push({ level: 'warn', text: `与组合其他持仓平均相关性 ${corr.toFixed(2)}，协同下跌风险较高，分散效果有限` });
+    } else if (corr > 0.4) {
+      alerts.push({ level: 'tip', text: `与组合平均相关性 ${corr.toFixed(2)}，有一定分散效果` });
+    } else {
+      alerts.push({ level: 'ok', text: `与组合平均相关性 ${corr.toFixed(2)}，分散化效果较好` });
+    }
+  }
+
+  return alerts;
+}
+
+function PersonalizedRiskSection({ personalized: p }: { personalized: NonNullable<StockRiskData['personalized']> }) {
+  const alerts = buildPersonalAlerts(p);
+
+  return (
+    <RiskSection title="持仓风控（个人）">
+      {/* 数据概览行 */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '14px', paddingBottom: '12px', borderBottom: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '80px' }}>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>持仓成本</span>
+          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>{p.cost_price.toFixed(2)}</span>
+        </div>
+        {p.current_price != null && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '80px' }}>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>当前价格</span>
+            <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>{p.current_price.toFixed(2)}</span>
+          </div>
+        )}
+        {p.pnl_ratio != null && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '80px' }}>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>浮动盈亏</span>
+            <span style={{ fontSize: '14px', fontWeight: 700, color: pnlColor(p.pnl_ratio) }}>
+              {p.pnl_ratio > 0 ? '+' : ''}{p.pnl_ratio.toFixed(2)}%
+            </span>
+          </div>
+        )}
+        {p.position_weight_pct != null && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '80px' }}>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>仓位占比</span>
+            <span style={{ fontSize: '14px', fontWeight: 600, color: p.position_weight_pct > 30 ? '#dc2626' : p.position_weight_pct > 20 ? '#ca8a04' : 'var(--text-primary)' }}>
+              {p.position_weight_pct.toFixed(1)}%
+            </span>
+          </div>
+        )}
+        {p.avg_portfolio_correlation != null && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '80px' }}>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>组合相关性</span>
+            <span style={{ fontSize: '14px', fontWeight: 600, color: p.avg_portfolio_correlation > 0.6 ? '#dc2626' : p.avg_portfolio_correlation > 0.4 ? '#ca8a04' : '#16a34a' }}>
+              {p.avg_portfolio_correlation.toFixed(2)}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* 风险解读 */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        {alerts.map((alert, i) => {
+          const s = ALERT_STYLE[alert.level];
+          return (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'flex-start', gap: '8px',
+              padding: '8px 12px', borderRadius: '6px',
+              background: s.bg, border: `1px solid ${s.border}`,
+            }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: s.color, whiteSpace: 'nowrap', paddingTop: '1px' }}>
+                {s.icon}
+              </span>
+              <span style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{alert.text}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 高相关持仓明细 */}
+      {p.correlations && p.correlations.length > 0 && (
+        <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)' }}>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>与以下持仓相关性最高</div>
+          {p.correlations.map((c) => (
+            <div key={c.stock_code} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: '12px', borderBottom: '1px solid var(--border-subtle)' }}>
+              <span style={{ color: 'var(--text-secondary)' }}>{c.stock_code}</span>
+              <span style={{ fontWeight: 510, color: Math.abs(c.correlation) > 0.6 ? '#dc2626' : Math.abs(c.correlation) > 0.4 ? '#ca8a04' : '#16a34a' }}>
+                {c.correlation > 0 ? '+' : ''}{c.correlation.toFixed(3)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </RiskSection>
+  );
+}
+
 // 判断当前是否在财报季（1-4月、7-9月）
 function isEarningsSeason(): boolean {
   const m = new Date().getMonth() + 1;
@@ -1503,46 +1658,7 @@ function RiskTab({ stock, onTabChange }: { stock: StockOption; onTabChange: (t: 
 
       {/* 个性化：持仓风控 */}
       {personalized ? (
-        <RiskSection title="持仓风控（个人）">
-          <RiskInfoRow label="持仓成本" value={`${personalized.cost_price.toFixed(2)}`} />
-          {personalized.current_price != null && (
-            <RiskInfoRow label="当前价格" value={`${personalized.current_price.toFixed(2)}`} />
-          )}
-          {personalized.pnl_ratio != null && (
-            <RiskInfoRow
-              label="浮动盈亏"
-              value={`${personalized.pnl_ratio > 0 ? '+' : ''}${personalized.pnl_ratio.toFixed(2)}%`}
-              color={pnlColor(personalized.pnl_ratio)}
-            />
-          )}
-          {personalized.position_weight_pct != null && (
-            <RiskInfoRow
-              label="仓位占比"
-              value={`${personalized.position_weight_pct.toFixed(1)}%`}
-              color={personalized.position_weight_pct > 30 ? '#e5534b' : personalized.position_weight_pct > 20 ? '#c69026' : 'var(--text-primary)'}
-            />
-          )}
-          {personalized.avg_portfolio_correlation != null && (
-            <RiskInfoRow
-              label="与组合平均相关性"
-              value={personalized.avg_portfolio_correlation.toFixed(3)}
-              color={personalized.avg_portfolio_correlation > 0.6 ? '#e5534b' : personalized.avg_portfolio_correlation > 0.4 ? '#c69026' : '#27a644'}
-            />
-          )}
-          {personalized.correlations && personalized.correlations.length > 0 && (
-            <div style={{ paddingTop: '8px' }}>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>相关性最高的其他持仓</div>
-              {personalized.correlations.map((c) => (
-                <div key={c.stock_code} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: '12px' }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>{c.stock_code}</span>
-                  <span style={{ color: Math.abs(c.correlation) > 0.6 ? '#e5534b' : 'var(--text-primary)', fontWeight: 510 }}>
-                    {c.correlation.toFixed(3)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </RiskSection>
+        <PersonalizedRiskSection personalized={personalized} />
       ) : (
         <RiskSection title="持仓风控（个人）">
           <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>该股票不在您的实盘持仓中，暂无个性化风控数据</div>
