@@ -94,35 +94,57 @@ tasks/
 
 **目的：** 评估系统性威胁，决定整体仓位水位。
 
-**数据源（全部已有）：**
+**数据源（全部已有，均在 `macro_data` 表或 `trade_fear_index` 表中）：**
 
-| 数据 | 表 | 字段 | 产出模块 |
+| 数据 | indicator / 表 | 最新数据 | 说明 |
 |---|---|---|---|
-| 恐惧指数 | `trade_fear_index` | `fear_greed_score`, `market_regime` | `sentiment/fear_index.py` |
-| VIX / QVIX | `macro_data` | indicator='vix' / 'qvix' | `fetchers/macro_fetcher.py` |
-| 北向资金 | `macro_data` | indicator='north_flow' | `fetchers/macro_fetcher.py` |
-| 美债利差 | `macro_data` | indicator='us_10y_2y_spread' | `fetchers/macro_fetcher.py` |
-| 美元指数 | `macro_data` | indicator='dxy' | `fetchers/macro_fetcher.py` |
-| 衍生因子 | `macro_factors` | oil_mom_20, north_flow_5d | `factors/macro_factor_calculator.py` |
+| 恐惧指数 | `trade_fear_index` | 每日 | 7维合成 0-100 |
+| VIX / QVIX | `vix` / `qvix` | 每日 | 波动率 |
+| 北向资金 | `north_flow` | 每日 | 净流入(元) |
+| 美债利差 | `us_10y_2y_spread` | 每日 | 倒挂=衰退信号 |
+| 美元指数 | `dxy` | 每日 | 强美元=新兴市场压力 |
+| 融资余额 | `margin_balance` | 每日 | 杠杆资金情绪 |
+| 融资净买入 | `margin_net_buy` | 每日 | 增量杠杆方向 |
+| 涨跌家数 | `advance_count` / `decline_count` | 每日 | 市场广度 |
+| 涨跌停数 | `limit_up_count` / `limit_down_count` | 每日 | 极端情绪 |
+| 市场成交额 | `market_volume` | 每日 | 量能水平 |
+| 沪深300 PE | `pe_csi300` | 每日 | 估值分位 |
+| 沪深300 股息率 | `div_yield_csi300` | 每日 | 股债比较 |
+| 10Y国债 | `cn_10y_bond` | 每日 | 无风险利率 |
+| 大宗商品 | `wti_oil` / `gold` | 每日 | 通胀/避险 |
+| 人民币汇率 | `usdcny` | 每日 | 资本流动 |
 
-**评分逻辑：**
+**评分逻辑（9 个维度）：**
 
 ```python
 class MacroRiskAssessor(BaseAssessor):
     """
-    6 个维度加权评分，输出 0-100 风险分。
-    直接复用 fear_index 的计算结果 + macro_data 原始指标。
+    9 个维度加权评分，输出 0-100 风险分。
+    数据全部来自 macro_data 表 + trade_fear_index 表，无需新增 fetcher。
     """
 
     WEIGHTS = {
-        'fear_index': 0.30,      # 恐惧指数 (已是7维合成)
-        'vix': 0.20,             # 波动率
-        'northflow': 0.15,       # 北向资金趋势
-        'yield_spread': 0.15,    # 美债利差
-        'commodity': 0.10,       # 大宗异动
-        'fx': 0.10,              # 人民币汇率
+        'fear_index': 0.20,      # 恐惧指数 (已是7维合成)
+        'vix': 0.12,             # 波动率
+        'northflow': 0.10,       # 北向资金趋势
+        'yield_spread': 0.08,    # 美债利差
+        'commodity_fx': 0.08,    # 大宗商品 + 汇率
+        'margin': 0.12,          # 融资融券趋势 (杠杆情绪)
+        'breadth': 0.12,         # 涨跌家数 + 涨跌停 (市场广度)
+        'equity_bond': 0.10,     # 股债性价比 = 1/PE - 10Y国债
+        'volume': 0.08,          # 成交额趋势
     }
 ```
+
+**股债性价比计算：**
+```
+equity_bond_spread = (1 / PE_TTM) - 10Y国债收益率
+```
+- 利差 > 3% -> 股票极具吸引力(低风险), 评分 15
+- 利差 2-3% -> 股票有吸引力, 评分 30
+- 利差 1-2% -> 中性, 评分 50
+- 利差 0-1% -> 债券更有吸引力, 评分 70
+- 利差 < 0% -> 股票高估, 评分 85
 
 **仓位水位映射：**
 
@@ -484,10 +506,14 @@ class LayeredRiskResult:
 |---|---|---|---|
 
 ## L1 宏观环境 [风险: 中等 42/100 | 建议仓位: <=80%]
-- 恐惧指数: 45 (中性)
-- VIX: 18.5 (正常)
-- 北向资金: 近5日累计净流入+32亿
-- 美债利差: 0.45% (正常)
+- 恐惧指数: 45 (中性) -- 市场情绪平稳，无明显恐慌或贪婪
+- VIX: 18.5 (正常) -- 波动率处于合理区间
+- 北向资金: 近5日累计净流入+32亿 -- 外资持续流入，看好A股
+- 融资余额: 1.33万亿(+0.8%) -- 杠杆资金温和增加，情绪偏乐观
+- 涨跌家数: 涨3197/跌1822 -- 上涨家数占优，市场广度健康
+- 股债性价比: 2.44% -- 高于近10年40%时间，股票配置价值适中
+- 美债利差: 0.45% (正常) -- 无衰退信号
+- 成交额: 2.58万亿 -- 量能充沛
 
 ## L2 市场状态 [风险: 偏高 62/100]
 - 全A市场: 板块分化 (F1=42%)
@@ -624,7 +650,30 @@ class LayeredRiskResult:
 
 ---
 
-## 12. 参考
+## 12. 借鉴东方财富"牛熊风向标"
+
+东方财富每日复盘涵盖以下模块，其中大部分数据我们已有：
+
+| 模块 | 我们的数据 | 集成层 |
+|---|---|---|
+| 股吧情绪(散户多空) | 暂无 | 后续扩展 |
+| 融资融券(余额+净买入) | `margin_balance` + `margin_net_buy` | L1 宏观 |
+| 涨跌统计(涨跌家数/涨跌停) | `advance_count` / `decline_count` / `limit_up/down_count` | L1 宏观 |
+| 成交分析(三市成交额) | `market_volume` | L1 宏观 |
+| 强势题材(概念板块涨幅) | `concept_board_fetcher` 已有 | L3 行业 |
+| 市场风格(大小盘x成长价值) | 需计算 | 后续扩展 |
+| 港股通(南向资金) | 暂无 | 后续扩展 |
+| 板块估值(PE百分位) | `sw_industry_valuation` | L3 行业 |
+| 期指多空(IF/IC持仓) | 暂无 | 后续扩展 |
+| 逆回购(央行流动性) | 暂无 | 后续扩展 |
+| 估值分析(A股PE分位) | `pe_csi300` | L1 宏观 |
+| 股债性价比(利差) | `pe_csi300` + `cn_10y_bond` 计算 | L1 宏观 |
+
+**报告风格借鉴：** 每个指标配一句解读（如"融资余额上升则后市倾向看多"），提升可读性。
+
+---
+
+## 13. 参考
 
 - 胡猛《风和投资笔记》: 多层风控、跨市场分散、仓位梯度 2%-8%、3D-5M 分析模型
 - 现有 `data_analyst/sentiment/fear_index.py`: 7 维恐慌指数 (L1 数据源)
