@@ -30,7 +30,12 @@ class BacktestConfig:
     
     # 基准配置
     benchmark: Optional[str] = '000300.SH'
-    
+
+    # GDP/CPI 合理性基准
+    gdp_growth_rate: float = 0.05   # 年化 GDP 增速基准
+    cpi_growth_rate: float = 0.02   # 年化 CPI 增速基准
+    show_gdp_benchmark: bool = True # 是否在报告中显示合理性评估
+
     # 其他配置
     allow_short: bool = False
     

@@ -49,7 +49,12 @@ class BacktestResult:
     # 分类统计
     momentum_stats: Dict = field(default_factory=dict)
     reversal_stats: Dict = field(default_factory=dict)
-    
+
+    # GDP/CPI 合理性基准
+    gdp_cumulative_return: float = 0
+    cpi_cumulative_return: float = 0
+    reasonability: str = ''  # 'reasonable' / 'overfit_warning' / 'underperform_cash'
+
     # 原始数据
     daily_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     trades_df: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -128,7 +133,13 @@ class MetricsCalculator:
         # 分类统计
         momentum_stats = self._calculate_signal_stats(trades_df, 'momentum')
         reversal_stats = self._calculate_signal_stats(trades_df, 'reversal')
-        
+
+        # GDP/CPI 合理性基准
+        years = trading_days / 252.0
+        gdp_cum, cpi_cum, reasonability = self._calculate_reasonability(
+            annual_return, years
+        )
+
         return BacktestResult(
             start_date=str(start_date.date()) if hasattr(start_date, 'date') else str(start_date),
             end_date=str(end_date.date()) if hasattr(end_date, 'date') else str(end_date),
@@ -148,10 +159,40 @@ class MetricsCalculator:
             **trade_stats,
             momentum_stats=momentum_stats,
             reversal_stats=reversal_stats,
+            gdp_cumulative_return=gdp_cum,
+            cpi_cumulative_return=cpi_cum,
+            reasonability=reasonability,
             daily_df=daily_df,
             trades_df=trades_df,
         )
     
+    def _calculate_reasonability(self, annual_return: float, years: float,
+                                 gdp_rate: float = 0.05, cpi_rate: float = 0.02) -> tuple:
+        """
+        GDP/CPI 合理性评估
+
+        - annual_return > 3x GDP => overfit_warning (过拟合警告)
+        - annual_return < CPI => underperform_cash (跑输现金)
+        - else => reasonable (合理区间)
+
+        Returns:
+            (gdp_cumulative, cpi_cumulative, reasonability_label)
+        """
+        if years <= 0:
+            return 0, 0, ''
+
+        gdp_cum = (1 + gdp_rate) ** years - 1
+        cpi_cum = (1 + cpi_rate) ** years - 1
+
+        if annual_return > gdp_rate * 3:
+            reasonability = 'overfit_warning'
+        elif annual_return < cpi_rate:
+            reasonability = 'underperform_cash'
+        else:
+            reasonability = 'reasonable'
+
+        return gdp_cum, cpi_cum, reasonability
+
     def _calculate_annual_return(self, total_return: float, trading_days: int) -> float:
         """计算年化收益率"""
         if trading_days <= 0:

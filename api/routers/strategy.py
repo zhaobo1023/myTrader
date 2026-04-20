@@ -154,3 +154,45 @@ async def get_preset_run_detail(key: str, run_id: int):
     if not detail:
         raise HTTPException(status_code=404, detail=f'Run {run_id} not found')
     return detail
+
+
+@router.get('/weights')
+async def strategy_weights(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Return latest strategy allocation weights computed by portfolio_allocator.
+    Data source: trade_strategy_weights table.
+    """
+    import asyncio
+
+    def _do_weights():
+        from config.db import execute_query
+
+        rows = execute_query(
+            """SELECT * FROM trade_strategy_weights
+               WHERE calc_date = (SELECT MAX(calc_date) FROM trade_strategy_weights)
+               ORDER BY strategy_name""",
+            env='online',
+        )
+        result = {'calc_date': None, 'regime': None, 'crowding_level': None, 'weights': []}
+        if rows:
+            result['calc_date'] = str(rows[0]['calc_date'])
+            result['regime'] = rows[0].get('regime')
+            result['crowding_level'] = rows[0].get('crowding_level')
+            for r in rows:
+                result['weights'].append({
+                    'strategy_name': r['strategy_name'],
+                    'base_weight': float(r['base_weight']) if r['base_weight'] else None,
+                    'regime_adjustment': float(r['regime_adjustment']) if r['regime_adjustment'] else None,
+                    'crowding_adjustment': float(r['crowding_adjustment']) if r['crowding_adjustment'] else None,
+                    'final_weight': float(r['final_weight']) if r['final_weight'] else None,
+                })
+        return result
+
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _do_weights)
+    except Exception as exc:
+        logger.error('[STRATEGY] weights failed for user=%s: %s', current_user.id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))

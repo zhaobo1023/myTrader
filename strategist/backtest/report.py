@@ -113,19 +113,46 @@ class ReportGenerator:
                 lines.append(f"| 最大亏损 | {result.reversal_stats.get('min_return', 0)*100:.2f}% |")
                 lines.append("")
         
+        # 基准对比
+        if result.gdp_cumulative_return or result.cpi_cumulative_return:
+            lines.append("## 五、基准对比 (Benchmark Comparison)")
+            lines.append("")
+            lines.append("| 基准 | 累计收益 | 年化收益 | 说明 |")
+            lines.append("|------|---------|---------|------|")
+            lines.append(f"| 策略 | {result.total_return*100:.2f}% | {result.annual_return*100:.2f}% | - |")
+            if result.benchmark_return != 0:
+                lines.append(f"| 沪深300 | {result.benchmark_return*100:.2f}% | {result.benchmark_annual*100:.2f}% | 市场基准 |")
+            lines.append(f"| GDP 增长 | {result.gdp_cumulative_return*100:.2f}% | 5.00% | 经济增长上限参考 |")
+            lines.append(f"| CPI 增长 | {result.cpi_cumulative_return*100:.2f}% | 2.00% | 现金保值下限参考 |")
+            lines.append("")
+
+            # Reasonability assessment
+            lines.append("### 合理性评估")
+            lines.append("")
+            if result.reasonability == 'overfit_warning':
+                lines.append("[WARN] **过拟合警告**: 年化收益超过 GDP 增速 3 倍 (>{:.0f}%)，策略可能过拟合历史数据。".format(5 * 3))
+                lines.append("建议: 检查样本外表现、增加交易成本、缩短回测窗口验证稳健性。")
+            elif result.reasonability == 'underperform_cash':
+                lines.append("[WARN] **跑输现金**: 年化收益低于 CPI (2%)，策略未能跑赢通胀。")
+                lines.append("建议: 审视策略逻辑、检查选股范围、优化参数。")
+            else:
+                lines.append("[OK] **合理区间**: 年化收益在 CPI~3xGDP 区间内，收益水平合理。")
+            lines.append("")
+
         # 策略评价
-        lines.append("## 五、策略评价")
+        section_num = "六" if (result.gdp_cumulative_return or result.cpi_cumulative_return) else "五"
+        lines.append(f"## {section_num}、策略评价")
         lines.append("")
-        
+
         if result.annual_return > 0.15 and result.max_drawdown > -0.2 and result.sharpe_ratio > 1.5:
-            lines.append("✅ **优秀策略**: 高收益 + 低回撤 + 高夏普")
+            lines.append("[OK] **优秀策略**: 高收益 + 低回撤 + 高夏普")
         elif result.annual_return > 0.10 and result.max_drawdown > -0.3 and result.sharpe_ratio > 1.0:
-            lines.append("✅ **良好策略**: 正收益 + 可控回撤 + 正夏普")
+            lines.append("[OK] **良好策略**: 正收益 + 可控回撤 + 正夏普")
         elif result.annual_return > 0.05 and result.sharpe_ratio > 0.5:
-            lines.append("⚠️ **一般策略**: 收益一般或回撤较大")
+            lines.append("[NOTE] **一般策略**: 收益一般或回撤较大")
         else:
-            lines.append("❌ **需改进**: 收益不足或风险过高")
-        
+            lines.append("[WARN] **需改进**: 收益不足或风险过高")
+
         lines.append("")
         
         # 写入文件
