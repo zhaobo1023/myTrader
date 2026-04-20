@@ -304,9 +304,29 @@ async def risk_stock(
                             if stock_code in corr_matrix.columns:
                                 row = corr_matrix[stock_code].drop(stock_code)
                                 top_corr = row.abs().nlargest(3)
+                                top_codes = list(top_corr.index)
+
+                                # Fetch stock names for the top correlated codes
+                                name_map: dict = {}
+                                try:
+                                    name_ph = ', '.join(['%s'] * len(top_codes))
+                                    name_rows = execute_query(
+                                        f"SELECT stock_code, stock_name FROM trade_stock_basic WHERE stock_code IN ({name_ph})",
+                                        tuple(top_codes),
+                                        env='online',
+                                    )
+                                    for nr in name_rows:
+                                        name_map[nr['stock_code']] = nr['stock_name']
+                                except Exception:
+                                    pass
+
                                 personalized['correlations'] = [
-                                    {'stock_code': c, 'correlation': round(float(row[c]), 3)}
-                                    for c in top_corr.index
+                                    {
+                                        'stock_code': c,
+                                        'stock_name': name_map.get(c, c.split('.')[0]),
+                                        'correlation': round(float(row[c]), 3),
+                                    }
+                                    for c in top_codes
                                 ]
                                 avg = float(row.mean())
                                 personalized['avg_portfolio_correlation'] = round(avg, 3)

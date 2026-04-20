@@ -1296,7 +1296,7 @@ interface StockRiskData {
     pnl_ratio: number | null;
     position_weight_pct: number | null;
     avg_portfolio_correlation: number | null;
-    correlations?: { stock_code: string; correlation: number }[];
+    correlations?: { stock_code: string; stock_name?: string; correlation: number }[];
   } | null;
 }
 
@@ -1386,12 +1386,14 @@ function buildPersonalAlerts(p: NonNullable<StockRiskData['personalized']>): Ris
 
   // --- 相关性 ---
   if (corr !== null) {
-    if (corr > 0.6) {
-      alerts.push({ level: 'warn', text: `与组合其他持仓平均相关性 ${corr.toFixed(2)}，协同下跌风险较高，分散效果有限` });
-    } else if (corr > 0.4) {
-      alerts.push({ level: 'tip', text: `与组合平均相关性 ${corr.toFixed(2)}，有一定分散效果` });
+    if (corr >= 0.7) {
+      alerts.push({ level: 'warn', text: `与组合其他持仓极高相关（均值 ${corr.toFixed(2)}），市场下跌时大概率同步回调，分散效果很弱` });
+    } else if (corr >= 0.55) {
+      alerts.push({ level: 'warn', text: `与组合其他持仓偏高相关（均值 ${corr.toFixed(2)}），协同下跌风险较高，建议适度分散` });
+    } else if (corr >= 0.4) {
+      alerts.push({ level: 'tip', text: `与组合持仓中度相关（均值 ${corr.toFixed(2)}），有一定分散效果` });
     } else {
-      alerts.push({ level: 'ok', text: `与组合平均相关性 ${corr.toFixed(2)}，分散化效果较好` });
+      alerts.push({ level: 'ok', text: `与组合持仓相关性低（均值 ${corr.toFixed(2)}），分散化效果较好` });
     }
   }
 
@@ -1431,14 +1433,24 @@ function PersonalizedRiskSection({ personalized: p }: { personalized: NonNullabl
             </span>
           </div>
         )}
-        {p.avg_portfolio_correlation != null && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '80px' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>组合相关性</span>
-            <span style={{ fontSize: '14px', fontWeight: 600, color: p.avg_portfolio_correlation > 0.6 ? '#dc2626' : p.avg_portfolio_correlation > 0.4 ? '#ca8a04' : '#16a34a' }}>
-              {p.avg_portfolio_correlation.toFixed(2)}
-            </span>
-          </div>
-        )}
+        {p.avg_portfolio_correlation != null && (() => {
+          const avg = p.avg_portfolio_correlation;
+          const { label: avgLabel, color: avgColor } = avg >= 0.7
+            ? { label: '极高', color: '#dc2626' }
+            : avg >= 0.55
+            ? { label: '偏高', color: '#ea580c' }
+            : avg >= 0.4
+            ? { label: '中等', color: '#ca8a04' }
+            : { label: '较低', color: '#16a34a' };
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '80px' }}>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>组合相关性</span>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: avgColor }}>
+                {avgLabel} <span style={{ fontSize: '11px', fontWeight: 400, opacity: 0.7 }}>({avg.toFixed(2)})</span>
+              </span>
+            </div>
+          );
+        })()}
       </div>
 
       {/* 风险解读 */}
@@ -1464,14 +1476,25 @@ function PersonalizedRiskSection({ personalized: p }: { personalized: NonNullabl
       {p.correlations && p.correlations.length > 0 && (
         <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)' }}>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>与以下持仓相关性最高</div>
-          {p.correlations.map((c) => (
-            <div key={c.stock_code} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: '12px', borderBottom: '1px solid var(--border-subtle)' }}>
-              <span style={{ color: 'var(--text-secondary)' }}>{c.stock_code}</span>
-              <span style={{ fontWeight: 510, color: Math.abs(c.correlation) > 0.6 ? '#dc2626' : Math.abs(c.correlation) > 0.4 ? '#ca8a04' : '#16a34a' }}>
-                {c.correlation > 0 ? '+' : ''}{c.correlation.toFixed(3)}
-              </span>
-            </div>
-          ))}
+          {p.correlations.map((c) => {
+            const abs = Math.abs(c.correlation);
+            const { label: corrLabel, color: corrColor } = abs >= 0.8
+              ? { label: '极高相关', color: '#dc2626' }
+              : abs >= 0.65
+              ? { label: '高度相关', color: '#ea580c' }
+              : abs >= 0.5
+              ? { label: '中度相关', color: '#ca8a04' }
+              : { label: '低相关', color: '#16a34a' };
+            const displayName = c.stock_name || c.stock_code.split('.')[0];
+            return (
+              <div key={c.stock_code} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{displayName}</span>
+                <span style={{ fontSize: '12px', padding: '1px 7px', borderRadius: '3px', background: `${corrColor}18`, color: corrColor, border: `1px solid ${corrColor}40`, fontWeight: 510 }}>
+                  {corrLabel}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
     </RiskSection>
