@@ -426,6 +426,14 @@ export interface PositionItem {
   updated_at: string;
 }
 
+export interface PositionMarketData {
+  close: number | null;
+  trade_date: string | null;
+  close_5d?: number;
+  change_5d_pct?: number;
+  cost_pct?: number;
+}
+
 export const positionsApi = {
   list: (params?: { level?: string; active_only?: boolean }) =>
     apiClient.get<{ items: PositionItem[]; total: number }>('/api/positions', { params }),
@@ -437,6 +445,8 @@ export const positionsApi = {
     apiClient.delete(`/api/positions/${id}`),
   importBatch: (items: Array<{ stock_code: string; stock_name?: string; level?: string; shares?: number; cost_price?: number; account?: string; note?: string }>) =>
     apiClient.post<{ created: number; skipped: number }>('/api/positions/import', { items }),
+  marketData: () =>
+    apiClient.get<Record<string, PositionMarketData>>('/api/positions/market-data'),
 };
 
 // ============================================================

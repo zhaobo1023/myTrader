@@ -271,6 +271,106 @@ async def risk_scan(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get('/market-data')
+async def get_positions_market_data(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch latest close price and 5-day change for all active positions."""
+    import asyncio
+
+    # Get active positions
+    result = await db.execute(
+        select(UserPosition).where(
+            UserPosition.user_id == current_user.id,
+            UserPosition.is_active == True,
+        )
+    )
+    positions = result.scalars().all()
+    if not positions:
+        return {}
+
+    codes = [p.stock_code for p in positions]
+    cost_map = {p.stock_code: float(p.cost_price) if p.cost_price else None for p in positions}
+
+    def _fetch_market_data(stock_codes):
+        from config.db import execute_query
+
+        placeholders = ', '.join(['%s'] * len(stock_codes))
+        data = {}
+
+        # Latest close price
+        try:
+            rows = execute_query(
+                """
+                SELECT sub.stock_code, sub.close_price, sub.trade_date
+                FROM (
+                    SELECT stock_code, close_price, trade_date,
+                           ROW_NUMBER() OVER (PARTITION BY stock_code ORDER BY trade_date DESC) AS rn
+                    FROM trade_stock_daily
+                    WHERE stock_code IN ({})
+                ) sub
+                WHERE sub.rn = 1
+                """.format(placeholders),
+                tuple(stock_codes),
+                env='online',
+            )
+            for r in rows:
+                code = r['stock_code']
+                close = float(r['close_price']) if r['close_price'] else None
+                data[code] = {
+                    'close': close,
+                    'trade_date': str(r['trade_date']) if r['trade_date'] else None,
+                }
+        except Exception as e:
+            logger.warning('[POSITIONS] market-data latest close query failed: %s', e)
+            return data
+
+        # 5 trading days ago close
+        try:
+            rows = execute_query(
+                """
+                SELECT sub.stock_code, sub.close_price
+                FROM (
+                    SELECT stock_code, close_price,
+                           ROW_NUMBER() OVER (PARTITION BY stock_code ORDER BY trade_date DESC) AS rn
+                    FROM trade_stock_daily
+                    WHERE stock_code IN ({})
+                ) sub
+                WHERE sub.rn = 6
+                """.format(placeholders),
+                tuple(stock_codes),
+                env='online',
+            )
+            for r in rows:
+                code = r['stock_code']
+                if code in data and r['close_price'] is not None:
+                    close_5d = float(r['close_price'])
+                    data[code]['close_5d'] = close_5d
+                    close = data[code].get('close')
+                    if close is not None and close_5d > 0:
+                        data[code]['change_5d_pct'] = round((close - close_5d) / close_5d * 100, 2)
+        except Exception as e:
+            logger.warning('[POSITIONS] market-data 5d close query failed: %s', e)
+
+        # Calculate cost gain/loss %
+        for code, info in data.items():
+            cost = cost_map.get(code)
+            close = info.get('close')
+            if cost and cost > 0 and close is not None:
+                info['cost_pct'] = round((close - cost) / cost * 100, 2)
+
+        return data
+
+    try:
+        loop = asyncio.get_running_loop()
+        market_data = await loop.run_in_executor(None, _fetch_market_data, codes)
+        return market_data
+    except Exception as exc:
+        logger.error('[POSITIONS] market-data failed for user=%s: %s', current_user.id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.post('/import', status_code=status.HTTP_201_CREATED)
 async def import_positions(
     req: PositionImportRequest,

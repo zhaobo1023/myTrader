@@ -48,6 +48,10 @@ class StockRiskResult:
     sub_scores: Dict[str, float]
     alerts: List[str]
     stop_loss_hit: bool
+    stop_loss_price: Optional[float] = None
+    cost_distance_pct: Optional[float] = None
+    change_5d_pct: Optional[float] = None
+    latest_close: Optional[float] = None
 
 
 @dataclass

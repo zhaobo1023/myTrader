@@ -3,7 +3,7 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import apiClient, { positionsApi, PositionItem } from '@/lib/api-client';
+import apiClient, { positionsApi, PositionItem, PositionMarketData } from '@/lib/api-client';
 import { useAddToCandidate } from '@/hooks/useStockAdd';
 import StockSearchInput from '@/components/stock/StockSearchInput';
 import type { StockSearchResult } from '@/lib/api-client';
@@ -67,6 +67,10 @@ type StockResult = {
   sub_scores: Record<string, number>;
   alerts: string[];
   stop_loss_hit: boolean;
+  stop_loss_price?: number | null;
+  cost_distance_pct?: number | null;
+  change_5d_pct?: number | null;
+  latest_close?: number | null;
 };
 
 type LayeredRiskResult = {
@@ -126,6 +130,95 @@ function corrLabel(corr: number): { text: string; color: string } {
   if (corr >= 0.7) return { text: '较高', color: '#ea580c' };
   return { text: '偏高', color: '#ca8a04' };
 }
+
+const PIE_COLORS = [
+  '#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#8b5cf6',
+  '#ec4899', '#06b6d4', '#f97316', '#6366f1', '#14b8a6',
+  '#e11d48', '#84cc16',
+];
+
+function IndustryPieChart({ breakdown }: { breakdown: Record<string, number> }) {
+  const known = Object.entries(breakdown)
+    .filter(([ind]) => ind !== '')
+    .sort((a, b) => b[1] - a[1]);
+  if (known.length === 0) return null;
+
+  // Build conic-gradient segments
+  const segments: string[] = [];
+  let cumulative = 0;
+  const legendItems: { name: string; ratio: number; color: string }[] = [];
+  known.forEach(([ind, ratio], i) => {
+    const color = PIE_COLORS[i % PIE_COLORS.length];
+    const start = cumulative * 360;
+    cumulative += ratio;
+    const end = cumulative * 360;
+    segments.push(`${color} ${start.toFixed(1)}deg ${end.toFixed(1)}deg`);
+    legendItems.push({ name: ind, ratio, color });
+  });
+  // Fill remaining (if any) with grey
+  if (cumulative < 1) {
+    const start = cumulative * 360;
+    segments.push(`#e5e7eb ${start.toFixed(1)}deg 360deg`);
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '14px', margin: '6px 0' }}>
+      <div style={{
+        width: '64px', height: '64px', borderRadius: '50%', flexShrink: 0,
+        background: `conic-gradient(${segments.join(', ')})`,
+      }} />
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', fontSize: '11px' }}>
+        {legendItems.map(({ name, ratio, color }) => (
+          <span key={name} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: color, display: 'inline-block' }} />
+            <span style={{ color: 'var(--text-secondary)' }}>{name}</span>
+            <span style={{ color: 'var(--text-muted)' }}>{(ratio * 100).toFixed(0)}%</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const SCORE_WEIGHTS = [
+  { label: 'L1 宏观', key: 'macro', weight: 0.25 },
+  { label: 'L2 市场', key: 'regime', weight: 0.20 },
+  { label: 'L3 行业', key: 'sector', weight: 0.20 },
+  { label: 'L4 个股', key: 'stocks', weight: 0.25 },
+  { label: 'L5 执行', key: 'exec', weight: 0.10 },
+];
+
+function ScoreBreakdown({ result }: { result: LayeredRiskResult }) {
+  const stocksAvg = result.stocks.length > 0
+    ? result.stocks.reduce((sum, s) => sum + s.score, 0) / result.stocks.length
+    : 50;
+  const scores: Record<string, number> = {
+    macro: result.macro.score,
+    regime: result.regime.score,
+    sector: result.sector.score,
+    stocks: stocksAvg,
+    exec: 50,
+  };
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 12px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+      {SCORE_WEIGHTS.map(({ label, key, weight }) => {
+        const s = scores[key];
+        const contribution = s * weight;
+        return (
+          <span key={key}>
+            {label} <span style={{ color: 'var(--text-secondary)', fontWeight: 510 }}>{s.toFixed(0)}</span>
+            <span style={{ opacity: 0.6 }}> x{(weight * 100).toFixed(0)}%</span>
+            <span style={{ opacity: 0.5 }}> ={contribution.toFixed(1)}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+// Stop loss percentages matching backend config
+const STOP_LOSS_PCTS: Record<string, number> = { L1: 0.15, L2: 0.08, L3: 0.08 };
 
 function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClose: () => void }) {
   const overallLevel =
@@ -210,24 +303,27 @@ function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClo
             return (
               <>
                 {known.length > 0 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: known.length > 0 ? '6px' : 0 }}>
-                    {known.slice(0, 8).map(([ind, ratio]) => (
-                      <span key={ind} style={{
-                        fontSize: '12px', padding: '2px 8px', borderRadius: '4px',
-                        background: ratio > 0.5 ? 'rgba(234,88,12,0.08)' : 'var(--bg-canvas)',
-                        color: ratio > 0.5 ? '#ea580c' : 'var(--text-secondary)',
-                        border: `1px solid ${ratio > 0.5 ? 'rgba(234,88,12,0.25)' : 'var(--border-subtle)'}`,
-                        fontWeight: ratio > 0.3 ? 510 : 400,
-                      }}>
-                        {ind} <span style={{ opacity: 0.75 }}>{(ratio * 100).toFixed(0)}%</span>
-                      </span>
-                    ))}
-                    {unknown > 0.05 && (
-                      <span style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '4px', background: 'var(--bg-canvas)', color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', fontStyle: 'italic' }}>
-                        待补充 {(unknown * 100).toFixed(0)}%
-                      </span>
-                    )}
-                  </div>
+                  <>
+                    <IndustryPieChart breakdown={result.sector.industry_breakdown} />
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                      {known.slice(0, 8).map(([ind, ratio]) => (
+                        <span key={ind} style={{
+                          fontSize: '12px', padding: '2px 8px', borderRadius: '4px',
+                          background: ratio > 0.5 ? 'rgba(234,88,12,0.08)' : 'var(--bg-canvas)',
+                          color: ratio > 0.5 ? '#ea580c' : 'var(--text-secondary)',
+                          border: `1px solid ${ratio > 0.5 ? 'rgba(234,88,12,0.25)' : 'var(--border-subtle)'}`,
+                          fontWeight: ratio > 0.3 ? 510 : 400,
+                        }}>
+                          {ind} <span style={{ opacity: 0.75 }}>{(ratio * 100).toFixed(0)}%</span>
+                        </span>
+                      ))}
+                      {unknown > 0.05 && (
+                        <span style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '4px', background: 'var(--bg-canvas)', color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', fontStyle: 'italic' }}>
+                          待补充 {(unknown * 100).toFixed(0)}%
+                        </span>
+                      )}
+                    </div>
+                  </>
                 )}
                 {known.length === 0 && (
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>行业数据待补充</div>
@@ -267,13 +363,28 @@ function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClo
                     <span style={{ fontSize: '12px', color: 'var(--text-muted)', minWidth: '34px' }}>
                       {Math.round(s.score)}分
                     </span>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
                       {s.stop_loss_hit && (
                         <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px', background: 'rgba(220,38,38,0.1)', color: '#dc2626' }}>触及止损</span>
                       )}
                       {s.alerts.map((a, j) => (
                         <span key={j} style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px', background: 'rgba(234,88,12,0.1)', color: '#ea580c' }}>{a}</span>
                       ))}
+                      {s.stop_loss_price != null && (
+                        <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px', background: 'rgba(100,100,100,0.06)', color: 'var(--text-muted)' }}>
+                          止损价: {s.stop_loss_price.toFixed(2)}
+                          {s.cost_distance_pct != null && ` (盈亏${s.cost_distance_pct > 0 ? '+' : ''}${s.cost_distance_pct.toFixed(1)}%)`}
+                        </span>
+                      )}
+                      {s.change_5d_pct != null && (
+                        <span style={{
+                          fontSize: '11px', padding: '1px 6px', borderRadius: '3px',
+                          background: Math.abs(s.change_5d_pct) >= 10 ? 'rgba(220,38,38,0.1)' : 'rgba(100,100,100,0.06)',
+                          color: s.change_5d_pct >= 0 ? '#dc2626' : '#16a34a',
+                        }}>
+                          5日{s.change_5d_pct >= 0 ? '+' : ''}{s.change_5d_pct.toFixed(1)}%
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -283,8 +394,11 @@ function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClo
             {normalStocks.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                 {normalStocks.map((s, i) => (
-                  <span key={i} style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '3px', background: 'rgba(22,163,74,0.07)', border: '1px solid rgba(22,163,74,0.18)', color: '#16a34a' }}>
+                  <span key={i} style={{ fontSize: '11px', padding: '1px 7px', borderRadius: '3px', background: 'rgba(22,163,74,0.07)', border: '1px solid rgba(22,163,74,0.18)', color: '#16a34a' }}
+                    title={s.stop_loss_price != null ? `止损价: ${s.stop_loss_price.toFixed(2)}` : undefined}
+                  >
                     {s.stock_name || s.stock_code} {Math.round(s.score)}
+                    {s.stop_loss_price != null && <span style={{ opacity: 0.6, marginLeft: '3px' }}>|止损{s.stop_loss_price.toFixed(2)}</span>}
                   </span>
                 ))}
               </div>
@@ -292,17 +406,18 @@ function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClo
           </div>
         )}
 
-        {/* 综合建议 */}
-        {cleanSuggestions.length > 0 && (
-          <div style={{ borderRadius: '6px', border: `1px solid ${levelBorder(overallLevel)}`, background: levelBg(overallLevel), padding: '10px 14px' }}>
-            <div style={{ fontSize: '13px', fontWeight: 600, color: levelColor(overallLevel), marginBottom: '6px' }}>
-              综合建议 · 总分 {Math.round(result.overall_score)}
-            </div>
-            <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+        {/* 综合建议 + 评分构成 */}
+        <div style={{ borderRadius: '6px', border: `1px solid ${levelBorder(overallLevel)}`, background: levelBg(overallLevel), padding: '10px 14px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: levelColor(overallLevel), marginBottom: '2px' }}>
+            综合建议 · 总分 {Math.round(result.overall_score)}
+          </div>
+          <ScoreBreakdown result={result} />
+          {cleanSuggestions.length > 0 && (
+            <ul style={{ margin: '6px 0 0 0', paddingLeft: '16px', fontSize: '12px', color: 'var(--text-secondary)' }}>
               {cleanSuggestions.map((s, i) => <li key={i} style={{ marginBottom: '3px' }}>{s}</li>)}
             </ul>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
@@ -325,6 +440,12 @@ export default function PositionsContent() {
   const { data, isLoading } = useQuery({
     queryKey: ['positions'],
     queryFn: () => positionsApi.list().then(r => r.data),
+  });
+
+  const { data: marketData } = useQuery({
+    queryKey: ['positions-market-data'],
+    queryFn: () => positionsApi.marketData().then(r => r.data),
+    refetchInterval: 5 * 60 * 1000,
   });
 
   const createMut = useMutation({
@@ -568,65 +689,89 @@ export default function PositionsContent() {
           <div className="table-scroll" style={cardStyle}>
             <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
               <colgroup>
+                <col style={{ width: '11%' }} />
                 <col style={{ width: '13%' }} />
-                <col style={{ width: '17%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '8%' }} />
                 <col style={{ width: '10%' }} />
-                <col style={{ width: '10%' }} />
-                <col style={{ width: '12%' }} />
-                <col style={{ width: '38%' }} />
+                <col style={{ width: '26%' }} />
               </colgroup>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
-                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>代码</th>
-                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>名称</th>
-                  <th style={{ textAlign: 'right', padding: '6px 8px' }}>股数</th>
-                  <th style={{ textAlign: 'right', padding: '6px 8px' }}>成本</th>
-                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>账户</th>
-                  <th style={{ textAlign: 'right', padding: '6px 8px' }}>操作</th>
+                  <th style={{ textAlign: 'left', padding: '6px 6px' }}>代码</th>
+                  <th style={{ textAlign: 'left', padding: '6px 6px' }}>名称</th>
+                  <th style={{ textAlign: 'right', padding: '6px 6px' }}>股数</th>
+                  <th style={{ textAlign: 'right', padding: '6px 6px' }}>成本</th>
+                  <th style={{ textAlign: 'right', padding: '6px 6px' }}>现价</th>
+                  <th style={{ textAlign: 'right', padding: '6px 6px' }}>盈亏%</th>
+                  <th style={{ textAlign: 'right', padding: '6px 6px' }}>5日涨跌</th>
+                  <th style={{ textAlign: 'left', padding: '6px 6px' }}>账户</th>
+                  <th style={{ textAlign: 'right', padding: '6px 6px' }}>操作</th>
                 </tr>
               </thead>
               <tbody>
-                {g.items.map(p => (
-                  <tr key={p.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                    <td style={{ padding: '6px 8px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      <a
-                        href={`/stock?code=${encodeURIComponent(p.stock_code)}`}
-                        style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: '13px' }}
-                      >
-                        {p.stock_code}
-                      </a>
-                    </td>
-                    <td style={{ padding: '6px 8px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      <a
-                        href={`/stock?code=${encodeURIComponent(p.stock_code)}`}
-                        style={{ color: 'var(--text-secondary)', textDecoration: 'none', fontSize: '13px' }}
-                      >
-                        {p.stock_name || '-'}
-                      </a>
-                    </td>
-                    <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text-primary)' }}>{p.shares ?? '-'}</td>
-                    <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text-primary)' }}>{p.cost_price?.toFixed(2) ?? '-'}</td>
-                    <td style={{ padding: '6px 8px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.account || '-'}</td>
-                    <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      <button onClick={() => startEdit(p)} style={{ fontSize: '12px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', marginRight: '8px' }}>编辑</button>
-                      <button
-                        onClick={() => quickAnalyze(p)}
-                        disabled={analyzingId === p.id}
-                        style={{ fontSize: '12px', color: '#7c3aed', background: 'none', border: 'none', cursor: analyzingId === p.id ? 'default' : 'pointer', marginRight: '8px', opacity: analyzingId === p.id ? 0.5 : 1 }}
-                      >
-                        {analyzingId === p.id ? '检查中...' : '深度分析'}
-                      </button>
-                      <button
-                        onClick={() => moveToCandidate(p)}
-                        disabled={movingId === p.id}
-                        style={{ fontSize: '12px', color: '#5e6ad2', background: 'none', border: 'none', cursor: movingId === p.id ? 'default' : 'pointer', marginRight: '8px' }}
-                      >
-                        {movingId === p.id ? '移动中...' : '移至候选'}
-                      </button>
-                      <button onClick={() => { if (confirm('确认删除?')) deleteMut.mutate(p.id); }} style={{ fontSize: '12px', color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer' }}>删除</button>
-                    </td>
-                  </tr>
-                ))}
+                {g.items.map(p => {
+                  const md = marketData?.[p.stock_code];
+                  const costPct = md?.cost_pct;
+                  const change5d = md?.change_5d_pct;
+                  // Color: A-share convention: red for up, green for down
+                  const pctColor = (v: number | undefined | null) =>
+                    v == null ? 'var(--text-muted)' : v > 0 ? '#dc2626' : v < 0 ? '#16a34a' : 'var(--text-muted)';
+                  // 5-day alert styling
+                  const change5dStyle: React.CSSProperties = {};
+                  if (change5d != null) {
+                    const abs5d = Math.abs(change5d);
+                    if (abs5d >= 15) {
+                      change5dStyle.background = change5d < 0 ? 'rgba(22,163,74,0.12)' : 'rgba(220,38,38,0.12)';
+                      change5dStyle.fontWeight = 700;
+                      change5dStyle.borderRadius = '3px';
+                      change5dStyle.padding = '1px 4px';
+                    } else if (abs5d >= 10) {
+                      change5dStyle.fontWeight = 600;
+                    }
+                  }
+                  return (
+                    <tr key={p.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                      <td style={{ padding: '6px 6px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <a href={`/stock?code=${encodeURIComponent(p.stock_code)}`} style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: '13px' }}>
+                          {p.stock_code}
+                        </a>
+                      </td>
+                      <td style={{ padding: '6px 6px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <a href={`/stock?code=${encodeURIComponent(p.stock_code)}`} style={{ color: 'var(--text-secondary)', textDecoration: 'none', fontSize: '13px' }}>
+                          {p.stock_name || '-'}
+                        </a>
+                      </td>
+                      <td style={{ padding: '6px 6px', textAlign: 'right', color: 'var(--text-primary)' }}>{p.shares ?? '-'}</td>
+                      <td style={{ padding: '6px 6px', textAlign: 'right', color: 'var(--text-primary)' }}>{p.cost_price?.toFixed(2) ?? '-'}</td>
+                      <td style={{ padding: '6px 6px', textAlign: 'right', color: 'var(--text-primary)', fontWeight: 510 }}>
+                        {md?.close?.toFixed(2) ?? '-'}
+                      </td>
+                      <td style={{ padding: '6px 6px', textAlign: 'right', color: pctColor(costPct), fontWeight: 510 }}>
+                        {costPct != null ? `${costPct > 0 ? '+' : ''}${costPct.toFixed(2)}%` : '-'}
+                      </td>
+                      <td style={{ padding: '6px 6px', textAlign: 'right', color: pctColor(change5d), ...change5dStyle }}>
+                        {change5d != null ? `${change5d > 0 ? '+' : ''}${change5d.toFixed(2)}%` : '-'}
+                      </td>
+                      <td style={{ padding: '6px 6px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.account || '-'}</td>
+                      <td style={{ padding: '6px 6px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <button onClick={() => startEdit(p)} style={{ fontSize: '12px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', marginRight: '6px' }}>编辑</button>
+                        <button onClick={() => quickAnalyze(p)} disabled={analyzingId === p.id}
+                          style={{ fontSize: '12px', color: '#7c3aed', background: 'none', border: 'none', cursor: analyzingId === p.id ? 'default' : 'pointer', marginRight: '6px', opacity: analyzingId === p.id ? 0.5 : 1 }}>
+                          {analyzingId === p.id ? '检查中...' : '分析'}
+                        </button>
+                        <button onClick={() => moveToCandidate(p)} disabled={movingId === p.id}
+                          style={{ fontSize: '12px', color: '#5e6ad2', background: 'none', border: 'none', cursor: movingId === p.id ? 'default' : 'pointer', marginRight: '6px' }}>
+                          {movingId === p.id ? '...' : '候选'}
+                        </button>
+                        <button onClick={() => { if (confirm('确认删除?')) deleteMut.mutate(p.id); }} style={{ fontSize: '12px', color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer' }}>删除</button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

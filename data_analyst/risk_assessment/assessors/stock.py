@@ -289,6 +289,28 @@ class StockFundamentalAssessor(BaseAssessor):
         except Exception as e:
             logger.warning("trade_event_signal 批量查询失败: %s", e)
 
+        # --- 批量查询5日前收盘价 ---
+        close_5d_map: Dict[str, float] = {}
+        try:
+            rows = self._query(
+                """
+                SELECT sub.stock_code, sub.close_price
+                FROM (
+                    SELECT stock_code, close_price,
+                           ROW_NUMBER() OVER (PARTITION BY stock_code ORDER BY trade_date DESC) AS rn
+                    FROM trade_stock_daily
+                    WHERE stock_code IN ({})
+                ) sub
+                WHERE sub.rn = 6
+                """.format(placeholders),
+                tuple(codes),
+            )
+            for r in rows:
+                if r['close_price'] is not None:
+                    close_5d_map[r['stock_code']] = float(r['close_price'])
+        except Exception as e:
+            logger.warning("trade_stock_daily 5日前收盘价查询失败: %s", e)
+
         # --- 逐只股票计算评分 ---
         results = []
         for p in positions:
@@ -367,6 +389,24 @@ class StockFundamentalAssessor(BaseAssessor):
             elif distance_to_stop is not None and 0 <= distance_to_stop < 0.05:
                 alerts.append("接近止损线(距止损还有{:.1f}%)".format(distance_to_stop * 100))
 
+            # 止损价计算
+            stop_pct = STOP_LOSS_PCTS.get(level, 0.08)
+            stop_loss_price = round(cost_price * (1 - stop_pct), 2) if cost_price > 0 else None
+
+            # 成本距离
+            cost_dist = round(loss_pct * 100, 2) if loss_pct is not None else None
+
+            # 5日涨跌幅
+            close_5d = close_5d_map.get(code)
+            change_5d = round((close - close_5d) / close_5d * 100, 2) if close is not None and close_5d is not None and close_5d > 0 else None
+
+            # 5日急涨急跌预警
+            if change_5d is not None:
+                if change_5d <= -10:
+                    alerts.append("5日急跌{:.1f}%".format(change_5d))
+                elif change_5d >= 15:
+                    alerts.append("5日急涨{:.1f}%".format(change_5d))
+
             results.append(StockRiskResult(
                 stock_code=code,
                 stock_name=name,
@@ -374,6 +414,10 @@ class StockFundamentalAssessor(BaseAssessor):
                 sub_scores=sub_scores,
                 alerts=alerts,
                 stop_loss_hit=stop_loss_hit,
+                stop_loss_price=stop_loss_price,
+                cost_distance_pct=cost_dist,
+                change_5d_pct=change_5d,
+                latest_close=close,
             ))
 
         return results
