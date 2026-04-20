@@ -217,7 +217,7 @@ export default function PositionsContent() {
             <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
               风控扫描
               <span style={{ fontSize: '11px', fontWeight: 400, color: 'var(--text-muted)', marginLeft: '8px' }}>
-                {scanResult.portfolio_summary?.total_positions}只 / {scanResult.portfolio_summary?.scan_date}
+                {String(scanResult.portfolio_summary?.total_positions ?? '')}只 / {String(scanResult.portfolio_summary?.scan_date ?? '')}
               </span>
             </span>
             <button onClick={() => setScanResult(null)} style={{ fontSize: '12px', color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}>关闭</button>
