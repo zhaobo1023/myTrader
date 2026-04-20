@@ -7,20 +7,18 @@ from celery import Celery
 
 from api.config import settings
 
-# Clear Celery environment variables to avoid password authentication issues
-# Celery prioritizes env vars over constructor parameters
-if 'CELERY_BROKER_URL' in os.environ:
-    del os.environ['CELERY_BROKER_URL']
-if 'CELERY_RESULT_BACKEND' in os.environ:
-    del os.environ['CELERY_RESULT_BACKEND']
-
-# Build Redis URLs directly from settings
+# Build Redis URLs from settings (single source of truth for host/port/password).
+# Also write back to os.environ so Celery CLI (which reads env vars before
+# importing the app module) uses the same values.
 if settings.redis_password:
     broker_url = f'redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/1'
     backend_url = f'redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/2'
 else:
     broker_url = f'redis://{settings.redis_host}:{settings.redis_port}/1'
     backend_url = f'redis://{settings.redis_host}:{settings.redis_port}/2'
+
+os.environ['CELERY_BROKER_URL'] = broker_url
+os.environ['CELERY_RESULT_BACKEND'] = backend_url
 
 celery_app = Celery(
     'mytrader',
@@ -38,6 +36,18 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     result_expires=86400,  # Results expire after 24h
+    # Redis connection resilience
+    broker_connection_retry_on_startup=True,
+    broker_connection_max_retries=10,
+    broker_connection_retry=True,
+    broker_transport_options={
+        'socket_keepalive': True,
+        'socket_keepalive_options': {},
+        'retry_on_timeout': True,
+    },
+    # Global task timeout (prevent worker stuck)
+    task_soft_time_limit=1800,   # 30min soft -> SoftTimeLimitExceeded
+    task_time_limit=2400,        # 40min hard kill
 )
 
 # Auto-discover tasks

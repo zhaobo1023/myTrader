@@ -93,6 +93,12 @@ services:
       - .:/app
       - ./output:/app/output
       - /root/wechat2rss/data:/root/wechat2rss/data:ro
+    healthcheck:
+      test: ["CMD", "celery", "-A", "api.tasks.celery_app", "inspect", "ping", "--timeout", "10"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
     networks:
       - mytrader-network
@@ -102,13 +108,21 @@ services:
   # ============================================================
   celery-beat:
     build: .
-    command: celery -A api.tasks.celery_app beat -l info --scheduler celery.beat.PersistentScheduler
+    command: >
+      sh -c "rm -f /app/celerybeat-schedule &&
+      celery -A api.tasks.celery_app beat -l info --scheduler celery.beat.PersistentScheduler"
     env_file: .env
     environment:
       - REDIS_HOST=mytrader-redis
       - REDIS_PASSWORD=${REDIS_PASSWORD}
     volumes:
       - .:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis, os; r=redis.Redis(host=os.environ.get('REDIS_HOST','localhost'), port=6379, password=os.environ.get('REDIS_PASSWORD',''), db=1); r.ping()"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
     networks:
       - mytrader-network

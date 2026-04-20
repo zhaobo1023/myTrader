@@ -31,6 +31,7 @@ tasks:
       max_attempts: 2
       delay_seconds: 60
     timeout_seconds: 7200   # 5000 stocks * 0.8s / 3 workers ~ 22 min; allow 2h for backfill
+    alert_on_failure: true
 
   - id: fetch_margin_daily
     name: "Fetch margin trade incremental"
@@ -50,6 +51,7 @@ tasks:
       max_attempts: 2
       delay_seconds: 60
     timeout_seconds: 1800
+    alert_on_failure: true
 
   - id: fetch_north_holding_daily
     name: "Fetch north-bound holding incremental"
@@ -69,6 +71,7 @@ tasks:
       max_attempts: 2
       delay_seconds: 60
     timeout_seconds: 3600
+    alert_on_failure: true
 
   - id: sync_sw_industry_weekly
     name: "Sync SW industry classification (weekly)"
