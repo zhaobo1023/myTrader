@@ -199,7 +199,7 @@ const QVIX_COLORS: Record<string, { bg: string; border: string; text: string }> 
   none:     { bg: 'rgba(100,100,100,0.05)', border: 'rgba(100,100,100,0.2)', text: 'var(--text-muted)' },
 };
 
-function OverviewChip({ label, value, color, sub }: { label: string; value: string; color: { bg: string; border: string; text: string }; sub?: string }) {
+function OverviewChip({ label, value, color, sub, desc }: { label: string; value: string; color: { bg: string; border: string; text: string }; sub?: string; desc?: string }) {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', gap: '2px',
@@ -210,6 +210,7 @@ function OverviewChip({ label, value, color, sub }: { label: string; value: stri
       <span style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1 }}>{label}</span>
       <span style={{ fontSize: '13px', fontWeight: 600, color: color.text, lineHeight: 1.3 }}>{value}</span>
       {sub && <span style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1 }}>{sub}</span>}
+      {desc && <span style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1.4, marginTop: '3px', borderTop: '1px solid var(--border-subtle)', paddingTop: '3px', opacity: 0.8 }}>{desc}</span>}
     </div>
   );
 }
@@ -247,6 +248,12 @@ function RiskOverviewBar({ data }: { data: RiskOverviewData }) {
           value={data.svd?.state || '暂无数据'}
           color={svdColor}
           sub={data.svd?.is_mutation ? '[结构突变]' : data.svd?.top1_ratio != null ? `F1占比 ${(data.svd.top1_ratio * 100).toFixed(0)}%` : undefined}
+          desc={
+            data.svd?.state === '齐涨齐跌' ? '全市场高度同涨同跌，系统性风险高，个股选择意义弱' :
+            data.svd?.state === '板块分化' ? '板块轮动明显，行业配置比选股更重要' :
+            data.svd?.state === '个股行情' ? '市场分散，基本面选股有效，适合精选个股' :
+            '基于全A股收益率矩阵SVD分解，判断当前市场结构'
+          }
         />
 
         {/* QVIX 波动率 */}
@@ -255,6 +262,13 @@ function RiskOverviewBar({ data }: { data: RiskOverviewData }) {
           value={data.qvix ? `${data.qvix.value.toFixed(1)} · ${data.qvix.label}` : '暂无数据'}
           color={qvixColor}
           sub={data.qvix ? `建议仓位 ${(data.qvix.suggested_exposure * 100).toFixed(0)}% 以内` : undefined}
+          desc={
+            data.qvix == null ? '50ETF期权隐含波动率，反映市场恐慌程度' :
+            data.qvix.level === 'low'      ? '<15 市场平稳，情绪正常' :
+            data.qvix.level === 'medium'   ? '15-20 情绪偏焦虑，适当控仓' :
+            data.qvix.level === 'high'     ? '20-30 市场恐慌，建议降低仓位' :
+            '>30 极度恐慌，严格控制风险敞口'
+          }
         />
 
         {/* 单票集中度 */}
