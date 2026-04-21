@@ -2,8 +2,8 @@
 """
 Celery task for daily stock news fetching.
 
-Fetches news for all stocks that have tech reports (analyzed stocks).
-Runs daily at 18:30 after market close.
+Fetches news for stocks in user positions + watchlist (not full market).
+Runs daily at 17:30 after market close.
 """
 import logging
 
@@ -16,10 +16,70 @@ _LOCK_KEY = 'celery:lock:fetch_stock_news_daily'
 _LOCK_EXPIRE = 3600  # 1 hour — long enough to cover any realistic run
 
 
+def _get_target_stocks() -> list:
+    """
+    获取需要拉取新闻的股票列表：用户持仓 + 关注列表。
+    比全量扫描成本低，覆盖用户最关心的股票。
+    """
+    codes = set()
+
+    # 用户持仓
+    try:
+        rows = execute_query("SELECT DISTINCT stock_code FROM user_positions", env='online')
+        for r in rows:
+            if r.get('stock_code'):
+                codes.add(r['stock_code'])
+    except Exception as e:
+        logger.warning('[STOCK_NEWS] Failed to query user_positions: %s', e)
+
+    # 用户关注列表
+    try:
+        rows = execute_query(
+            "SELECT DISTINCT stock_code FROM user_watchlist", env='online'
+        )
+        for r in rows:
+            if r.get('stock_code'):
+                codes.add(r['stock_code'])
+    except Exception as e:
+        # 兼容 watchlist 表名变体
+        try:
+            rows = execute_query(
+                "SELECT DISTINCT code as stock_code FROM watchlist", env='online'
+            )
+            for r in rows:
+                if r.get('stock_code'):
+                    codes.add(r['stock_code'])
+        except Exception:
+            logger.warning('[STOCK_NEWS] Failed to query watchlist: %s', e)
+
+    # 候选池（sim_pool）
+    try:
+        rows = execute_query(
+            "SELECT DISTINCT stock_code FROM sim_pool WHERE status='active'", env='online'
+        )
+        for r in rows:
+            if r.get('stock_code'):
+                codes.add(r['stock_code'])
+    except Exception as e:
+        logger.debug('[STOCK_NEWS] sim_pool query skipped: %s', e)
+
+    # 兜底: 原有 trade_tech_report 已分析股票
+    if not codes:
+        try:
+            rows = execute_query("SELECT DISTINCT stock_code FROM trade_tech_report")
+            for r in rows:
+                if r.get('stock_code'):
+                    codes.add(r['stock_code'])
+        except Exception as e:
+            logger.warning('[STOCK_NEWS] Fallback trade_tech_report query failed: %s', e)
+
+    return [{'stock_code': c} for c in sorted(codes)]
+
+
 @celery_app.task(bind=True, name='fetch_stock_news_daily')
 def fetch_stock_news_daily(self):
     """
-    Fetch news for all analyzed stocks and store to database.
+    Fetch news for user positions + watchlist stocks and store to database.
 
     Uses a Redis lock to prevent concurrent runs when the beat schedule
     fires while a previous run is still in progress.
@@ -46,10 +106,7 @@ def fetch_stock_news_daily(self):
         redis = None
 
     try:
-        # Get all stocks that have tech reports
-        rows = list(execute_query(
-            "SELECT DISTINCT stock_code FROM trade_tech_report",
-        ))
+        rows = _get_target_stocks()
         if not rows:
             logger.info('[STOCK_NEWS] No analyzed stocks found')
             return {'status': 'ok', 'stocks': 0, 'total_new': 0}

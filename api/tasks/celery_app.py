@@ -180,7 +180,13 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=17, minute=0, day_of_week='1-5'),
     },
 
-    # 17:30 - 个股新闻拉取 (已分析股票)
+    # 17:10 - 全市场重大公告抓取 (增减持/回购/业绩预告/重组等)
+    'daily-announcement-fetch': {
+        'task': 'fetch_announcements_daily',
+        'schedule': crontab(hour=17, minute=10, day_of_week='1-5'),
+    },
+
+    # 17:30 - 个股新闻拉取 (持仓 + 关注列表)
     'daily-stock-news-fetch': {
         'task': 'fetch_stock_news_daily',
         'schedule': crontab(hour=17, minute=30, day_of_week='1-5'),
