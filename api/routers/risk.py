@@ -591,6 +591,59 @@ async def risk_overview(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get('/svd-trend')
+async def svd_trend(
+    days: int = 90,
+    window_size: int = 20,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    SVD 市场结构变化趋势：返回近 N 天 top1_var_ratio 时间序列。
+    用于绘制 SVD 趋势折线图，直观展示大盘风格切换。
+    """
+    import asyncio
+
+    if days < 7:
+        days = 7
+    if days > 365:
+        days = 365
+    if window_size not in (20, 60, 120):
+        window_size = 20
+
+    def _do_svd_trend():
+        from config.db import execute_query
+
+        rows = execute_query(
+            """
+            SELECT calc_date, top1_var_ratio, top3_var_ratio, market_state, is_mutation
+            FROM trade_svd_market_state
+            WHERE window_size = %s AND universe_type = '全A'
+              AND calc_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+            ORDER BY calc_date ASC
+            """,
+            (window_size, days),
+            env='online',
+        )
+        series = []
+        for r in rows:
+            series.append({
+                'date': str(r['calc_date']),
+                'top1': round(float(r['top1_var_ratio']), 4) if r['top1_var_ratio'] else None,
+                'top3': round(float(r['top3_var_ratio']), 4) if r['top3_var_ratio'] else None,
+                'state': r['market_state'] or '',
+                'mutation': bool(r['is_mutation']),
+            })
+        return series
+
+    try:
+        loop = asyncio.get_running_loop()
+        series = await loop.run_in_executor(None, _do_svd_trend)
+        return {'series': series, 'window_size': window_size, 'days': days}
+    except Exception as exc:
+        logger.error('[RISK] svd-trend failed: %s', exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.post('/trigger-deps')
 async def trigger_deps(
     current_user: User = Depends(get_current_user),

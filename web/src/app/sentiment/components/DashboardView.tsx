@@ -1,7 +1,8 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { marketOverviewApi } from '@/lib/api-client';
+import { marketOverviewApi, riskApi } from '@/lib/api-client';
 import type {
   MarketDashboardData,
   TemperatureSection,
@@ -10,6 +11,7 @@ import type {
   StyleSection,
   StockBondSection,
   MacroSection,
+  SvdTrendPoint,
 } from '@/lib/api-client';
 import SignalCard from './SignalCard';
 import SignalLog from './SignalLog';
@@ -425,6 +427,266 @@ function renderMacro(data: MacroSection) {
 }
 
 // ---------------------------------------------------------------------------
+// SVD Trend Chart
+// ---------------------------------------------------------------------------
+
+const SVD_STATE_COLORS: Record<string, string> = {
+  'beta_dominant': '#ea580c',
+  'sector_rotation': '#ca8a04',
+  'stock_picking': '#16a34a',
+};
+
+const SVD_STATE_LABELS: Record<string, string> = {
+  'beta_dominant': '齐涨齐跌',
+  'sector_rotation': '板块分化',
+  'stock_picking': '个股行情',
+};
+
+// Threshold lines: above 0.50 = beta dominant, below 0.35 = stock picking
+const SVD_HIGH = 0.50;
+const SVD_LOW = 0.35;
+
+function SvdTrendChart() {
+  const [days, setDays] = useState(90);
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['svd-trend', days],
+    queryFn: () => riskApi.svdTrend({ days, window_size: 20 }).then((r) => r.data),
+    staleTime: 300_000,
+  });
+
+  if (isLoading) {
+    return (
+      <div style={{
+        background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+        borderRadius: '10px', padding: '16px 18px', height: '200px', opacity: 0.4,
+      }} />
+    );
+  }
+
+  if (error || !data?.series?.length) {
+    return (
+      <div style={{
+        background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+        borderRadius: '10px', padding: '16px 18px', fontSize: '12px', color: 'var(--text-muted)',
+      }}>
+        SVD 趋势数据不可用
+      </div>
+    );
+  }
+
+  const series = data.series.filter((p: SvdTrendPoint) => p.top1 != null);
+  if (series.length < 2) return null;
+
+  // Chart dimensions
+  const W = 680;
+  const H = 180;
+  const padL = 42;
+  const padR = 12;
+  const padT = 8;
+  const padB = 28;
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+
+  const vals = series.map((p: SvdTrendPoint) => p.top1 as number);
+  const minV = Math.min(...vals, SVD_LOW - 0.02);
+  const maxV = Math.max(...vals, SVD_HIGH + 0.02);
+  const rangeV = maxV - minV || 0.01;
+
+  const toX = (i: number) => padL + (i / (series.length - 1)) * innerW;
+  const toY = (v: number) => padT + innerH - ((v - minV) / rangeV) * innerH;
+
+  // Build polyline
+  const points = series.map((p: SvdTrendPoint, i: number) => `${toX(i).toFixed(1)},${toY(p.top1 as number).toFixed(1)}`).join(' ');
+
+  // Background color bands for market states
+  const bands: Array<{ x1: number; x2: number; color: string }> = [];
+  let bandStart = 0;
+  let bandState = series[0].state;
+  for (let i = 1; i <= series.length; i++) {
+    const curState = i < series.length ? series[i].state : '';
+    if (curState !== bandState || i === series.length) {
+      bands.push({
+        x1: toX(bandStart),
+        x2: toX(i - 1),
+        color: SVD_STATE_COLORS[bandState] || '#8a8f98',
+      });
+      bandStart = i;
+      bandState = curState;
+    }
+  }
+
+  // Y-axis labels
+  const yTicks = [SVD_LOW, SVD_HIGH];
+  // Add min/max if they extend beyond thresholds
+  const nice = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8].filter(
+    (v) => v >= minV && v <= maxV && Math.abs(v - SVD_LOW) > 0.03 && Math.abs(v - SVD_HIGH) > 0.03
+  );
+  const allYTicks = [...new Set([...yTicks, ...nice.slice(0, 3)])].sort();
+
+  // X-axis date labels (show ~5 evenly spaced dates)
+  const xLabelCount = Math.min(5, series.length);
+  const xLabels: Array<{ idx: number; label: string }> = [];
+  for (let i = 0; i < xLabelCount; i++) {
+    const idx = Math.round((i / (xLabelCount - 1)) * (series.length - 1));
+    const d = series[idx].date;
+    xLabels.push({ idx, label: d.slice(5) }); // MM-DD
+  }
+
+  // Latest point
+  const latest = series[series.length - 1];
+  const latestLabel = SVD_STATE_LABELS[latest.state] || latest.state;
+  const latestColor = SVD_STATE_COLORS[latest.state] || '#8a8f98';
+
+  const dayOptions = [30, 60, 90, 180];
+
+  return (
+    <div style={{
+      background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+      borderRadius: '10px', padding: '16px 18px',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-secondary)' }}>
+            SVD 市场结构趋势
+          </span>
+          <span style={{
+            fontSize: '12px', fontWeight: 510,
+            color: latestColor,
+            background: `${latestColor}18`,
+            padding: '2px 10px', borderRadius: '10px',
+          }}>
+            {latestLabel} {((latest.top1 as number) * 100).toFixed(0)}%
+          </span>
+          {latest.mutation && (
+            <span style={{
+              fontSize: '11px', padding: '2px 8px', borderRadius: '3px',
+              background: 'rgba(220,38,38,0.08)', color: '#dc2626',
+              border: '1px solid rgba(220,38,38,0.2)',
+            }}>
+              结构突变
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          {dayOptions.map((d) => (
+            <button
+              key={d}
+              onClick={() => setDays(d)}
+              style={{
+                fontSize: '11px', padding: '2px 8px', borderRadius: '4px',
+                border: `1px solid ${days === d ? 'var(--accent)' : 'var(--border-subtle)'}`,
+                background: days === d ? 'var(--accent)' : 'transparent',
+                color: days === d ? '#fff' : 'var(--text-muted)',
+                cursor: 'pointer',
+              }}
+            >
+              {d}天
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Chart */}
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+        {/* State color bands (very subtle background) */}
+        {bands.map((b, i) => (
+          <rect
+            key={i}
+            x={b.x1}
+            y={padT}
+            width={Math.max(b.x2 - b.x1, 1)}
+            height={innerH}
+            fill={b.color}
+            opacity={0.06}
+          />
+        ))}
+
+        {/* Threshold lines */}
+        <line
+          x1={padL} y1={toY(SVD_HIGH)} x2={W - padR} y2={toY(SVD_HIGH)}
+          stroke="#ea580c" strokeWidth={0.5} strokeDasharray="4,3" opacity={0.5}
+        />
+        <line
+          x1={padL} y1={toY(SVD_LOW)} x2={W - padR} y2={toY(SVD_LOW)}
+          stroke="#16a34a" strokeWidth={0.5} strokeDasharray="4,3" opacity={0.5}
+        />
+
+        {/* Threshold labels */}
+        <text x={W - padR + 2} y={toY(SVD_HIGH) + 3} fontSize="8" fill="#ea580c" opacity={0.7}>齐涨</text>
+        <text x={W - padR + 2} y={toY(SVD_LOW) + 3} fontSize="8" fill="#16a34a" opacity={0.7}>个股</text>
+
+        {/* Y-axis ticks */}
+        {allYTicks.map((v) => (
+          <g key={v}>
+            <line x1={padL} y1={toY(v)} x2={padL - 4} y2={toY(v)} stroke="var(--border-subtle)" strokeWidth={0.5} />
+            <text x={padL - 6} y={toY(v) + 3} fontSize="9" fill="var(--text-muted)" textAnchor="end">
+              {(v * 100).toFixed(0)}%
+            </text>
+          </g>
+        ))}
+
+        {/* X-axis labels */}
+        {xLabels.map((xl) => (
+          <text key={xl.idx} x={toX(xl.idx)} y={H - 4} fontSize="9" fill="var(--text-muted)" textAnchor="middle">
+            {xl.label}
+          </text>
+        ))}
+
+        {/* Main line */}
+        <polyline
+          points={points}
+          fill="none"
+          stroke="var(--accent)"
+          strokeWidth={1.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+
+        {/* Mutation dots */}
+        {series.map((p: SvdTrendPoint, i: number) =>
+          p.mutation ? (
+            <circle key={i} cx={toX(i)} cy={toY(p.top1 as number)} r={3} fill="#dc2626" />
+          ) : null
+        )}
+
+        {/* Latest point dot */}
+        <circle
+          cx={toX(series.length - 1)}
+          cy={toY(latest.top1 as number)}
+          r={3}
+          fill={latestColor}
+          stroke="#fff"
+          strokeWidth={1}
+        />
+      </svg>
+
+      {/* Legend */}
+      <div style={{
+        display: 'flex', gap: '16px', marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)',
+      }}>
+        {Object.entries(SVD_STATE_LABELS).map(([key, label]) => (
+          <span key={key} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <span style={{
+              display: 'inline-block', width: '8px', height: '8px', borderRadius: '2px',
+              background: SVD_STATE_COLORS[key], opacity: 0.7,
+            }} />
+            {label}
+          </span>
+        ))}
+        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span style={{
+            display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%',
+            background: '#dc2626',
+          }} />
+          结构突变
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -499,6 +761,9 @@ export default function DashboardView() {
         {renderStockBond(data.stock_bond)}
         {renderMacro(data.macro)}
       </div>
+
+      {/* SVD trend chart */}
+      <SvdTrendChart />
 
       {/* Signal change log */}
       <SignalLog entries={data.signal_log || []} />

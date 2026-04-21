@@ -506,9 +506,25 @@ export interface RiskOverviewData {
   } | null;
 }
 
+export interface SvdTrendPoint {
+  date: string;
+  top1: number | null;
+  top3: number | null;
+  state: string;
+  mutation: boolean;
+}
+
+export interface SvdTrendData {
+  series: SvdTrendPoint[];
+  window_size: number;
+  days: number;
+}
+
 export const riskApi = {
   overview: () => apiClient.get<RiskOverviewData>('/api/risk/overview'),
   scan: () => apiClient.get('/api/risk/scan', { timeout: 90000 }),
+  svdTrend: (params?: { days?: number; window_size?: number }) =>
+    apiClient.get<SvdTrendData>('/api/risk/svd-trend', { params }),
 };
 
 // ============================================================
