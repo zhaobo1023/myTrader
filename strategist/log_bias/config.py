@@ -5,6 +5,47 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import Dict
 
+# -- CSI thematic indices (中证行业主题指数) --
+# Data source: ak.stock_zh_index_hist_csindex (中证指数官网)
+# Fallback:    ak.stock_zh_index_daily_em     (东财 app 接口, 399xxx only)
+DEFAULT_CSI_INDICES: Dict[str, str] = {
+    # tech / growth
+    '931840': '卫星产业',
+    '930713': '人工智能',
+    '931719': 'CS电池',
+    '930997': 'CS新能源车',
+    '931865': '半导体',
+    '930851': '云计算',
+    '930843': '机器人产业',
+    '931160': '电网设备主题',
+    '931862': '中证半导',
+    '930782': '半导体材料设备',
+    '931151': '光伏产业',
+    '930766': '软件指数',
+    '931587': '金融科技',
+    '930899': '动漫游戏',
+    # consumer / pharma
+    '399997': '中证白酒',
+    '930697': '家用电器',
+    '930901': '中证影视',
+    '931508': '科创新药',
+    '930633': '中证旅游',
+    # cyclical / resources
+    '399967': '中证军工',
+    '930598': '稀土产业',
+    '930708': '有色金属',
+    '399998': '中证煤炭',
+    '000813': '细分化工',
+    '399440': '中证钢铁',
+    '930707': '中证畜牧',
+    '930706': '建筑材料',
+    # finance / real estate
+    '399986': '中证银行',
+    '399975': '证券公司',
+    '931775': '房地产',
+}
+
+
 DEFAULT_ETFS: Dict[str, str] = {
     # tech growth
     '159995.SZ': '芯片ETF',
@@ -35,12 +76,14 @@ EMA_WINDOW = 20
 class LogBiasConfig:
     """config for log bias module"""
     etfs: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_ETFS))
+    csi_indices: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CSI_INDICES))
     ema_window: int = EMA_WINDOW
     overheat_threshold: float = OVERHEAT_THRESHOLD
     breakout_threshold: float = BREAKOUT_THRESHOLD
     stall_threshold: float = STALL_THRESHOLD
     cooldown_days: int = COOLDOWN_DAYS
     lookback_days: int = 400
+    multi_day_window: int = 10
     output_dir: str = '/Users/zhaobo/Documents/notes/Finance/Output'
     log_dir: str = 'output/log_bias'
     db_env: str = 'online'

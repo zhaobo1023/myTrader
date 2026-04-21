@@ -99,3 +99,25 @@ async def get_log_bias_history(ts_code: str, days: int = 120):
     except Exception as e:
         logger.error('[LOG_BIAS] get_history failed: %s', e)
         raise HTTPException(status_code=500, detail='Internal server error')
+
+
+@router.get('/log-bias/table')
+async def get_log_bias_table(days: int = Query(default=10, ge=1, le=30)):
+    """Return multi-day log_bias matrix for CSI thematic indices."""
+    try:
+        return log_bias_service.get_multi_day_table(days)
+    except Exception as e:
+        logger.error('[LOG_BIAS] get_multi_day_table failed: %s', e)
+        raise HTTPException(status_code=500, detail='Internal server error')
+
+
+@router.post('/log-bias/trigger-indices')
+async def trigger_log_bias_indices():
+    """Trigger CSI index log bias daily calculation."""
+    return log_bias_service.trigger_index_run(force=False)
+
+
+@router.post('/log-bias/force-trigger-indices')
+async def force_trigger_log_bias_indices():
+    """Force re-run CSI index calculation."""
+    return log_bias_service.trigger_index_run(force=True)

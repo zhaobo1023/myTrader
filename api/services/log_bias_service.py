@@ -86,6 +86,106 @@ def get_latest() -> list[dict]:
     return result
 
 
+def get_multi_day_table(days: int = 10) -> dict:
+    """
+    Return a multi-day log_bias matrix for all CSI thematic indices.
+
+    Returns:
+        {
+          "dates": ["04-08", "04-09", ...],
+          "rows": [
+            {"code": "930713", "name": "人工智能", "values": [3.21, 2.85, ...], "signal_state": "normal"},
+            ...
+          ]
+        }
+    Rows sorted by latest day's log_bias descending.
+    """
+    from strategist.log_bias.config import DEFAULT_CSI_INDICES, DEFAULT_ETFS
+
+    # Merge both name dicts for lookup
+    all_names = {}
+    all_names.update(DEFAULT_ETFS)
+    all_names.update(DEFAULT_CSI_INDICES)
+
+    # Get all CSI index codes
+    csi_codes = list(DEFAULT_CSI_INDICES.keys())
+    if not csi_codes:
+        return {'dates': [], 'rows': []}
+
+    placeholders = ','.join(['%s'] * len(csi_codes))
+
+    # Step 1: find the last N distinct trade dates for these codes
+    date_rows = execute_query(
+        f"""
+        SELECT DISTINCT trade_date
+        FROM trade_log_bias_daily
+        WHERE ts_code IN ({placeholders})
+        ORDER BY trade_date DESC
+        LIMIT %s
+        """,
+        (*csi_codes, days),
+        env='online',
+    )
+    if not date_rows:
+        return {'dates': [], 'rows': []}
+
+    trade_dates = sorted([r['trade_date'] for r in date_rows])
+    date_strs = [str(d) for d in trade_dates]
+    date_labels = [str(d)[5:].replace('-', '/') for d in trade_dates]  # "04/08"
+
+    # Step 2: fetch all log_bias values for these codes and dates
+    date_placeholders = ','.join(['%s'] * len(date_strs))
+    data_rows = execute_query(
+        f"""
+        SELECT ts_code, trade_date, log_bias, signal_state
+        FROM trade_log_bias_daily
+        WHERE ts_code IN ({placeholders})
+          AND trade_date IN ({date_placeholders})
+        ORDER BY ts_code, trade_date
+        """,
+        (*csi_codes, *date_strs),
+        env='online',
+    )
+    if not data_rows:
+        return {'dates': date_labels, 'rows': []}
+
+    # Step 3: pivot into matrix
+    # {ts_code: {date_str: {log_bias, signal_state}}}
+    pivot = {}
+    for r in data_rows:
+        code = r['ts_code']
+        d = str(r['trade_date'])
+        if code not in pivot:
+            pivot[code] = {}
+        pivot[code][d] = {
+            'log_bias': float(r['log_bias']) if r['log_bias'] is not None else None,
+            'signal_state': r['signal_state'] or 'normal',
+        }
+
+    # Step 4: build rows, sorted by latest day's log_bias desc
+    latest_date = date_strs[-1]
+    rows = []
+    for code in csi_codes:
+        if code not in pivot:
+            continue
+        values = []
+        for d in date_strs:
+            cell = pivot[code].get(d)
+            values.append(cell['log_bias'] if cell else None)
+        latest_cell = pivot[code].get(latest_date, {})
+        rows.append({
+            'code': code,
+            'name': all_names.get(code, code),
+            'values': values,
+            'signal_state': latest_cell.get('signal_state', 'normal'),
+        })
+
+    # Sort by latest value descending (None at bottom)
+    rows.sort(key=lambda r: r['values'][-1] if r['values'][-1] is not None else -9999, reverse=True)
+
+    return {'dates': date_labels, 'rows': rows}
+
+
 def get_history(ts_code: str, days: int = 120) -> list[dict]:
     """Return last `days` rows of log_bias data for a single ETF."""
     rows = execute_query(
@@ -186,6 +286,62 @@ def trigger_run(force: bool = False) -> dict:
     return {'run_id': run_id, 'status': 'pending', 'run_date': trade_date}
 
 
+def trigger_index_run(force: bool = False) -> dict:
+    """Trigger CSI index log bias calculation in a background thread."""
+    _ensure_run_table()
+
+    run_date = date.today().isoformat()
+
+    # Check for existing index run (use run_date with a suffix marker)
+    run_key = f'{run_date}_index'
+    rows = execute_query(
+        "SELECT id, status, triggered_at FROM trade_log_bias_run WHERE run_date = %s ORDER BY id DESC LIMIT 1",
+        (run_key,),
+        env='online',
+    )
+    if rows and not force:
+        row = rows[0]
+        status = row['status']
+        if status == 'done':
+            from fastapi import HTTPException
+            raise HTTPException(status_code=409, detail=f'CSI 指数计算已完成，不可重复触发')
+        if status in ('pending', 'running'):
+            triggered_at = row['triggered_at']
+            if isinstance(triggered_at, str):
+                triggered_at = datetime.fromisoformat(triggered_at)
+            elapsed = (datetime.now() - triggered_at.replace(tzinfo=None)).total_seconds() / 3600
+            if elapsed < LOG_BIAS_TIMEOUT_HOURS:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=409, detail='CSI 指数计算正在执行中')
+            execute_update(
+                "UPDATE trade_log_bias_run SET status='failed', error_msg='execution timeout' WHERE id = %s",
+                (row['id'],),
+                env='online',
+            )
+
+    if rows:
+        execute_update(
+            "DELETE FROM trade_log_bias_run WHERE run_date = %s",
+            (run_key,),
+            env='online',
+        )
+
+    execute_update(
+        "INSERT INTO trade_log_bias_run (run_date, status, triggered_at) VALUES (%s, 'pending', NOW())",
+        (run_key,),
+        env='online',
+    )
+    id_rows = execute_query(
+        "SELECT id FROM trade_log_bias_run WHERE run_date = %s ORDER BY id DESC LIMIT 1",
+        (run_key,),
+        env='online',
+    )
+    run_id = id_rows[0]['id']
+
+    threading.Thread(target=_run_indices_in_background, args=(run_id,), daemon=True).start()
+    return {'run_id': run_id, 'status': 'pending', 'run_date': run_date, 'type': 'index'}
+
+
 # ---------------------------------------------------------------------------
 # Background execution
 # ---------------------------------------------------------------------------
@@ -227,6 +383,37 @@ def _run_in_background(run_id: int, run_date: str) -> None:
     except Exception as exc:
         err = str(exc)[:500]
         logger.exception('[LOG_BIAS] run %d failed: %s', run_id, err)
+        execute_update(
+            "UPDATE trade_log_bias_run SET status='failed', error_msg=%s, finished_at=NOW() WHERE id = %s",
+            (err, run_id),
+            env='online',
+        )
+
+
+def _run_indices_in_background(run_id: int) -> None:
+    try:
+        execute_update(
+            "UPDATE trade_log_bias_run SET status='running' WHERE id = %s",
+            (run_id,),
+            env='online',
+        )
+        logger.info('[LOG_BIAS] index run %d starting', run_id)
+
+        from strategist.log_bias.config import LogBiasConfig
+        from strategist.log_bias.run_daily import run_daily_indices
+        config = LogBiasConfig()
+        config.db_env = 'online'
+        ok_count = run_daily_indices(config)
+
+        execute_update(
+            "UPDATE trade_log_bias_run SET status='done', finished_at=NOW(), etf_count=%s WHERE id = %s",
+            (ok_count, run_id),
+            env='online',
+        )
+        logger.info('[LOG_BIAS] index run %d done, %d indices', run_id, ok_count)
+    except Exception as exc:
+        err = str(exc)[:500]
+        logger.exception('[LOG_BIAS] index run %d failed: %s', run_id, err)
         execute_update(
             "UPDATE trade_log_bias_run SET status='failed', error_msg=%s, finished_at=NOW() WHERE id = %s",
             (err, run_id),

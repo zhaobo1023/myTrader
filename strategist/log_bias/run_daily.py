@@ -19,6 +19,7 @@ from strategist.log_bias.config import DEFAULT_ETFS
 from strategist.log_bias.calculator import calculate_log_bias
 from strategist.log_bias.signal_detector import SignalDetector
 from strategist.log_bias.data_loader import DataLoader
+from strategist.log_bias.data_loader import IndexDataLoader
 from strategist.log_bias.storage import LogBiasStorage
 from strategist.log_bias.report_generator import ReportGenerator
 
@@ -116,11 +117,64 @@ def run_daily(config: LogBiasConfig, target_date: str = None):
     logger.info("=" * 60)
 
 
+def run_daily_indices(config: LogBiasConfig):
+    """
+    Run daily log bias calculation for all tracked CSI thematic indices.
+    Uses AKShare to fetch data (no DB dependency for price data).
+    """
+    logger.info("=" * 60)
+    logger.info("Start CSI index log bias calculation")
+    logger.info(f"Tracking {len(config.csi_indices)} CSI indices")
+    logger.info("=" * 60)
+
+    loader = IndexDataLoader(delay=0.3)
+    storage = LogBiasStorage(env=config.db_env)
+    detector = SignalDetector(
+        cooldown_days=config.cooldown_days,
+        breakout_threshold=config.breakout_threshold,
+        overheat_threshold=config.overheat_threshold,
+        stall_threshold=config.stall_threshold,
+    )
+    storage.init_table()
+
+    ok_count = 0
+    fail_count = 0
+    for code, name in config.csi_indices.items():
+        try:
+            df = loader.load(code, lookback_days=config.lookback_days)
+            if df.empty:
+                logger.warning(f"No data for {code} ({name})")
+                fail_count += 1
+                continue
+
+            result = calculate_log_bias(df, window=config.ema_window)
+            signals = detector.detect_all(result)
+            storage.save(code, signals)
+
+            latest = signals.iloc[-1]
+            logger.info(
+                f"  {name} ({code}): log_bias={latest['log_bias']:.2f}, "
+                f"state={latest['signal_state']}"
+            )
+            ok_count += 1
+        except Exception as e:
+            logger.error(f"Error processing {code} ({name}): {e}")
+            fail_count += 1
+
+    logger.info("=" * 60)
+    logger.info(f"Done: {ok_count} OK, {fail_count} failed")
+    logger.info("=" * 60)
+    return ok_count
+
+
 def main():
     parser = argparse.ArgumentParser(description='Log Bias Daily Monitor')
     parser.add_argument('--date', type=str, help='Target date (YYYY-MM-DD)')
     parser.add_argument('--env', type=str, default='online', choices=['local', 'online'])
     parser.add_argument('--output', type=str, help='Output directory for report')
+    parser.add_argument('--mode', type=str, default='etf',
+                        choices=['etf', 'index', 'all'],
+                        help='etf=ETFs only, index=CSI indices only, all=both')
 
     args = parser.parse_args()
 
@@ -131,7 +185,10 @@ def main():
         config.output_dir = args.output
 
     try:
-        run_daily(config, target_date=args.date)
+        if args.mode in ('etf', 'all'):
+            run_daily(config, target_date=args.date)
+        if args.mode in ('index', 'all'):
+            run_daily_indices(config)
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         sys.exit(1)

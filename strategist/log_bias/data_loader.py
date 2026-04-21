@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""load ETF daily close prices from trade_etf_daily"""
+"""load ETF / CSI index daily close prices"""
 
 import logging
 import sys
 import os
+import time
 
 import pandas as pd
 
@@ -14,6 +15,9 @@ if _PROJECT_ROOT not in sys.path:
 from config.db import execute_query
 
 logger = logging.getLogger(__name__)
+
+# Ensure proxy bypass for AKShare calls
+_AKSHARE_NO_PROXY = 'push2.eastmoney.com,www.csindex.com.cn'
 
 
 class DataLoader:
@@ -77,3 +81,95 @@ class DataLoader:
         if rows and rows[0]['latest']:
             return str(rows[0]['latest'])
         return ''
+
+
+def _ensure_no_proxy():
+    """Ensure NO_PROXY includes AKShare domains so proxy doesn't block requests."""
+    _env = os.environ
+    current = _env.get('NO_PROXY') or _env.get('no_proxy') or ''
+    for domain in _AKSHARE_NO_PROXY.split(','):
+        if domain not in current:
+            sep = ',' if current else ''
+            current = current + sep + domain
+    _env['NO_PROXY'] = current
+    _env['no_proxy'] = current
+
+
+class IndexDataLoader:
+    """Load close prices for CSI thematic indices via AKShare.
+
+    Primary:  ak.stock_zh_index_hist_csindex  (CSI official website)
+    Fallback: ak.stock_zh_index_daily_em      (eastmoney app, 399xxx only)
+    """
+
+    def __init__(self, delay: float = 0.3):
+        self.delay = delay
+
+    def load(self, code: str, lookback_days: int = 400) -> pd.DataFrame:
+        """
+        Load close prices for a single CSI index.
+
+        Args:
+            code: CSI index code, e.g. '930713'
+            lookback_days: calendar days to look back
+
+        Returns:
+            DataFrame[trade_date, close] sorted ASC, or empty DataFrame
+        """
+        _ensure_no_proxy()
+        import akshare as ak
+        from datetime import timedelta
+
+        end_str = pd.Timestamp.now().strftime('%Y%m%d')
+        start_dt = pd.Timestamp.now() - timedelta(days=lookback_days)
+        start_str = start_dt.strftime('%Y%m%d')
+
+        # Method 1: CSI official website
+        try:
+            df = ak.stock_zh_index_hist_csindex(
+                symbol=code, start_date=start_str, end_date=end_str,
+            )
+            if df is not None and not df.empty:
+                out = pd.DataFrame({
+                    'trade_date': pd.to_datetime(df['日期']),
+                    'close': pd.to_numeric(df['收盘'], errors='coerce'),
+                })
+                out = out.dropna(subset=['close']).sort_values('trade_date').reset_index(drop=True)
+                logger.info(f"[csindex] Loaded {len(out)} rows for {code}")
+                return out
+        except Exception as e:
+            logger.debug(f"[csindex] {code} failed: {e}")
+
+        # Method 2: eastmoney app (works for 399xxx codes)
+        for prefix in ['sz', 'sh']:
+            try:
+                sym = f'{prefix}{code}'
+                df = ak.stock_zh_index_daily_em(symbol=sym)
+                if df is not None and not df.empty:
+                    df['date'] = pd.to_datetime(df['date'])
+                    out = df[df['date'] >= start_dt][['date', 'close']].copy()
+                    out = out.rename(columns={'date': 'trade_date'})
+                    out['close'] = pd.to_numeric(out['close'], errors='coerce')
+                    out = out.dropna(subset=['close']).sort_values('trade_date').reset_index(drop=True)
+                    if not out.empty:
+                        logger.info(f"[em] Loaded {len(out)} rows for {sym}")
+                        return out
+            except Exception:
+                continue
+
+        logger.warning(f"No data for index {code} from any source")
+        return pd.DataFrame()
+
+    def load_multi(self, codes: list, lookback_days: int = 400) -> dict:
+        """Load close prices for multiple CSI indices.
+
+        Returns:
+            dict: {code: DataFrame}
+        """
+        result = {}
+        for code in codes:
+            df = self.load(code, lookback_days)
+            if not df.empty:
+                result[code] = df
+            time.sleep(self.delay)
+        return result
