@@ -58,3 +58,78 @@ DB_ENV=online python -m data_analyst.sentiment.run_monitor --task fear-index
 | Margin 数据滞后 (4/10) | 交易所两融数据报送延迟,非代码问题 |
 | 成长/价值轮动显示"数据不足" | 依赖因子数据未计算,需先完成因子任务 |
 | 5 年锚偏离 current=19.2 | 正确值 (idx_all_a 中证全指点位,非 PE) |
+
+---
+
+## V2 晨报（盘前早咖）上线测试
+
+> 日期: 2026-04-21 | 状态: 代码已合并，服务器测试未完成
+
+### 背景
+
+基于"盘前早咖"公众号内容，新增 V2 晨报流水线：
+- 文章来源：wechat2rss 抓取 → export JSON → Stage A LLM 逐条拆解 → Stage B 价值评分 + 生成晨报
+- 结果存 `trade_briefing` 表 `session='morning_v2'`
+- Celery Beat 08:35 自动触发（V1 08:30，V2 08:35），各自推一份飞书文档 + Bot 卡片
+
+### 涉及文件
+
+| 文件 | 说明 |
+|------|------|
+| `api/services/panqian_briefing_v2.py` | 新增，V2 核心服务 |
+| `api/services/feishu_doc_publisher.py` | 新增 `publish_briefing_and_notify` 公共函数 |
+| `api/tasks/briefing_tasks.py` | 新增 `publish_morning_briefing_v2` Celery 任务 |
+| `api/tasks/celery_app.py` | 08:35 加入 V2 调度 |
+| `api/services/article_digest_service.py` | 盘前早咖加入 `FEED_CATEGORY_MAP` |
+| `scripts/export_wechat_articles.py` | 新增 `PANQIAN_FEEDS`，字数门槛 100 字，每天取 1 篇 |
+
+### 待完成
+
+- [ ] 确认 celery-worker / celery-beat 已用新代码重启
+- [ ] 手动触发 V2，确认文章能拿到（`article_source` 应为 `export_json`）
+- [ ] 确认飞书 Bot 卡片正常推送，对比 V1 / V2 效果
+
+### 测试命令（服务器上按顺序执行）
+
+```bash
+# 1. 确认容器状态
+docker ps --format "{{.Names}}\t{{.Status}}"
+
+# 2. 重启 worker + beat（后台，不要等）
+cd /root/app && docker compose restart celery-worker celery-beat &
+
+# 3. 确认盘前早咖 feed_name 完全匹配
+sqlite3 /root/wechat2rss/data/res.db "SELECT feed_id, name FROM rsses WHERE name LIKE '%早咖%';"
+
+# 4. 手动触发 V2 生成（用 run 独立容器，避免 exec 阻塞）
+cd /root/app && docker compose run --rm celery-worker python3 -c "
+import asyncio
+from api.services.panqian_briefing_v2 import generate_v2_briefing
+r = asyncio.run(generate_v2_briefing(force=True))
+print('source:', r['article_source'])
+print('items:', r['items_count'])
+print(r['content'][:500])
+"
+
+# 5. 完整推送（含飞书文档 + Bot 卡片）
+cd /root/app && docker compose run --rm celery-worker python3 -c "
+import asyncio
+from api.services.panqian_briefing_v2 import generate_v2_briefing
+from api.services.feishu_doc_publisher import publish_briefing_and_notify
+r = asyncio.run(generate_v2_briefing(force=True))
+if r['content'].startswith('[V2速递中止]'):
+    print('ABORTED:', r['content'])
+else:
+    doc = publish_briefing_and_notify('V2晨报(盘前早咖) ' + r['date'], r['content'])
+    print('Published:', doc['url'])
+"
+```
+
+### 常见问题排查
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| `article_source: none` | 盘前早咖未订阅或 feed_name 不匹配 | 用步骤 3 确认 name，按实际名称修改 `PANQIAN_FEED_NAME` |
+| `items: 0` | Stage A LLM 返回空数组 | 检查文章内容是否被截断或为广告页 |
+| 飞书未收到卡片 | `FEISHU_OWNER_OPEN_ID` 或 token 问题 | 看 worker 日志 `grep panqian` |
+| SSH 超时 / exec 卡住 | docker compose exec 在 restart 期间阻塞 | 改用 `docker compose run --rm` |
