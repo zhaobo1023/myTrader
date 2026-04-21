@@ -156,11 +156,12 @@ class SVDMonitor:
 
         for window_size, step in self.config.windows.items():
             window_records = []
-            # Collect start indices: regular rolling + anchor to latest
-            starts = list(range(0, T - window_size + 1, step))
+            # Reverse rolling: start from the latest day and step backwards
+            # so the most recent trading day is always covered
             latest_start = T - window_size
-            if latest_start > 0 and (not starts or starts[-1] != latest_start):
-                starts.append(latest_start)
+            starts = sorted(set(
+                max(s, 0) for s in range(latest_start, -1, -step)
+            ))
 
             for start_idx in starts:
                 end_idx = start_idx + window_size - 1
@@ -327,10 +328,10 @@ class SVDMonitor:
 
             industry_records = []
             for window_size, step in self.config.windows.items():
-                starts = list(range(0, T - window_size + 1, step))
                 latest_start = T - window_size
-                if latest_start > 0 and (not starts or starts[-1] != latest_start):
-                    starts.append(latest_start)
+                starts = sorted(set(
+                    max(s, 0) for s in range(latest_start, -1, -step)
+                ))
 
                 for start_idx in starts:
                     end_idx = start_idx + window_size - 1
