@@ -173,9 +173,10 @@ function AIBriefingCard() {
   }, [session, stopPolling, refetch, queryClient]);
 
   const isAborted = briefing?.content?.startsWith('[速递中止]') || briefing?.content?.startsWith('[briefing aborted]');
-  const hasContent = briefing?.content && !isLoading && !isAborted;
   const sessionLabel = session === 'morning' ? '盘前速递' : '收盘复盘';
   const isHistorical = briefing?.cached && briefing?.date !== new Date().toISOString().slice(0, 10);
+  // Do not display historical briefing content — only show today's
+  const hasContent = briefing?.content && !isLoading && !isAborted && !isHistorical;
   const showLoading = isLoading || generating;
 
   return (
@@ -232,16 +233,23 @@ function AIBriefingCard() {
             </div>
           )}
           {cardOpen && briefing?.date && !isLoading && (
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{briefing.date}</span>
+            <span style={{
+              fontSize: '11px', fontWeight: 600, padding: '2px 8px',
+              borderRadius: '6px',
+              background: isHistorical ? 'rgba(198,144,38,0.12)' : 'rgba(34,197,94,0.08)',
+              color: isHistorical ? '#c69026' : 'var(--text-muted)',
+            }}>
+              {isHistorical ? `[历史] ${briefing.date}` : `数据日期: ${briefing.date}`}
+            </span>
           )}
           {cardOpen && briefing?.cached && hasContent && (
             <span style={{
               fontSize: '9px', fontWeight: 500, padding: '1px 6px',
               borderRadius: '8px',
-              background: isHistorical ? 'rgba(198,144,38,0.1)' : 'rgba(34,197,94,0.1)',
-              color: isHistorical ? '#c69026' : '#22c55e',
+              background: 'rgba(34,197,94,0.1)',
+              color: '#22c55e',
             }}>
-              {isHistorical ? `${briefing.date}` : 'cached'}
+              cached
             </span>
           )}
           {cardOpen && briefing?.data_quality && !isLoading && (
@@ -299,7 +307,16 @@ function AIBriefingCard() {
           {genError}
         </div>
       )}
-      {error && !showLoading && !hasContent && !isAborted && (
+      {isHistorical && !isLoading && !generating && (
+        <div style={{
+          marginTop: '10px', padding: '10px 14px',
+          background: 'rgba(198,144,38,0.06)', border: '1px solid rgba(198,144,38,0.2)',
+          borderRadius: '8px', fontSize: '12px', color: '#c69026',
+        }}>
+          今日{sessionLabel}尚未生成，点击「生成解读」获取最新分析
+        </div>
+      )}
+      {error && !showLoading && !hasContent && !isAborted && !isHistorical && (
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0 0' }}>
           点击「生成解读」获取 AI 分析
         </div>
