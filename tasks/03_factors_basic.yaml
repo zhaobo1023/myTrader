@@ -8,8 +8,7 @@ tasks:
     func: wait_for_daily_data
     tags: [gate, daily]
     schedule: "17:45"
-    depends_on:
-      - fetch_stock_daily
+    depends_on: []
     params:
       timeout_min: 60
     retry:
