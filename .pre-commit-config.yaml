@@ -25,3 +25,11 @@ repos:
         pass_filenames: false
         types_or: [python, markdown, csv]
         always_run: false
+
+      - id: mytrader-code-rules
+        name: myTrader code rules (MT001/MT002/MT003)
+        language: python
+        entry: python scripts/check_code_rules.py
+        pass_filenames: false
+        types: [python]
+        always_run: false
