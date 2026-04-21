@@ -2,12 +2,15 @@
 """
 Trade operation log router - 调仓操作日志
 """
-import json
+import csv
+import io
 import logging
-from typing import Optional
+import re
 from collections import Counter
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 
@@ -96,6 +99,66 @@ async def create_trade_log(
     await db.flush()
     await db.refresh(log)
     return _to_response(log)
+
+
+@router.get('/export')
+async def export_trade_logs(
+    operation_type: Optional[str] = Query(default=None, max_length=20),
+    from_date: Optional[str] = Query(default=None, description='YYYY-MM-DD'),
+    to_date: Optional[str] = Query(default=None, description='YYYY-MM-DD'),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """导出调仓日志为 CSV 文件。"""
+    _date_re = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+    if from_date and not _date_re.match(from_date):
+        raise HTTPException(status_code=400, detail='from_date 格式应为 YYYY-MM-DD')
+    if to_date and not _date_re.match(to_date):
+        raise HTTPException(status_code=400, detail='to_date 格式应为 YYYY-MM-DD')
+
+    query = select(TradeOperationLog).where(
+        TradeOperationLog.user_id == current_user.id
+    )
+    if operation_type:
+        query = query.where(TradeOperationLog.operation_type == operation_type)
+    if from_date:
+        query = query.where(TradeOperationLog.created_at >= f'{from_date} 00:00:00')
+    if to_date:
+        query = query.where(TradeOperationLog.created_at <= f'{to_date} 23:59:59')
+    query = query.order_by(desc(TradeOperationLog.created_at))
+
+    result = await db.execute(query)
+    items = result.scalars().all()
+
+    op_labels = {
+        'open_position': '建仓',
+        'add_reduce': '加减仓',
+        'close_position': '清仓',
+        'move_to_candidate': '移入候选池',
+        'manual_note': '手动备注',
+        'modify_info': '信息修改',
+    }
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(['时间', '操作类型', '股票代码', '股票名称', '操作详情', '来源'])
+    for log in items:
+        writer.writerow([
+            log.created_at.strftime('%Y-%m-%d %H:%M:%S') if log.created_at else '',
+            op_labels.get(log.operation_type, log.operation_type),
+            log.stock_code or '',
+            log.stock_name or '',
+            log.detail or '',
+            '自动' if log.source == 'auto' else '手动',
+        ])
+
+    buf.seek(0)
+    filename = 'trade_logs.csv'
+    return StreamingResponse(
+        iter(['\ufeff' + buf.getvalue()]),
+        media_type='text/csv; charset=utf-8',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get('/stats')

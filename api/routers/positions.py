@@ -2,11 +2,14 @@
 """
 Positions router - user portfolio positions CRUD
 """
+import csv
+import io
 import json
 import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -72,6 +75,49 @@ async def list_positions(
     return PositionListResponse(
         items=[_to_response(p) for p in items],
         total=len(items),
+    )
+
+
+@router.get('/export')
+async def export_positions(
+    level: Optional[str] = Query(default=None),
+    active_only: bool = Query(default=True),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """导出持仓为 CSV 文件。"""
+    query = select(UserPosition).where(UserPosition.user_id == current_user.id)
+    if active_only:
+        query = query.where(UserPosition.is_active == True)
+    if level:
+        query = query.where(UserPosition.level == level)
+    query = query.order_by(UserPosition.level, UserPosition.stock_code)
+
+    result = await db.execute(query)
+    items = result.scalars().all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(['股票代码', '股票名称', '仓位级别', '持股数量', '成本价', '账户', '备注', '状态', '创建时间'])
+    for p in items:
+        writer.writerow([
+            p.stock_code,
+            p.stock_name or '',
+            p.level or '',
+            p.shares if p.shares is not None else '',
+            p.cost_price if p.cost_price is not None else '',
+            p.account or '',
+            p.note or '',
+            '持仓中' if p.is_active else '已清仓',
+            p.created_at.strftime('%Y-%m-%d %H:%M:%S') if p.created_at else '',
+        ])
+
+    buf.seek(0)
+    filename = 'positions.csv'
+    return StreamingResponse(
+        iter(['\ufeff' + buf.getvalue()]),
+        media_type='text/csv; charset=utf-8',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
     )
 
 

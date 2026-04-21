@@ -595,6 +595,7 @@ export default function PositionsContent() {
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<LayeredRiskResult | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   const { data: overviewData, isLoading: overviewLoading, isError: overviewError } = useQuery({
     queryKey: ['risk-overview'],
@@ -771,6 +772,18 @@ export default function PositionsContent() {
             style={{ padding: '6px 16px', fontSize: '13px', background: 'transparent', color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: '6px', cursor: scanning ? 'wait' : 'pointer', opacity: scanning ? 0.6 : 1 }}
           >
             {scanning ? '扫描中...' : '风控扫描'}
+          </button>
+          <button
+            disabled={exporting}
+            onClick={async () => {
+              setExporting(true);
+              try { await positionsApi.export(); }
+              catch { setActionMsg('导出失败'); }
+              finally { setExporting(false); }
+            }}
+            style={{ padding: '6px 16px', fontSize: '13px', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-std)', borderRadius: '6px', cursor: exporting ? 'wait' : 'pointer', opacity: exporting ? 0.6 : 1 }}
+          >
+            {exporting ? '导出中...' : '导出 CSV'}
           </button>
           <button
             onClick={() => { resetForm(); setShowAdd(true); }}

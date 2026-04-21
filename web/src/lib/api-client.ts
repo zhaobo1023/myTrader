@@ -434,6 +434,29 @@ export interface PositionMarketData {
   cost_pct?: number;
 }
 
+// 通用 CSV 下载工具：从后端拿 blob 并触发浏览器下载
+export async function downloadCsv(path: string, params: Record<string, unknown>, filename: string) {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+  const query = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') query.set(k, String(v));
+  }
+  const url = `${BASE_URL}${path}${query.toString() ? '?' + query.toString() : ''}`;
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`导出失败: ${res.status}`);
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 100);
+}
+
 export const positionsApi = {
   list: (params?: { level?: string; active_only?: boolean }) =>
     apiClient.get<{ items: PositionItem[]; total: number }>('/api/positions', { params }),
@@ -447,6 +470,8 @@ export const positionsApi = {
     apiClient.post<{ created: number; skipped: number }>('/api/positions/import', { items }),
   marketData: () =>
     apiClient.get<Record<string, PositionMarketData>>('/api/positions/market-data'),
+  export: (params?: { level?: string; active_only?: boolean }) =>
+    downloadCsv('/api/positions/export', params || {}, 'positions.csv'),
 };
 
 // ============================================================
@@ -509,6 +534,8 @@ export const tradeLogApi = {
     apiClient.post<TradeLogItem>('/api/trade-logs', data),
   stats: (days?: number) =>
     apiClient.get<{ period_days: number; total: number; by_type: Record<string, number> }>('/api/trade-logs/stats', { params: { days } }),
+  export: (params?: { operation_type?: string; from_date?: string; to_date?: string }) =>
+    downloadCsv('/api/trade-logs/export', params || {}, 'trade_logs.csv'),
 };
 
 // ============================================================

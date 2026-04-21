@@ -263,6 +263,8 @@ export default function TradeLogContent() {
   const [activeType, setActiveType] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [page, setPage] = useState(1);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(false);
   const pageSize = 50;
 
   const { data, isLoading, error } = useQuery({
@@ -320,6 +322,27 @@ export default function TradeLogContent() {
           </button>
         ))}
         <div style={{ flex: 1 }} />
+        <button
+          disabled={exporting}
+          onClick={async () => {
+            setExporting(true);
+            setExportError(false);
+            try { await tradeLogApi.export({ operation_type: activeType || undefined }); }
+            catch { setExportError(true); }
+            finally { setExporting(false); }
+          }}
+          style={{
+            fontSize: '12px', padding: '4px 14px', borderRadius: '4px',
+            background: 'transparent', color: 'var(--text-secondary)',
+            border: '1px solid var(--border-subtle)', cursor: exporting ? 'wait' : 'pointer',
+            opacity: exporting ? 0.6 : 1,
+          }}
+        >
+          {exporting ? '导出中...' : '导出 CSV'}
+        </button>
+        {exportError && (
+          <span style={{ fontSize: '12px', color: '#e5534b', alignSelf: 'center' }}>导出失败</span>
+        )}
         <button
           onClick={() => setShowForm(true)}
           style={{
