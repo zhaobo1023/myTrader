@@ -427,6 +427,18 @@ async def _extract_items(article_content: str) -> list:
 # Stage C: 个股深度分析 + 晨报生成
 # ---------------------------------------------------------------------------
 
+def _summarize_items(items: list) -> str:
+    """压缩 items 为紧凑文本，减少 token 消耗。"""
+    lines = []
+    for item in items:
+        tickers = '/'.join(item.get('tickers', [])[:3]) or '无'
+        direction = item.get('direction', 'neutral')
+        content = item.get('content', '')[:80]
+        lines.append('[{dir}][{tickers}] {content}'.format(
+            dir=direction, tickers=tickers, content=content))
+    return '\n'.join(lines)
+
+
 async def _generate_v2_content(items: list, name_code_map: dict,
                                 tech_data: dict, ann_data: dict,
                                 target_date: date) -> str:
@@ -434,23 +446,23 @@ async def _generate_v2_content(items: list, name_code_map: dict,
     date_str = target_date.strftime('%Y-%m-%d')
     llm = get_llm_client()
 
-    items_json = json.dumps(items, ensure_ascii=False, indent=2)
+    items_text = _summarize_items(items)  # 紧凑格式，节省 token
     tech_text = _format_tech_data(name_code_map, tech_data)
     ann_text = _format_ann_data(name_code_map, ann_data)
     system = _STAGE_C_SYSTEM.format(date=date_str)
 
     prompt = _STAGE_C_USER.format(
         date=date_str,
-        items_json=items_json[:2000],
-        tech_data=tech_text,
-        ann_data=ann_text,
+        items_json=items_text[:1500],
+        tech_data=tech_text[:1500],
+        ann_data=ann_text[:800],
     )
 
     content = await llm.call(
         prompt=prompt,
         system_prompt=system,
         temperature=0.3,
-        max_tokens=2500,
+        max_tokens=2000,
     )
     logger.info('[v2] Stage C generated %d chars', len(content))
     return content
