@@ -1073,12 +1073,12 @@ function LogBiasCardContent() {
             <thead>
               <tr style={{ background: 'var(--bg-panel)' }}>
                 <th style={{
-                  padding: '7px 12px', textAlign: 'left', fontWeight: 510,
+                  padding: '7px 10px', textAlign: 'left', fontWeight: 510,
                   color: 'var(--text-secondary)', borderBottom: '2px solid var(--border-subtle)',
                   position: 'sticky', left: 0, background: 'var(--bg-panel)', zIndex: 1,
-                  minWidth: '80px',
+                  minWidth: '110px',
                 }}>
-                  行业
+                  指数
                 </th>
                 <th style={{
                   padding: '7px 8px', textAlign: 'center', fontWeight: 510,
@@ -1111,12 +1111,15 @@ function LogBiasCardContent() {
                   <React.Fragment key={row.code}>
                     <tr>
                       <td style={{
-                        padding: '6px 12px', fontWeight: 510, color: 'var(--text-primary)',
+                        padding: '6px 10px', fontWeight: 510, color: 'var(--text-primary)',
                         borderBottom: '1px solid var(--border-subtle)',
                         position: 'sticky', left: 0, background: 'var(--bg-card)', zIndex: 1,
                         whiteSpace: 'nowrap',
                       }}>
-                        {row.name}
+                        <div style={{ lineHeight: 1.3 }}>
+                          <span style={{ fontSize: '12px' }}>{row.name}</span>
+                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '4px', fontFamily: 'var(--font-geist-mono)' }}>{row.code}</span>
+                        </div>
                       </td>
                       <td style={{
                         padding: '6px 4px', textAlign: 'center',
