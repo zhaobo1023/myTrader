@@ -74,24 +74,41 @@ Do NOT make any file changes - output analysis only.
     ;;
 
   debug-prod)
-    # Production debug runbook
+    # Production debug runbook - uses parallel sub-agents to investigate simultaneously
     DESC="${2:-unspecified issue}"
-    echo "[ai.sh] Starting production debug runbook for: $DESC"
+    echo "[ai.sh] Starting parallel production debug for: $DESC"
     claude -p "
-Production debug runbook for: $DESC
+Production issue to debug: $DESC
 
-Follow these steps in order:
-1. Check recent git log for changes that could have caused this: git log --oneline -20
-2. Search for related error patterns in the codebase: grep -r 'ERROR\|Exception\|CRITICAL' --include='*.py' -l
-3. Check config files (.env.example) for relevant environment variables
-4. Identify the most likely root cause
-5. Propose a minimal fix (do NOT implement yet - output a plan)
-6. List any environment variables or external services to verify
+Use the Agent tool to launch 3 parallel sub-agents investigating simultaneously:
 
-When writing scripts to run on remote servers, write them as local files first (do NOT use heredocs).
-Output: Root cause hypothesis + fix plan + verification steps
+Agent 1 - Config & Environment:
+  - Read .env.example and identify all relevant env vars for this issue
+  - Check api/config.py and config/settings.py for related config
+  - Look for any recently changed config (git log --oneline -10 -- '*.env*' '*.yaml' '*.yml' 'config/')
+  - Report: list of env vars to verify + any suspicious config changes
+
+Agent 2 - Recent Code Changes:
+  - Run: git log --oneline -20
+  - For each fix/feat commit in the last 5 days, check if it touched relevant code
+  - Run: git diff HEAD~5 -- '*.py' | grep '^[+-]' | grep -v '^---\|^+++' | head -50
+  - Report: most suspicious commits + changed lines most likely related to issue
+
+Agent 3 - Error Patterns in Codebase:
+  - Search for how the failing component handles errors: grep -r 'ERROR\|Exception\|CRITICAL' --include='*.py' -l
+  - Find the main entry point for the failing service and read it
+  - Check if there are any TODO/FIXME comments near relevant code
+  - Report: error handling gaps + code paths most likely to fail
+
+After all 3 agents complete, synthesize their findings:
+1. Most likely root cause (ranked by confidence)
+2. Minimal fix plan (files to change, what to change)
+3. Verification steps before and after fix
+4. If fix requires remote server work: write script to local file first, use scp to transfer (never heredoc over SSH)
+
+Output plan only - do NOT implement.
 " \
-      --allowedTools "Read,Grep,Glob,Bash(git log *),Bash(git diff *),Bash(grep *),Bash(find *)" \
+      --allowedTools "Read,Grep,Glob,Bash(git log *),Bash(git diff *),Bash(git show *),Bash(grep *),Bash(find *)" \
       --permission-mode plan
     ;;
 
