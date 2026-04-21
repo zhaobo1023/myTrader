@@ -19,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.db import execute_query, get_connection, get_dual_connections, dual_executemany, dual_execute
 
 
-from config.settings import settings
 
 
 # ============================================================
@@ -61,7 +60,7 @@ def create_factor_table():
     conn, conn2 = get_dual_connections()
     try:
         cursor = conn.cursor()
-        cursor.execute(CREATE_TABLE_sql)
+        cursor.execute(CREATE_table_sql)
         conn.commit()
         cursor.close()
     finally:
@@ -69,7 +68,7 @@ def create_factor_table():
     if conn2:
         try:
             cursor2 = conn2.cursor()
-            cursor2.execute(CREATE_TABLE_sql)
+            cursor2.execute(CREATE_table_sql)
             conn2.commit()
             cursor2.close()
         except Exception as e:

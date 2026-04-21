@@ -1,0 +1,13 @@
+# 10_risk_scan.yaml - Daily risk scan and report push
+# Runs after market close to scan portfolio and push daily risk report
+
+tasks:
+  - id: risk_scan_report
+    name: "Daily risk scan + report push"
+    module: risk_manager.daily_report
+    func: push_risk_report
+    tags: [risk, daily]
+    schedule: "18:30"
+    params:
+      user_id: 7
+      env: online
