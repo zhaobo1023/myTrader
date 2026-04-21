@@ -18,85 +18,36 @@
    - 删除死 import: `from config.settings import settings`
    - 修复变量名: `CREATE_TABLE_sql` -> 统一小写 (sed 已执行)
 3. `trade_stock_rps` 已回填到 4/20
+4. `data_analyst/fetchers/daily_basic_fetcher.py`:
+   - 修复 `from config.settings import settings` -> `from config.settings import TUSHARE_TOKEN`
+   - 修复两处 `settings.TUSHARE_TOKEN` -> `TUSHARE_TOKEN`
+   - 已提交 git，容器已同步
+5. `data_analyst/market_monitor/visualizer.py`:
+   - matplotlib 模块级 import 加 try/except，无 matplotlib 时优雅降级（跳过可视化）
+   - 已提交 git，容器已同步
 
-## 今晚需要执行的任务
+## 今晚执行计划
 
-### 1. trade_stock_factor 回填 (预计耗时较长)
+脚本已就位（服务器 `/tmp/` 和容器 `/tmp/` 均已同步）：
 
-回填 3/20 ~ 4/20 共 21 个交易日，每日约 5000 只股票的技术因子计算。
+| 文件 | 说明 |
+|------|------|
+| `/tmp/backfill_all.sh` | 主控脚本，串行执行 step1~4 + verify，日志写 `/tmp/backfill_all.log` |
+| `/tmp/backfill_step1.py` (容器内) | trade_stock_factor 回填 3/23~4/20（20 个交易日） |
+| `/tmp/backfill_step2.py` (容器内) | trade_svd_market_state 回填 |
+| `/tmp/backfill_step3.py` (容器内) | daily_basic 补数据 |
+| `/tmp/backfill_step4.py` (容器内) | sw_industry_valuation 回填 |
+| `/tmp/backfill_verify.py` (容器内) | 验证各表最新日期 |
 
-```bash
-# 脚本已写好在容器内 /tmp/backfill2.py
-docker exec -w /app app-celery-worker-1 python3 /tmp/backfill2.py
-```
-
-如果容器已重启（/tmp 丢失），用以下命令重建脚本：
-
-```bash
-docker exec app-celery-worker-1 bash -c 'cat > /tmp/backfill2.py << "PYEOF"
-import sys
-sys.path.insert(0, "/app")
-import os
-os.chdir("/app")
-
-import logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-logger = logging.getLogger()
-
-from datetime import date
-from data_analyst.factors.factor_calculator import calculate_factors_for_date
-
-trading_days = [
-    (2026,3,20),(2026,3,23),(2026,3,24),(2026,3,25),(2026,3,26),(2026,3,27),
-    (2026,3,30),(2026,3,31),(2026,4,1),(2026,4,2),(2026,4,3),
-    (2026,4,7),(2026,4,8),(2026,4,9),(2026,4,10),
-    (2026,4,13),(2026,4,14),(2026,4,15),(2026,4,16),(2026,4,17),(2026,4,20)
-]
-
-for y,m,d in trading_days:
-    dt = date(y,m,d)
-    logger.info(f"=== Processing {dt} ===")
-    try:
-        calculate_factors_for_date(calc_date=dt)
-        logger.info(f"Done: {dt}")
-    except Exception as e:
-        logger.error(f"Failed {dt}: {e}", exc_info=True)
-
-logger.info("=== ALL DONE ===")
-PYEOF'
-```
-
-### 2. SVD Market State 回填
-
-factor 回填完成后执行：
+执行方式（nohup 防断连）：
 
 ```bash
-docker exec app-celery-worker-1 python3 -c "
-import sys; sys.path.insert(0, '/app')
-from data_analyst.market_monitor.run_monitor import run_daily_monitor
-run_daily_monitor()
-"
+ssh aliyun-ecs "nohup /tmp/backfill_all.sh &"
+# 查看进度
+ssh aliyun-ecs "tail -f /tmp/backfill_all.log"
 ```
 
-### 3. SW Industry Valuation (需先补 daily_basic)
-
-上游 `trade_stock_daily_basic` 只到 4/17，需要先补数据：
-
-```bash
-# 先补 daily_basic (PE/PB 等估值数据)
-docker exec app-celery-worker-1 python3 -c "
-import sys; sys.path.insert(0, '/app')
-from data_analyst.fetchers.daily_basic_fetcher import main
-main()
-"
-
-# 再算行业估值温度
-docker exec app-celery-worker-1 python3 -c "
-import sys; sys.path.insert(0, '/app')
-from data_analyst.fetchers.sw_industry_valuation_fetcher import run_daily
-run_daily()
-"
-```
+如果容器重启导致 /tmp 脚本丢失，重新 scp 即可（脚本源文件在本地 /tmp/ 下）。
 
 ## 验证
 
@@ -120,5 +71,4 @@ for tbl, col in [('trade_stock_factor','calc_date'), ('trade_svd_market_state','
 
 ## 后续：防止再次滞后
 
-factor_storage.py 的 bug 修复只在容器内做了 sed，没有提交到 git。
-这个文件属于 myTrader 项目，需要在源码中也修复并重新部署。
+源码 bug 均已修复并同步容器，无需额外操作。下次部署不会回滚。

@@ -8,15 +8,22 @@ import platform
 
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import matplotlib.colors as mcolors
+
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    import matplotlib.colors as mcolors
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
 
 # 中文字体配置 - 自动检测可用字体
 def _find_chinese_font():
     """从系统已安装字体中查找第一个可用的中文字体"""
+    if not HAS_MATPLOTLIB:
+        return None
     available = {f.name for f in matplotlib.font_manager.fontManager.ttflist}
     candidates = [
         # macOS
@@ -35,18 +42,18 @@ def _find_chinese_font():
             return font
     return None
 
-_chinese_font = _find_chinese_font()
-if _chinese_font:
-    matplotlib.rcParams['font.sans-serif'] = [_chinese_font] + matplotlib.rcParams.get('font.sans-serif', [])
-else:
-    # 回退到平台默认列表
-    if platform.system() == "Darwin":
-        matplotlib.rcParams['font.sans-serif'] = ["Heiti TC", "Arial Unicode MS"] + matplotlib.rcParams.get('font.sans-serif', [])
-    elif platform.system() == "Windows":
-        matplotlib.rcParams['font.sans-serif'] = ["SimHei", "Microsoft YaHei"] + matplotlib.rcParams.get('font.sans-serif', [])
+if HAS_MATPLOTLIB:
+    _chinese_font = _find_chinese_font()
+    if _chinese_font:
+        matplotlib.rcParams['font.sans-serif'] = [_chinese_font] + matplotlib.rcParams.get('font.sans-serif', [])
     else:
-        matplotlib.rcParams['font.sans-serif'] = ["Noto Sans CJK SC", "WenQuanYi Zen Hei"] + matplotlib.rcParams.get('font.sans-serif', [])
-matplotlib.rcParams['axes.unicode_minus'] = False
+        if platform.system() == "Darwin":
+            matplotlib.rcParams['font.sans-serif'] = ["Heiti TC", "Arial Unicode MS"] + matplotlib.rcParams.get('font.sans-serif', [])
+        elif platform.system() == "Windows":
+            matplotlib.rcParams['font.sans-serif'] = ["SimHei", "Microsoft YaHei"] + matplotlib.rcParams.get('font.sans-serif', [])
+        else:
+            matplotlib.rcParams['font.sans-serif'] = ["Noto Sans CJK SC", "WenQuanYi Zen Hei"] + matplotlib.rcParams.get('font.sans-serif', [])
+    matplotlib.rcParams['axes.unicode_minus'] = False
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +73,9 @@ def plot_regime_chart(results_df: pd.DataFrame, regimes: list,
     上半区: F1 方差占比 (三窗口 + 综合线 + 阈值线 + 突变标记)
     下半区: Top1/Top3/Top5 累计解释度
     """
+    if not HAS_MATPLOTLIB:
+        logger.warning("matplotlib 未安装，跳过可视化")
+        return None
     if results_df.empty:
         logger.warning("无数据，跳过可视化")
         return None
@@ -163,6 +173,9 @@ def plot_industry_heatmap(industry_results: dict,
     - 哪些行业个股分化 (绿色)
     - 市场压力的传导路径 (红色从哪些行业开始蔓延)
     """
+    if not HAS_MATPLOTLIB:
+        logger.warning("matplotlib 未安装，跳过行业热力图")
+        return None
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, 'svd_industry_heatmap.png')
 

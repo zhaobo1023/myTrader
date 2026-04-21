@@ -27,7 +27,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from config.db import get_connection, execute_query, get_dual_connections, dual_executemany
-from config.settings import settings
+from config.settings import TUSHARE_TOKEN
 
 try:
     import tushare as ts
@@ -48,7 +48,7 @@ def get_pro():
     global _pro
     if _pro is not None:
         return _pro
-    token = settings.TUSHARE_TOKEN
+    token = TUSHARE_TOKEN
     if not token:
         raise RuntimeError("TUSHARE_TOKEN not configured")
     ts.set_token(token)
@@ -297,7 +297,7 @@ def main():
     print("dv_ttm Fetcher (Tushare -> MySQL)")
     print("=" * 60)
 
-    if not HAS_TUSHARE or not settings.TUSHARE_TOKEN:
+    if not HAS_TUSHARE or not TUSHARE_TOKEN:
         print("\nError: Tushare not installed or TUSHARE_TOKEN not configured")
         return
 
