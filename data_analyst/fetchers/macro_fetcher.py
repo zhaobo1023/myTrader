@@ -916,6 +916,8 @@ FETCH_FUNCTIONS = {
 
 # 注册指数日线拉取函数（使用闭包工厂避免循环变量捕获问题）
 for _sym_key, _sym_code in [
+    ('idx_sh', '000001'),
+    ('idx_gem', '399006'),
     ('idx_all_a', '000985'),
     ('idx_csi300', '000300'),
     ('idx_csi500', '000905'),
