@@ -22,13 +22,21 @@ _RUN_DDL = """
 CREATE TABLE IF NOT EXISTS trade_log_bias_run (
     id           BIGINT AUTO_INCREMENT PRIMARY KEY,
     run_date     DATE NOT NULL,
+    run_type     VARCHAR(10) NOT NULL DEFAULT 'etf',
     status       VARCHAR(20) NOT NULL DEFAULT 'pending',
     etf_count    INT NOT NULL DEFAULT 0,
     triggered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     finished_at  DATETIME,
     error_msg    VARCHAR(500),
-    UNIQUE KEY uk_run_date (run_date)
+    UNIQUE KEY uk_run_date_type (run_date, run_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='log bias daily run tracking';
+"""
+
+_ALTER_RUN_TYPE = """
+ALTER TABLE trade_log_bias_run
+    ADD COLUMN run_type VARCHAR(10) NOT NULL DEFAULT 'etf' AFTER run_date,
+    DROP INDEX uk_run_date,
+    ADD UNIQUE KEY uk_run_date_type (run_date, run_type);
 """
 
 
@@ -39,6 +47,17 @@ def _ensure_run_table() -> None:
         cur = conn.cursor()
         cur.execute(_RUN_DDL)
         conn.commit()
+        # Migrate existing table: add run_type column if missing
+        try:
+            cur.execute("SELECT run_type FROM trade_log_bias_run LIMIT 1")
+        except Exception:
+            try:
+                cur.execute(_ALTER_RUN_TYPE)
+                conn.commit()
+                logger.info('[LOG_BIAS] Migrated trade_log_bias_run: added run_type column')
+            except Exception as e:
+                logger.debug('[LOG_BIAS] ALTER skipped (may already be migrated): %s', e)
+                conn.rollback()
         cur.close()
     finally:
         conn.close()
@@ -292,11 +311,9 @@ def trigger_index_run(force: bool = False) -> dict:
 
     run_date = date.today().isoformat()
 
-    # Check for existing index run (use run_date with a suffix marker)
-    run_key = f'{run_date}_index'
     rows = execute_query(
-        "SELECT id, status, triggered_at FROM trade_log_bias_run WHERE run_date = %s ORDER BY id DESC LIMIT 1",
-        (run_key,),
+        "SELECT id, status, triggered_at FROM trade_log_bias_run WHERE run_date = %s AND run_type = 'index' ORDER BY id DESC LIMIT 1",
+        (run_date,),
         env='online',
     )
     if rows and not force:
@@ -304,7 +321,7 @@ def trigger_index_run(force: bool = False) -> dict:
         status = row['status']
         if status == 'done':
             from fastapi import HTTPException
-            raise HTTPException(status_code=409, detail=f'CSI 指数计算已完成，不可重复触发')
+            raise HTTPException(status_code=409, detail='CSI 指数计算已完成，不可重复触发')
         if status in ('pending', 'running'):
             triggered_at = row['triggered_at']
             if isinstance(triggered_at, str):
@@ -321,19 +338,19 @@ def trigger_index_run(force: bool = False) -> dict:
 
     if rows:
         execute_update(
-            "DELETE FROM trade_log_bias_run WHERE run_date = %s",
-            (run_key,),
+            "DELETE FROM trade_log_bias_run WHERE run_date = %s AND run_type = 'index'",
+            (run_date,),
             env='online',
         )
 
     execute_update(
-        "INSERT INTO trade_log_bias_run (run_date, status, triggered_at) VALUES (%s, 'pending', NOW())",
-        (run_key,),
+        "INSERT INTO trade_log_bias_run (run_date, run_type, status, triggered_at) VALUES (%s, 'index', 'pending', NOW())",
+        (run_date,),
         env='online',
     )
     id_rows = execute_query(
-        "SELECT id FROM trade_log_bias_run WHERE run_date = %s ORDER BY id DESC LIMIT 1",
-        (run_key,),
+        "SELECT id FROM trade_log_bias_run WHERE run_date = %s AND run_type = 'index' ORDER BY id DESC LIMIT 1",
+        (run_date,),
         env='online',
     )
     run_id = id_rows[0]['id']

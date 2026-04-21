@@ -470,8 +470,6 @@ function SwRotationCardContent() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [triggering, setTriggering] = useState(false);
-  const [forceTriggering, setForceTriggering] = useState(false);
-  const [showForceConfirm, setShowForceConfirm] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -520,32 +518,6 @@ function SwRotationCardContent() {
       }
     } finally {
       setTriggering(false);
-    }
-  }
-
-  async function handleForceTrigger() {
-    setShowForceConfirm(false);
-    setForceTriggering(true);
-    setErrorMsg(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/industry/sw-rotation/force-trigger`, { method: 'POST' });
-      if (!res.ok) {
-        const j = await res.json();
-        setErrorMsg(j.detail || '强制触发失败');
-      } else {
-        await loadRuns();
-        const poll = setInterval(async () => {
-          const r2 = await fetch(`${API_BASE}/api/industry/sw-rotation/runs?limit=5`);
-          const j2 = await r2.json();
-          const latest = (j2.data || [])[0];
-          setRuns(j2.data || []);
-          if (latest && !['pending', 'running'].includes(latest.status)) {
-            clearInterval(poll);
-          }
-        }, 10000);
-      }
-    } finally {
-      setForceTriggering(false);
     }
   }
 

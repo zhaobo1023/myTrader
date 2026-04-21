@@ -87,12 +87,12 @@ def _ensure_no_proxy():
     """Ensure NO_PROXY includes AKShare domains so proxy doesn't block requests."""
     _env = os.environ
     current = _env.get('NO_PROXY') or _env.get('no_proxy') or ''
+    entries = set(e.strip() for e in current.split(',') if e.strip())
     for domain in _AKSHARE_NO_PROXY.split(','):
-        if domain not in current:
-            sep = ',' if current else ''
-            current = current + sep + domain
-    _env['NO_PROXY'] = current
-    _env['no_proxy'] = current
+        entries.add(domain)
+    result = ','.join(sorted(entries))
+    _env['NO_PROXY'] = result
+    _env['no_proxy'] = result
 
 
 class IndexDataLoader:
