@@ -53,11 +53,18 @@ git diff HEAD~1
 [PASS / PASS with warnings / BLOCK] - 一句话总结
 ```
 
-### 4. 二次 review
+### 4. 多轮 review（同一会话）
 
-如果本次是重新 review（用户已修改过代码），必须：
-1. 重新运行 `git diff main...HEAD` 获取最新 diff
-2. 对比上次 review 结论，明确列出：
-   - 已修复的问题
-   - 仍未修复的问题
-   - 新增的问题
+本技能支持在**同一会话**中多轮审查，无需重新启动：
+
+**触发词**：用户说 "review again" / "再看一次" / "我改好了" 时，进入二次审查模式。
+
+执行步骤（必须严格遵守）：
+1. 重新运行 `git diff main...HEAD` 获取**最新** diff（禁止使用会话中任何缓存结果）
+2. 对比本会话上一轮的 review 结论，明确列出三类变化：
+   - [FIXED] 已修复的问题（逐条列出）
+   - [REMAIN] 仍未修复的问题（逐条列出）
+   - [NEW] 新引入的问题（逐条列出）
+3. 更新结论：[PASS / PASS with warnings / BLOCK]
+
+**目的**：避免跨会话丢失上下文、避免第二次 review 漏检新改动。
