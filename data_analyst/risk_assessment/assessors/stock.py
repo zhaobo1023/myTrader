@@ -6,7 +6,12 @@ from typing import Dict, List, Optional
 
 from data_analyst.risk_assessment.assessors.base import BaseAssessor
 from data_analyst.risk_assessment.schemas import StockRiskResult, score_to_level
-from data_analyst.risk_assessment.config import STOP_LOSS_PCTS
+from data_analyst.risk_assessment.config import (
+    STOP_LOSS_PCTS,
+    ANNOUNCEMENT_LLM_WEIGHT,
+    ANNOUNCEMENT_NEG_WEIGHT,
+    ANNOUNCEMENT_LOOKBACK_DAYS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +64,8 @@ def _valuation_score(pe_ttm: Optional[float]) -> float:
         return 85.0
 
 
-def _news_score(neg_ratio: Optional[float]) -> float:
-    """新闻情绪风险评分 (0-100)。"""
+def _neg_ratio_risk(neg_ratio: Optional[float]) -> float:
+    """传统neg_ratio风险评分 (0-100)。"""
     if neg_ratio is None:
         return 40.0
     if neg_ratio > 0.5:
@@ -71,6 +76,28 @@ def _news_score(neg_ratio: Optional[float]) -> float:
         return 40.0
     else:
         return 20.0
+
+
+def _news_score(neg_ratio: Optional[float], llm_sentiment: Optional[float] = None) -> float:
+    """
+    新闻情绪风险评分 (0-100), 融合 LLM 分析结果。
+
+    llm_sentiment: stock_news_analysis.sentiment_score (0-100, 50=中性, >50偏多, <50偏空)
+    neg_ratio: trade_news_sentiment 中 negative 占比
+    """
+    neg_risk = _neg_ratio_risk(neg_ratio)
+
+    if llm_sentiment is not None:
+        # Clamp to [0, 100] in case LLM output is out of range
+        llm_sentiment = max(0.0, min(100.0, llm_sentiment))
+        # sentiment_score 0-100 (>50 bullish, <50 bearish) -> risk 0-100
+        # sentiment=100 (极度利好) -> risk=0
+        # sentiment=50 (中性) -> risk=50
+        # sentiment=0 (极度利空) -> risk=100
+        llm_risk = round(100.0 - llm_sentiment, 2)
+        return round(llm_risk * ANNOUNCEMENT_LLM_WEIGHT + neg_risk * ANNOUNCEMENT_NEG_WEIGHT, 2)
+
+    return neg_risk
 
 
 def _technical_score(
@@ -314,6 +341,27 @@ class StockFundamentalAssessor(BaseAssessor):
         except Exception as e:
             logger.warning("trade_news_sentiment 批量查询失败: %s", e)
 
+        # --- 批量查询 LLM 公告情感分析（stock_news_analysis，最近N天）---
+        llm_sentiment_map: Dict[str, float] = {}
+        try:
+            lookback_date = (today - timedelta(days=ANNOUNCEMENT_LOOKBACK_DAYS)).strftime('%Y-%m-%d')
+            rows = self._query(
+                """
+                SELECT stock_code, AVG(sentiment_score) AS avg_score
+                FROM stock_news_analysis
+                WHERE stock_code IN ({})
+                  AND analysis_date >= %s
+                  AND sentiment_score IS NOT NULL
+                GROUP BY stock_code
+                """.format(placeholders),
+                tuple(codes) + (lookback_date,),
+            )
+            for r in rows:
+                if r['avg_score'] is not None:
+                    llm_sentiment_map[r['stock_code']] = float(r['avg_score'])
+        except Exception as e:
+            logger.warning("stock_news_analysis 批量查询失败: %s", e)
+
         # --- 批量查询事件信号（最近7天）---
         event_map: Dict[str, List] = {c: [] for c in codes}
         try:
@@ -379,7 +427,8 @@ class StockFundamentalAssessor(BaseAssessor):
                 neg_ratio = neg_count / len(sentiments)
             else:
                 neg_ratio = None
-            news_s = _news_score(neg_ratio)
+            llm_sentiment = llm_sentiment_map.get(code)
+            news_s = _news_score(neg_ratio, llm_sentiment)
 
             # 技术止损 (25%)
             tech = technical_map.get(code, {})

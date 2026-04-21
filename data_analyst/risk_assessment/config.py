@@ -44,6 +44,11 @@ RISK_LEVELS = [(0, 30, 'LOW'), (30, 50, 'MEDIUM'), (50, 70, 'HIGH'), (70, 100, '
 # L4 个股止损线
 STOP_LOSS_PCTS = {'L1': 0.15, 'L2': 0.08, 'L3': 0.08}
 
+# L4 公告情感权重配置
+ANNOUNCEMENT_LLM_WEIGHT = 0.6   # LLM分析结果权重 (stock_news_analysis.sentiment_score)
+ANNOUNCEMENT_NEG_WEIGHT = 0.4   # 传统neg_ratio权重 (trade_news_sentiment)
+ANNOUNCEMENT_LOOKBACK_DAYS = 7  # 公告回看天数
+
 # 数据依赖最大延迟天数
 DATA_MAX_DELAY_DAYS = {
     'trade_stock_daily': 1,

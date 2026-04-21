@@ -216,6 +216,57 @@ def fetch_north_holding_incremental(dry_run: bool = False, envs: str = "local,on
 # Sentiment monitoring adapters
 # ---------------------------------------------------------------------------
 
+def run_announcement_fetch(dry_run: bool = False, env: str = "online"):
+    """Fetch announcements + LLM analysis for all portfolio/watchlist/candidate stocks."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_announcement_fetch: would fetch announcements for all monitored stocks (env=%s)", env)
+        return
+
+    _clear_proxy()
+    import asyncio
+    from config.db import execute_query
+    from api.services.stock_news_service import fetch_and_store_news, analyze_stock_news
+
+    # 1. Collect all stock codes from portfolio/watchlist/candidate tables
+    codes = set()
+    for table, col in [
+        ('user_positions', 'stock_code'),
+        ('user_watchlist', 'stock_code'),
+        ('candidate_pool_stocks', 'stock_code'),
+    ]:
+        try:
+            rows = execute_query(f"SELECT DISTINCT {col} FROM {table}", env=env)
+            codes.update(r[col] for r in rows if r.get(col))
+        except Exception as e:
+            logger.debug("Table %s not available: %s", table, e)
+
+    if not codes:
+        logger.warning("[WARN] run_announcement_fetch: no stock codes found, skip")
+        return
+
+    logger.info("run_announcement_fetch: found %d unique stocks to monitor", len(codes))
+
+    # 2. Fetch news + LLM analysis for each stock
+    total_fetched = 0
+    total_new = 0
+    for code in sorted(codes):
+        try:
+            result = fetch_and_store_news(code, days=3) or {}
+            total_fetched += result.get('fetched', 0)
+            total_new += result.get('new', 0)
+        except Exception as e:
+            logger.error("[RED] announcement fetch failed for %s: %s", code, e)
+
+        try:
+            # analyze_stock_news is async; scheduler context is always synchronous
+            asyncio.run(analyze_stock_news(code))
+        except Exception as e:
+            logger.error("[RED] announcement analysis failed for %s: %s", code, e)
+
+    logger.info("[OK] run_announcement_fetch done: %d stocks, fetched=%d, new=%d (env=%s)",
+                len(codes), total_fetched, total_new, env)
+
+
 def run_sentiment_fear_index(dry_run: bool = False, env: str = "online"):
     """Fetch VIX/OVX/GVZ/US10Y and persist to trade_fear_index."""
     if dry_run:

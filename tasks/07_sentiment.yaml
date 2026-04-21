@@ -17,14 +17,30 @@ tasks:
     timeout_seconds: 120
     alert_on_failure: false
 
+  - id: fetch_stock_announcements
+    name: "持仓/watchlist个股公告抓取+LLM分析"
+    module: scheduler.adapters
+    func: run_announcement_fetch
+    tags: [sentiment, daily]
+    schedule: "19:00"
+    depends_on:
+      - fetch_fear_index
+    params:
+      env: online
+    retry:
+      max_attempts: 2
+      delay_seconds: 60
+    timeout_seconds: 1800
+    alert_on_failure: false
+
   - id: fetch_news_sentiment
     name: "重点股新闻情感分析"
     module: scheduler.adapters
     func: run_sentiment_news
     tags: [sentiment, daily]
-    schedule: "19:00"
+    schedule: "19:30"
     depends_on:
-      - fetch_fear_index
+      - fetch_stock_announcements
     params:
       env: online
       stock_codes: "002594,600519,000858,601318"
@@ -40,7 +56,7 @@ tasks:
     module: scheduler.adapters
     func: run_sentiment_events
     tags: [sentiment, daily]
-    schedule: "19:10"
+    schedule: "19:40"
     depends_on:
       - fetch_news_sentiment
     params:
