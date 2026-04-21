@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"\nimport sys, json\ntry:\n    payload = json.load(sys.stdin)\n    cmd = payload.get('tool_input', {}).get('command', '')\n    hints = []\n    if any(x in cmd for x in ['git commit', 'git add']):\n        hints.append('[REMIND] Pre-commit: emoji check + yaml/json/key checks will run automatically.')\n        hints.append('[REMIND] Commit msg convention: feat/fix/refactor/chore(scope): description')\n    if 'DB_ENV' not in cmd and any(x in cmd for x in ['python', 'python3']) and 'execute_query' not in cmd:\n        pass  # no hint needed\n    if hints:\n        print('\\n'.join(hints), file=sys.stderr)\nexcept Exception:\n    pass\n\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"\nimport sys, json, re\ntry:\n    payload = json.load(sys.stdin)\n    path = payload.get('tool_input', {}).get('file_path', '') or payload.get('tool_input', {}).get('file_path', '')\n    if not path:\n        sys.exit(0)\n    EMOJI = re.compile(r'[\\U0001F000-\\U0001FFFF\\U00002600-\\U000027BF\\U0001F900-\\U0001F9FF]+')\n    try:\n        with open(path, encoding='utf-8', errors='replace') as f:\n            for i, line in enumerate(f, 1):\n                if EMOJI.search(line):\n                    print(f'[WARN] Emoji detected in {path}:{i} - pre-commit will block this file', file=sys.stderr)\n                    break\n    except Exception:\n        pass\nexcept Exception:\n    pass\n\""
+          }
+        ]
+      }
+    ]
+  }
+}

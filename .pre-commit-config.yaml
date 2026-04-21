@@ -1,0 +1,27 @@
+repos:
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+        name: Check YAML syntax
+      - id: check-json
+        name: Check JSON syntax
+      - id: check-added-large-files
+        name: Block large files (>1000KB)
+        args: ["--maxkb=1000"]
+      - id: check-merge-conflict
+        name: Check for merge conflict markers
+      - id: detect-private-key
+        name: Detect private keys
+
+  # Local custom hooks
+  - repo: local
+    hooks:
+      - id: no-emoji
+        name: No emoji in Python/Markdown/CSV files
+        language: python
+        entry: python scripts/check_no_emoji.py
+        pass_filenames: false
+        types_or: [python, markdown, csv]
+        always_run: false
