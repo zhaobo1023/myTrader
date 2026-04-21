@@ -405,13 +405,13 @@ def calc_macro_pulse() -> dict:
             'm2_yoy': {'value': m2},
             'pmi_mfg': {
                 'value': pmi,
-                'signal': 'expansion' if (pmi or 0) >= 50 else 'contraction',
-                'signal_text': 'expansion' if (pmi or 0) >= 50 else 'contraction',
+                'signal': 'unknown' if pmi is None else ('expansion' if pmi >= 50 else 'contraction'),
+                'signal_text': 'unknown' if pmi is None else ('expansion' if pmi >= 50 else 'contraction'),
             },
             'ah_premium': {
                 'value': ah,
-                'signal': _signal(ah or 130, [120, 140], ['low', 'moderate', 'high']),
-                'signal_text': 'low' if (ah or 130) < 120 else ('moderate' if (ah or 130) < 140 else 'high'),
+                'signal': 'unknown' if ah is None else _signal(ah, [15, 30], ['low', 'moderate', 'high']),
+                'signal_text': 'unknown' if ah is None else ('low' if ah < 15 else ('moderate' if ah < 30 else 'high')),
             },
         }
     except Exception as e:

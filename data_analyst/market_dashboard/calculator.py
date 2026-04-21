@@ -106,44 +106,56 @@ def calc_temperature() -> dict:
         vol_series = _load_macro('market_volume', days=60)
         volume_anomaly = False
         if not vol_series.empty:
-            cur_vol = float(vol_series.iloc[-1])
-            prev_vol = float(vol_series.iloc[-2]) if len(vol_series) >= 2 else None
-            ma20 = float(vol_series.tail(20).mean()) if len(vol_series) >= 5 else None
-            vol_ratio = cur_vol / ma20 if ma20 and ma20 > 0 else None
+            # Filter outliers: remove data points < 30% of rolling median (corrupted data)
+            rolling_median = vol_series.rolling(window=5, min_periods=2, center=True).median()
+            outlier_mask = vol_series < (rolling_median * 0.3)
+            if outlier_mask.any():
+                outlier_dates = vol_series.index[outlier_mask].strftime('%Y-%m-%d').tolist()
+                logger.warning("[ANOMALY] Filtering %d volume outlier(s): %s", outlier_mask.sum(), outlier_dates)
+                vol_series = vol_series[~outlier_mask]
 
-            # Anomaly detection: if current volume is < 10% of MA20,
-            # the data point is likely corrupt (e.g. shares stored as yuan)
-            if vol_ratio is not None and vol_ratio < 0.1:
-                logger.warning(
-                    "[ANOMALY] market_volume %.0f is <10%% of MA20 %.0f (ratio=%.4f), marking anomalous",
-                    cur_vol, ma20, vol_ratio,
-                )
-                volume_anomaly = True
-                result['indicators']['volume'] = {
-                    'value': _safe_round(cur_vol / 1e8, 0),
-                    'unit': 'yi',
-                    'anomaly': '[ANOMALY: volume far below MA20, data likely corrupt]',
-                }
-                result['indicators']['volume_ratio_ma20'] = {
-                    'value': None,
-                    'signal': 'anomaly',
-                    'anomaly': '[ANOMALY]',
-                }
+            if vol_series.empty:
+                result['indicators']['volume'] = {'value': None}
+                result['indicators']['volume_ratio_ma20'] = {'value': None, 'signal': 'unknown'}
+                result['volume_series'] = []
             else:
-                result['indicators']['volume'] = {
-                    'value': _safe_round(cur_vol / 1e8, 0),  # convert to yi
-                    'unit': 'yi',
-                    'change': _pct_change_str(cur_vol, prev_vol),
-                }
-                result['indicators']['volume_ratio_ma20'] = {
-                    'value': _safe_round(vol_ratio, 2),
-                    'signal': _signal(vol_ratio or 1.0, C.VOLUME_RATIO_THRESHOLDS, C.VOLUME_RATIO_LEVELS),
-                }
-            # Series for sparkline: last 20 days volume
-            result['volume_series'] = [
-                {'date': d.strftime('%Y-%m-%d'), 'value': _safe_round(float(v) / 1e8, 0)}
-                for d, v in vol_series.tail(20).items()
-            ]
+                cur_vol = float(vol_series.iloc[-1])
+                prev_vol = float(vol_series.iloc[-2]) if len(vol_series) >= 2 else None
+                ma20 = float(vol_series.tail(20).mean()) if len(vol_series) >= 5 else None
+                vol_ratio = cur_vol / ma20 if ma20 and ma20 > 0 else None
+
+                # Final anomaly check on current value
+                if vol_ratio is not None and vol_ratio < 0.1:
+                    logger.warning(
+                        "[ANOMALY] market_volume %.0f is <10%% of MA20 %.0f (ratio=%.4f), marking anomalous",
+                        cur_vol, ma20, vol_ratio,
+                    )
+                    volume_anomaly = True
+                    result['indicators']['volume'] = {
+                        'value': _safe_round(cur_vol / 1e8, 0),
+                        'unit': 'yi',
+                        'anomaly': '[ANOMALY: volume far below MA20, data likely corrupt]',
+                    }
+                    result['indicators']['volume_ratio_ma20'] = {
+                        'value': None,
+                        'signal': 'anomaly',
+                        'anomaly': '[ANOMALY]',
+                    }
+                else:
+                    result['indicators']['volume'] = {
+                        'value': _safe_round(cur_vol / 1e8, 0),  # convert to yi
+                        'unit': 'yi',
+                        'change': _pct_change_str(cur_vol, prev_vol),
+                    }
+                    result['indicators']['volume_ratio_ma20'] = {
+                        'value': _safe_round(vol_ratio, 2),
+                        'signal': _signal(vol_ratio or 1.0, C.VOLUME_RATIO_THRESHOLDS, C.VOLUME_RATIO_LEVELS),
+                    }
+                # Series for sparkline: last 20 days volume (outliers already removed)
+                result['volume_series'] = [
+                    {'date': d.strftime('%Y-%m-%d'), 'value': _safe_round(float(v) / 1e8, 0)}
+                    for d, v in vol_series.tail(20).items()
+                ]
         else:
             result['indicators']['volume'] = {'value': None}
             result['indicators']['volume_ratio_ma20'] = {'value': None, 'signal': 'unknown'}
@@ -388,7 +400,7 @@ def _calc_weekly_macd(daily_series: pd.Series) -> dict:
         cur_hist = float(hist.iloc[-1])
         prev_hist = float(hist.iloc[-2]) if len(hist) >= 2 else 0
 
-        # Golden cross / dead cross detection
+        # Golden cross / dead cross detection (DIF vs DEA)
         if len(dif) >= 2:
             prev_dif = float(dif.iloc[-2])
             prev_dea = float(dea.iloc[-2])
@@ -397,11 +409,13 @@ def _calc_weekly_macd(daily_series: pd.Series) -> dict:
             elif prev_dif >= prev_dea and cur_dif < cur_dea:
                 status = 'dead_cross'
             elif cur_dif > cur_dea:
-                status = 'above_zero'
+                # DIF above DEA (bullish) — further distinguish zero axis
+                status = 'above_zero' if cur_dif > 0 else 'dif_above_dea'
             else:
-                status = 'below_zero'
+                # DIF below DEA (bearish) — further distinguish zero axis
+                status = 'below_zero' if cur_dif < 0 else 'dif_below_dea'
         else:
-            status = 'above_zero' if cur_dif > cur_dea else 'below_zero'
+            status = 'above_zero' if cur_dif > 0 else 'below_zero'
 
         # Histogram direction
         if cur_hist > 0:
@@ -507,12 +521,20 @@ def _calc_trend_level(trend_data: dict) -> str:
         elif ma in below:
             direction_score -= 5
 
-    # MACD weekly: +10 golden_cross/above, -10 dead_cross/below
+    # MACD weekly: score based on DIF/DEA relationship and zero axis
     macd = trend_data.get('indicators', {}).get('macd_weekly', {})
     macd_status = macd.get('status', 'unknown')
-    if macd_status in ('golden_cross', 'above_zero'):
+    if macd_status == 'golden_cross':
         direction_score += 10
-    elif macd_status in ('dead_cross', 'below_zero'):
+    elif macd_status == 'above_zero':
+        direction_score += 10
+    elif macd_status == 'dif_above_dea':
+        direction_score += 5  # DIF>DEA but both below zero: recovering
+    elif macd_status == 'dif_below_dea':
+        direction_score -= 5  # DIF<DEA but both above zero: weakening
+    elif macd_status == 'dead_cross':
+        direction_score -= 10
+    elif macd_status == 'below_zero':
         direction_score -= 10
 
     # Index daily returns: average across tracked indices
@@ -626,6 +648,16 @@ def calc_sentiment() -> dict:
         if not nh.empty and not nl.empty:
             cur_nh = int(float(nh.iloc[-1]))
             cur_nl = int(float(nl.iloc[-1]))
+            # Both=0 is implausible on a normal trading day; treat as missing data
+            # and fall back to the most recent non-zero entry
+            if cur_nh == 0 and cur_nl == 0 and len(nh) >= 2:
+                for i in range(2, min(len(nh) + 1, 6)):
+                    fallback_nh = int(float(nh.iloc[-i]))
+                    fallback_nl = int(float(nl.iloc[-i])) if len(nl) >= i else 0
+                    if fallback_nh > 0 or fallback_nl > 0:
+                        cur_nh = fallback_nh
+                        cur_nl = fallback_nl
+                        break
             result['indicators']['new_high_low'] = {
                 'high': cur_nh,
                 'low': cur_nl,
@@ -930,10 +962,11 @@ def calc_macro() -> dict:
         if m2 is not None:
             score += 1 if m2 > 8 else (-1 if m2 < 7 else 0)
 
-        # AH premium: too high is a headwind (A-shares expensive)
+        # AH premium (%): too high is a headwind (A-shares expensive vs H-shares)
+        # Data is in percentage format (e.g. 11.54 means A-shares are 11.54% above H-shares)
         ah = pulse.get('ah_premium', {}).get('value')
         if ah is not None:
-            score += -1 if ah > 140 else (1 if ah < 120 else 0)
+            score += -1 if ah > 30 else (1 if ah < 15 else 0)
 
         if score >= 2:
             level = 'tailwind'
