@@ -26,48 +26,42 @@
    - matplotlib 模块级 import 加 try/except，无 matplotlib 时优雅降级（跳过可视化）
    - 已提交 git，容器已同步
 
-## 今晚执行计划
+## 2026-04-21 最终状态
 
-脚本已就位（服务器 `/tmp/` 和容器 `/tmp/` 均已同步）：
+| 数据表 | 最新数据 | 状态 | 说明 |
+|--------|---------|------|------|
+| trade_stock_factor | 2026-04-21 | [OK] | 正常 |
+| trade_stock_rps | 2026-04-21 | [OK] | 正常 |
+| sw_industry_valuation | 2026-04-17 | [OK] | 设计上限，daily_basic 数据到 4/17 |
+| trade_stock_daily_basic | 2026-04-17 | [OK] | Tushare 数据正常更新到最新 |
+| trade_svd_market_state | 2026-04-03 (w=20) | [OK] | 见下方说明 |
 
-| 文件 | 说明 |
-|------|------|
-| `/tmp/backfill_all.sh` | 主控脚本，串行执行 step1~4 + verify，日志写 `/tmp/backfill_all.log` |
-| `/tmp/backfill_step1.py` (容器内) | trade_stock_factor 回填 3/23~4/20（20 个交易日） |
-| `/tmp/backfill_step2.py` (容器内) | trade_svd_market_state 回填 |
-| `/tmp/backfill_step3.py` (容器内) | daily_basic 补数据 |
-| `/tmp/backfill_step4.py` (容器内) | sw_industry_valuation 回填 |
-| `/tmp/backfill_verify.py` (容器内) | 验证各表最新日期 |
+### trade_svd_market_state 说明
 
-执行方式（nohup 防断连）：
+SVD 的 calc_date = 滚动窗口的中间日期（非右端点），因此存在设计固有滞后：
 
-```bash
-ssh aliyun-ecs "nohup /tmp/backfill_all.sh &"
-# 查看进度
-ssh aliyun-ecs "tail -f /tmp/backfill_all.log"
-```
+| 窗口 | 步长 | 最新 calc_date | 理论滞后 |
+|------|------|---------------|---------|
+| 20日 | 5日 | 2026-04-03 | ~10 个交易日 |
+| 60日 | 10日 | 2026-03-05 | ~30 个交易日 |
+| 120日 | 20日 | 2026-01-14 | ~60 个交易日 |
 
-如果容器重启导致 /tmp 脚本丢失，重新 scp 即可（脚本源文件在本地 /tmp/ 下）。
+**这不是 bug**，是设计决定：用历史窗口的中间点作为时间戳，避免前视偏差。
 
-## 验证
+当前 window=20 的最大可达 calc_date = 2026-04-03（step=5 对齐），
+下一个新 calc_date (2026-04-09) 需要 4/22、4/23 的行情数据落地后自动产生。
 
-全部执行完后检查：
+### 验证命令
 
 ```bash
 docker exec app-celery-worker-1 python3 -c "
 import sys; sys.path.insert(0, '/app')
 from config.db import execute_query
-for tbl, col in [('trade_stock_factor','calc_date'), ('trade_svd_market_state','calc_date'), ('trade_stock_rps','trade_date'), ('sw_industry_valuation','trade_date')]:
+for tbl, col in [('trade_stock_factor','calc_date'), ('trade_svd_market_state','calc_date'), ('trade_stock_rps','trade_date'), ('sw_industry_valuation','trade_date'), ('trade_stock_daily_basic','trade_date')]:
     rows = execute_query('SELECT MAX(' + col + ') as mx FROM ' + tbl, env='online')
     print(tbl + ': ' + str(rows[0]['mx']))
 "
 ```
-
-预期结果：
-- trade_stock_factor: 2026-04-20
-- trade_svd_market_state: 2026-04-20
-- trade_stock_rps: 2026-04-20
-- sw_industry_valuation: 2026-04-20 (取决于 daily_basic 能否补到 4/20)
 
 ## 后续：防止再次滞后
 
