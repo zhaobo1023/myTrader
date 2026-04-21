@@ -628,8 +628,8 @@ async def svd_trend(
         for r in rows:
             series.append({
                 'date': str(r['calc_date']),
-                'top1': round(float(r['top1_var_ratio']), 4) if r['top1_var_ratio'] else None,
-                'top3': round(float(r['top3_var_ratio']), 4) if r['top3_var_ratio'] else None,
+                'top1': round(float(r['top1_var_ratio']), 4) if r['top1_var_ratio'] is not None else None,
+                'top3': round(float(r['top3_var_ratio']), 4) if r['top3_var_ratio'] is not None else None,
                 'state': r['market_state'] or '',
                 'mutation': bool(r['is_mutation']),
             })

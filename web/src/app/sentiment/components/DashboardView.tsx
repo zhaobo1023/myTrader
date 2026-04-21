@@ -475,13 +475,22 @@ function SvdTrendChart() {
   }
 
   const series = data.series.filter((p: SvdTrendPoint) => p.top1 != null);
-  if (series.length < 2) return null;
+  if (series.length < 2) {
+    return (
+      <div style={{
+        background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+        borderRadius: '10px', padding: '16px 18px', fontSize: '12px', color: 'var(--text-muted)',
+      }}>
+        SVD 趋势数据不足，无法绘制图表
+      </div>
+    );
+  }
 
   // Chart dimensions
   const W = 680;
   const H = 180;
   const padL = 42;
-  const padR = 12;
+  const padR = 36;
   const padT = 8;
   const padB = 28;
   const innerW = W - padL - padR;
@@ -613,8 +622,8 @@ function SvdTrendChart() {
         />
 
         {/* Threshold labels */}
-        <text x={W - padR + 2} y={toY(SVD_HIGH) + 3} fontSize="8" fill="#ea580c" opacity={0.7}>齐涨</text>
-        <text x={W - padR + 2} y={toY(SVD_LOW) + 3} fontSize="8" fill="#16a34a" opacity={0.7}>个股</text>
+        <text x={W - padR - 4} y={toY(SVD_HIGH) - 4} fontSize="8" fill="#ea580c" opacity={0.7} textAnchor="end">齐涨齐跌</text>
+        <text x={W - padR - 4} y={toY(SVD_LOW) + 11} fontSize="8" fill="#16a34a" opacity={0.7} textAnchor="end">个股行情</text>
 
         {/* Y-axis ticks */}
         {allYTicks.map((v) => (
