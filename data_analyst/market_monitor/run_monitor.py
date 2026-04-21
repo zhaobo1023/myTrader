@@ -502,7 +502,7 @@ def run_daily_monitor():
     monitor = SVDMonitor(config)
 
     end_date = date.today().strftime('%Y-%m-%d')
-    start_date = (date.today() - timedelta(days=800)).strftime('%Y-%m-%d')
+    start_date = (date.today() - timedelta(days=400)).strftime('%Y-%m-%d')
 
     result = monitor.run(start_date=start_date, end_date=end_date)
 
