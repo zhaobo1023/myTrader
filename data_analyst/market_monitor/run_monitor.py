@@ -156,10 +156,10 @@ class SVDMonitor:
 
         for window_size, step in self.config.windows.items():
             window_records = []
-            for start_idx in range(0, T - window_size, step):
-                mid_idx = start_idx + window_size // 2
-                mid_date = returns_df.index[mid_idx]
-                calc_date = mid_date.date() if hasattr(mid_date, 'date') else mid_date
+            for start_idx in range(0, T - window_size + 1, step):
+                end_idx = start_idx + window_size - 1
+                end_date_ts = returns_df.index[end_idx]
+                calc_date = end_date_ts.date() if hasattr(end_date_ts, 'date') else end_date_ts
 
                 matrix, stock_count, _ = self.data_builder.build_window_matrix(
                     returns_df, start_idx, window_size, stock_codes
@@ -321,10 +321,10 @@ class SVDMonitor:
 
             industry_records = []
             for window_size, step in self.config.windows.items():
-                for start_idx in range(0, T - window_size, step):
-                    mid_idx = start_idx + window_size // 2
-                    mid_date = industry_returns.index[mid_idx]
-                    calc_date = mid_date.date() if hasattr(mid_date, 'date') else mid_date
+                for start_idx in range(0, T - window_size + 1, step):
+                    end_idx = start_idx + window_size - 1
+                    end_date_ts = industry_returns.index[end_idx]
+                    calc_date = end_date_ts.date() if hasattr(end_date_ts, 'date') else end_date_ts
 
                     matrix, stock_count, _ = self.data_builder.build_window_matrix(
                         industry_returns, start_idx, window_size, available_stocks
@@ -502,7 +502,7 @@ def run_daily_monitor():
     monitor = SVDMonitor(config)
 
     end_date = date.today().strftime('%Y-%m-%d')
-    start_date = (date.today() - timedelta(days=400)).strftime('%Y-%m-%d')
+    start_date = (date.today() - timedelta(days=800)).strftime('%Y-%m-%d')
 
     result = monitor.run(start_date=start_date, end_date=end_date)
 
