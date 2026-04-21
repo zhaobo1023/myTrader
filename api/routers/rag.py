@@ -116,7 +116,7 @@ Answer:"""
                     base_url='https://dashscope.aliyuncs.com/compatible-mode/v1',
                 )
                 stream = client.chat.completions.create(
-                    model='qwen3-max',
+                    model='qwen3.6-plus',
                     messages=[{'role': 'user', 'content': prompt}],
                     stream=True,
                 )

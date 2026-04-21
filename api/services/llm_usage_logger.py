@@ -6,7 +6,7 @@ so a DB outage never disrupts the SSE stream.
 
 Usage:
     logger = LLMUsageLogger(db_session_factory=get_db_session)
-    rec = LLMCallRecord(skill_id='theme-review', model='qwen3-max', latency_ms=0)
+    rec = LLMCallRecord(skill_id='theme-review', model='qwen3.6-plus', latency_ms=0)
     async with logger.timed(rec):
         result = await llm_call(...)
     await logger.log(rec)

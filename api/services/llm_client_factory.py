@@ -23,12 +23,12 @@ logger = logging.getLogger('myTrader.llm_factory')
 
 SUPPORTED_ALIASES: dict[str, dict] = {
     'qwen': {
-        'model': 'qwen3-max',
+        'model': 'qwen3.6-plus',
         'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
         'api_key_env': 'RAG_API_KEY',
     },
     'qwen-fast': {
-        'model': 'qwen3-8b',
+        'model': 'qwen3.6-plus',
         'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
         'api_key_env': 'RAG_API_KEY',
     },

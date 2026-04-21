@@ -27,13 +27,13 @@ def _run(coro):
 class TestLLMCallRecord(unittest.TestCase):
 
     def test_required_fields(self):
-        rec = LLMCallRecord(skill_id='theme-review', model='qwen3-max', latency_ms=1500)
+        rec = LLMCallRecord(skill_id='theme-review', model='qwen3.6-plus', latency_ms=1500)
         self.assertEqual(rec.skill_id, 'theme-review')
-        self.assertEqual(rec.model, 'qwen3-max')
+        self.assertEqual(rec.model, 'qwen3.6-plus')
         self.assertEqual(rec.latency_ms, 1500)
 
     def test_optional_fields_default_to_none_or_zero(self):
-        rec = LLMCallRecord(skill_id='theme-create', model='qwen3-max', latency_ms=800)
+        rec = LLMCallRecord(skill_id='theme-create', model='qwen3.6-plus', latency_ms=800)
         self.assertIsNone(rec.user_id)
         self.assertIsNone(rec.resource_id)
         self.assertEqual(rec.prompt_tokens, 0)
@@ -41,7 +41,7 @@ class TestLLMCallRecord(unittest.TestCase):
 
     def test_total_tokens_property(self):
         rec = LLMCallRecord(
-            skill_id='theme-review', model='qwen3-max', latency_ms=1000,
+            skill_id='theme-review', model='qwen3.6-plus', latency_ms=1000,
             prompt_tokens=500, completion_tokens=200,
         )
         self.assertEqual(rec.total_tokens, 700)
@@ -67,7 +67,7 @@ class TestLLMUsageLogger(unittest.TestCase):
     def test_log_writes_to_db(self):
         """log() should add a record and commit."""
         logger, session = self._make_logger()
-        rec = LLMCallRecord(skill_id='theme-review', model='qwen3-max', latency_ms=1200)
+        rec = LLMCallRecord(skill_id='theme-review', model='qwen3.6-plus', latency_ms=1200)
         _run(logger.log(rec))
         session.add.assert_called_once()
         session.commit.assert_awaited_once()
@@ -83,7 +83,7 @@ class TestLLMUsageLogger(unittest.TestCase):
         mock_db_factory.return_value = mock_session
         logger = LLMUsageLogger(db_session_factory=mock_db_factory)
 
-        rec = LLMCallRecord(skill_id='theme-review', model='qwen3-max', latency_ms=500)
+        rec = LLMCallRecord(skill_id='theme-review', model='qwen3.6-plus', latency_ms=500)
         # must not raise
         _run(logger.log(rec))
 
@@ -113,7 +113,7 @@ class TestLLMUsageLogger(unittest.TestCase):
     def test_timed_context_measures_latency(self):
         """timed() context manager should capture elapsed time."""
         logger, session = self._make_logger()
-        base_rec = LLMCallRecord(skill_id='theme-review', model='qwen3-max', latency_ms=0)
+        base_rec = LLMCallRecord(skill_id='theme-review', model='qwen3.6-plus', latency_ms=0)
 
         async def _use_timed():
             async with logger.timed(base_rec):
@@ -127,7 +127,7 @@ class TestLLMUsageLogger(unittest.TestCase):
     def test_log_without_db_factory_is_noop(self):
         """LLMUsageLogger(db_session_factory=None) should be a safe no-op."""
         logger = LLMUsageLogger(db_session_factory=None)
-        rec = LLMCallRecord(skill_id='theme-review', model='qwen3-max', latency_ms=100)
+        rec = LLMCallRecord(skill_id='theme-review', model='qwen3.6-plus', latency_ms=100)
         # must not raise
         _run(logger.log(rec))
 

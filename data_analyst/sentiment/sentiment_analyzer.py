@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class SentimentAnalyzer:
     """情感分析服务"""
 
-    def __init__(self, model: str = "qwen-plus"):
+    def __init__(self, model: str = "qwen3.6-plus"):
         self.model = model
 
     def build_prompt(self, news: NewsItem) -> str:

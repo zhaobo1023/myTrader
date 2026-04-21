@@ -20,7 +20,7 @@ class RAGConfig:
     embedding_batch_size: int = 10  # API limit is 10
 
     # --- LLM ---
-    llm_model: str = "qwen3-max"
+    llm_model: str = "qwen3.6-plus"
     llm_api_key: str = ""
     llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
@@ -77,7 +77,7 @@ def load_config() -> RAGConfig:
         embedding_api_key=api_key,
         embedding_base_url=os.getenv('RAG_EMBEDDING_BASE_URL', _env.get('RAG_EMBEDDING_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')),
         embedding_dimensions=int(os.getenv('RAG_EMBEDDING_DIMENSIONS', _env.get('RAG_EMBEDDING_DIMENSIONS', '1024'))),
-        llm_model=os.getenv('RAG_LLM_MODEL', _env.get('RAG_LLM_MODEL', 'qwen3-max')),
+        llm_model=os.getenv('RAG_LLM_MODEL', _env.get('RAG_LLM_MODEL', 'qwen3.6-plus')),
         llm_api_key=api_key,
         llm_base_url=os.getenv('RAG_LLM_BASE_URL', _env.get('RAG_LLM_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')),
         reranker_model=os.getenv('RAG_RERANKER_MODEL', _env.get('RAG_RERANKER_MODEL', 'gte-reranker-v2')),
