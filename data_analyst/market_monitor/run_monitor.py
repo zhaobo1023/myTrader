@@ -156,7 +156,13 @@ class SVDMonitor:
 
         for window_size, step in self.config.windows.items():
             window_records = []
-            for start_idx in range(0, T - window_size + 1, step):
+            # Collect start indices: regular rolling + anchor to latest
+            starts = list(range(0, T - window_size + 1, step))
+            latest_start = T - window_size
+            if latest_start > 0 and (not starts or starts[-1] != latest_start):
+                starts.append(latest_start)
+
+            for start_idx in starts:
                 end_idx = start_idx + window_size - 1
                 end_date_ts = returns_df.index[end_idx]
                 calc_date = end_date_ts.date() if hasattr(end_date_ts, 'date') else end_date_ts
@@ -321,7 +327,12 @@ class SVDMonitor:
 
             industry_records = []
             for window_size, step in self.config.windows.items():
-                for start_idx in range(0, T - window_size + 1, step):
+                starts = list(range(0, T - window_size + 1, step))
+                latest_start = T - window_size
+                if latest_start > 0 and (not starts or starts[-1] != latest_start):
+                    starts.append(latest_start)
+
+                for start_idx in starts:
                     end_idx = start_idx + window_size - 1
                     end_date_ts = industry_returns.index[end_idx]
                     calc_date = end_date_ts.date() if hasattr(end_date_ts, 'date') else end_date_ts
