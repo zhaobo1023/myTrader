@@ -49,6 +49,42 @@ def publish_morning_briefing(self):
         raise
 
 
+@celery_app.task(bind=True, name='publish_morning_briefing_v2')
+def publish_morning_briefing_v2(self):
+    """Generate and publish V2 morning briefing (based on 盘前早咖) to Feishu."""
+    import asyncio
+    from api.services.panqian_briefing_v2 import generate_v2_briefing
+    from api.services.feishu_doc_publisher import publish_briefing_and_notify
+
+    logger.info('[BRIEFING_V2] Starting V2 morning briefing')
+    try:
+        result = asyncio.run(generate_v2_briefing(force=True))
+        content = result.get('content', '')
+        brief_date = result.get('date', '')
+
+        if not content or content.startswith('[V2速递中止]'):
+            logger.warning('[BRIEFING_V2] V2 aborted: %s', content[:100])
+            _notify_error('V2晨报生成中止', content[:300])
+            return {'status': 'aborted', 'reason': content[:100]}
+
+        title = 'V2晨报(盘前早咖) {}'.format(brief_date)
+        doc = publish_briefing_and_notify(title=title, content=content)
+
+        logger.info('[BRIEFING_V2] V2 briefing published: %s (items=%s)',
+                    doc.get('url'), result.get('items_count'))
+        return {
+            'status': 'ok',
+            'url': doc.get('url'),
+            'date': brief_date,
+            'items_count': result.get('items_count'),
+            'article_source': result.get('article_source'),
+        }
+    except Exception as e:
+        logger.exception('[BRIEFING_V2] V2 briefing failed: %s', e)
+        _notify_error('V2晨报生成失败', str(e))
+        raise
+
+
 @celery_app.task(bind=True, name='publish_evening_briefing')
 def publish_evening_briefing(self):
     """Generate and publish evening briefing to Feishu."""

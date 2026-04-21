@@ -413,6 +413,22 @@ def publish_briefing(
     return doc
 
 
+def publish_briefing_and_notify(title: str, content: str, structured_data: dict = None) -> dict:
+    """
+    Publish a briefing to Feishu doc and send a bot card notification.
+
+    Convenience wrapper that combines publish_briefing + _extract_verdict + _send_card,
+    so callers don't need to import private helpers.
+
+    Returns:
+        {'document_id': str, 'url': str}
+    """
+    doc = publish_briefing(title=title, content=content, structured_data=structured_data)
+    verdict = _extract_verdict(content)
+    _send_card(title, verdict, doc['url'])
+    return doc
+
+
 async def publish_latest_briefing(session: str = 'morning', force: bool = False) -> dict:
     """
     Generate (or load cached) briefing and publish to Feishu.

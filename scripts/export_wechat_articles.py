@@ -33,6 +33,11 @@ NEWS_FEEDS = {
 NEWS_MIN_CONTENT_LEN = 300
 NEWS_MAX_PER_FEED = 8
 
+# 盘前早咖: 晨报聚合型公众号，内容较短但信息密度高，每天只取1篇（最新）
+PANQIAN_FEEDS = {'盘前早咖'}
+PANQIAN_MIN_CONTENT_LEN = 100
+PANQIAN_MAX_PER_FEED = 1
+
 
 def is_blacklisted(title):
     for pat in TITLE_BLACKLIST:
@@ -74,9 +79,17 @@ def main():
 
     for fid, arts in feed_articles.items():
         feed_name = feeds.get(fid, 'unknown')
+        is_panqian = feed_name in PANQIAN_FEEDS
         is_news = feed_name in NEWS_FEEDS
-        min_len = NEWS_MIN_CONTENT_LEN if is_news else MIN_CONTENT_LEN
-        max_per = NEWS_MAX_PER_FEED if is_news else MAX_PER_FEED
+        if is_panqian:
+            min_len = PANQIAN_MIN_CONTENT_LEN
+            max_per = PANQIAN_MAX_PER_FEED
+        elif is_news:
+            min_len = NEWS_MIN_CONTENT_LEN
+            max_per = NEWS_MAX_PER_FEED
+        else:
+            min_len = MIN_CONTENT_LEN
+            max_per = MAX_PER_FEED
         arts.sort(key=lambda x: len(x.get('content') or ''), reverse=True)
         kept = 0
 

@@ -50,6 +50,8 @@ FEED_CATEGORY_MAP: dict[str, str] = {
     '华泰证券': PUSH_CATEGORY_BROKER,
     '国泰海通证券研究': PUSH_CATEGORY_BROKER,
     '招商证券策略研究': PUSH_CATEGORY_BROKER,
+    # -- panqian (晨报聚合) --
+    '盘前早咖': PUSH_CATEGORY_MACRO,
     # -- news (财经新闻快讯) --
     '财联社': PUSH_CATEGORY_MACRO,
     '界面新闻': PUSH_CATEGORY_OTHER,

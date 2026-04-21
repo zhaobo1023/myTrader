@@ -88,10 +88,16 @@ celery_app.conf.beat_schedule = {
     # 早间任务
     # ============================================================
 
-    # 08:30 - 晨报生成并发布到飞书
+    # 08:30 - 晨报V1生成并发布到飞书
     'daily-morning-briefing': {
         'task': 'publish_morning_briefing',
         'schedule': crontab(hour=8, minute=30, day_of_week='1-5'),
+    },
+
+    # 08:35 - 晨报V2(盘前早咖)生成并发布到飞书
+    'daily-morning-briefing-v2': {
+        'task': 'publish_morning_briefing_v2',
+        'schedule': crontab(hour=8, minute=35, day_of_week='1-5'),
     },
 
     # 08:00 - 恐慌指数(盘前)
