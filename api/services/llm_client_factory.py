@@ -110,6 +110,7 @@ class LLMClientFactory:
             api_key=key,
             base_url=self.base_url,
             http_client=httpx.Client(timeout=_LLM_HTTP_TIMEOUT),
+            max_retries=0,  # disable SDK-level retries; let caller handle
         )
         messages = []
         if system_prompt:
