@@ -1215,19 +1215,19 @@ export default function IndustryTemperaturePanel() {
       </CollapsibleSection>
 
       <CollapsibleSection
-        title="每周横截面排名"
-        subtitle="申万31行业"
-        defaultOpen={false}
-      >
-        <SwRotationCardContent />
-      </CollapsibleSection>
-
-      <CollapsibleSection
         title="行业对数乖离率"
         subtitle="20EMA 减法版 | 30+ 中证行业主题指数"
         defaultOpen={false}
       >
         <LogBiasCardContent />
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="每周横截面排名"
+        subtitle="申万31行业"
+        defaultOpen={false}
+      >
+        <SwRotationCardContent />
       </CollapsibleSection>
     </div>
   );
