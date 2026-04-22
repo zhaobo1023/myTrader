@@ -401,6 +401,150 @@ async def risk_scan(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.post('/batch-analyze')
+async def batch_analyze(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    一键分析：对当前用户所有活跃持仓执行技术面快照 + 当日公告检查。
+    公告当日未抓取时自动触发全市场抓取（去重，每日只触发一次）。
+    返回每支股票的分析摘要。
+    """
+    import asyncio
+    from datetime import date
+
+    result = await db.execute(
+        select(UserPosition).where(
+            UserPosition.user_id == current_user.id,
+            UserPosition.is_active == True,
+        )
+    )
+    positions = result.scalars().all()
+    if not positions:
+        return {'stocks': [], 'announcement_fetched': False}
+
+    codes = [p.stock_code for p in positions]
+    code_name = {p.stock_code: p.stock_name or p.stock_code for p in positions}
+
+    def _analyze(stock_codes, user_id):
+        from config.db import execute_query
+        from data_analyst.fetchers.announcement_fetcher import (
+            fetch_announcements_for_date,
+            get_announcements_for_codes,
+        )
+
+        today = date.today()
+        today_str = today.isoformat()
+        placeholders = ', '.join(['%s'] * len(stock_codes))
+
+        # --- 技术面快照：最近2日 OHLCV + 量比 ---
+        tech_map = {}
+        try:
+            rows = execute_query(
+                """
+                SELECT sub.stock_code, sub.close_price, sub.open_price,
+                       sub.high_price, sub.low_price, sub.volume, sub.trade_date,
+                       sub.rn
+                FROM (
+                    SELECT stock_code, close_price, open_price, high_price, low_price,
+                           volume, trade_date,
+                           ROW_NUMBER() OVER (PARTITION BY stock_code ORDER BY trade_date DESC) AS rn
+                    FROM trade_stock_daily
+                    WHERE stock_code IN ({})
+                ) sub
+                WHERE sub.rn <= 6
+                """.format(placeholders),
+                tuple(stock_codes),
+                env='online',
+            )
+            # 按 code 分组
+            raw: dict = {}
+            for r in rows:
+                code = r['stock_code']
+                raw.setdefault(code, []).append(r)
+
+            for code, recs in raw.items():
+                recs_sorted = sorted(recs, key=lambda x: x['rn'])
+                latest = recs_sorted[0]
+                prev = recs_sorted[1] if len(recs_sorted) > 1 else None
+                day5 = recs_sorted[5] if len(recs_sorted) > 5 else None
+
+                close = float(latest['close_price']) if latest['close_price'] else None
+                prev_close = float(prev['close_price']) if prev and prev['close_price'] else None
+                open_p = float(latest['open_price']) if latest['open_price'] else None
+                high = float(latest['high_price']) if latest['high_price'] else None
+                low = float(latest['low_price']) if latest['low_price'] else None
+                vol = int(latest['volume']) if latest['volume'] else None
+                prev_vol = int(prev['volume']) if prev and prev['volume'] else None
+                close_5d = float(day5['close_price']) if day5 and day5['close_price'] else None
+
+                chg_pct = round((close - prev_close) / prev_close * 100, 2) if close and prev_close else None
+                chg_5d_pct = round((close - close_5d) / close_5d * 100, 2) if close and close_5d else None
+                vol_ratio = round(vol / prev_vol, 2) if vol and prev_vol and prev_vol > 0 else None
+
+                tech_map[code] = {
+                    'trade_date': str(latest['trade_date']) if latest['trade_date'] else '',
+                    'close': close,
+                    'open': open_p,
+                    'high': high,
+                    'low': low,
+                    'chg_pct': chg_pct,
+                    'chg_5d_pct': chg_5d_pct,
+                    'vol_ratio': vol_ratio,
+                }
+        except Exception as e:
+            logger.warning('[POSITIONS] batch-analyze tech query failed: %s', e)
+
+        # --- 当日公告检查：没有则触发全市场抓取 ---
+        announcement_fetched = False
+        try:
+            # 检查今日是否已有公告数据（任意股票有即视为已抓取）
+            existing = execute_query(
+                "SELECT COUNT(*) AS n FROM research_announcements WHERE ann_date = %s",
+                (today_str,),
+                env='online',
+            )
+            has_today = existing[0]['n'] > 0 if existing else False
+            if not has_today:
+                fetch_announcements_for_date(today)
+                announcement_fetched = True
+        except Exception as e:
+            logger.warning('[POSITIONS] batch-analyze announcement fetch failed: %s', e)
+
+        # --- 读公告（当日 + 近7日） ---
+        ann_map = get_announcements_for_codes(stock_codes, days=7)
+
+        return tech_map, ann_map, announcement_fetched
+
+    try:
+        loop = asyncio.get_running_loop()
+        tech_map, ann_map, ann_fetched = await loop.run_in_executor(None, _analyze, codes, current_user.id)
+    except Exception as exc:
+        logger.error('[POSITIONS] batch-analyze failed for user=%s: %s', current_user.id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    stocks = []
+    for code in codes:
+        tech = tech_map.get(code, {})
+        anns = ann_map.get(code, [])
+        # 判断公告中是否有当日新公告
+        today_str = date.today().isoformat()
+        today_anns = [a for a in anns if a['date'] == today_str]
+        recent_anns = [a for a in anns if a['date'] != today_str]
+
+        stocks.append({
+            'stock_code': code,
+            'stock_name': code_name.get(code, ''),
+            'tech': tech,
+            'today_announcements': today_anns,
+            'recent_announcements': recent_anns[:5],
+        })
+
+    logger.info('[POSITIONS] batch-analyze done for user=%s, stocks=%d', current_user.id, len(stocks))
+    return {'stocks': stocks, 'announcement_fetched': ann_fetched}
+
+
 @router.get('/market-data')
 async def get_positions_market_data(
     current_user: User = Depends(get_current_user),

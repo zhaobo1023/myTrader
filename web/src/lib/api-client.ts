@@ -472,7 +472,42 @@ export const positionsApi = {
     apiClient.get<Record<string, PositionMarketData>>('/api/positions/market-data'),
   export: (params?: { level?: string; active_only?: boolean }) =>
     downloadCsv('/api/positions/export', params || {}, 'positions.csv'),
+  batchAnalyze: () =>
+    apiClient.post<BatchAnalyzeResult>('/api/positions/batch-analyze'),
 };
+
+export interface StockTech {
+  trade_date: string;
+  close: number | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  chg_pct: number | null;
+  chg_5d_pct: number | null;
+  vol_ratio: number | null;
+}
+
+export interface StockAnnouncement {
+  date: string;
+  type: string;
+  title: string;
+  direction: string;
+  magnitude: string;
+  summary: string;
+}
+
+export interface StockAnalysis {
+  stock_code: string;
+  stock_name: string;
+  tech: StockTech;
+  today_announcements: StockAnnouncement[];
+  recent_announcements: StockAnnouncement[];
+}
+
+export interface BatchAnalyzeResult {
+  stocks: StockAnalysis[];
+  announcement_fetched: boolean;
+}
 
 // ============================================================
 // Risk Overview API

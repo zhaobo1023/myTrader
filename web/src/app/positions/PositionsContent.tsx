@@ -3,7 +3,7 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { positionsApi, riskApi, PositionItem, PositionMarketData, RiskOverviewData } from '@/lib/api-client';
+import { positionsApi, riskApi, PositionItem, PositionMarketData, RiskOverviewData, BatchAnalyzeResult, StockAnalysis } from '@/lib/api-client';
 import { useAddToCandidate } from '@/hooks/useStockAdd';
 import StockSearchInput from '@/components/stock/StockSearchInput';
 import type { StockSearchResult } from '@/lib/api-client';
@@ -381,6 +381,137 @@ function ScoreBreakdown({ result }: { result: LayeredRiskResult }) {
 // Stop loss percentages matching backend config
 const STOP_LOSS_PCTS: Record<string, number> = { L1: 0.15, L2: 0.08, L3: 0.08 };
 
+// ---------------------------------------------------------------------------
+// BatchAnalyzePanel
+// ---------------------------------------------------------------------------
+
+const ANN_TYPE_LABEL: Record<string, string> = {
+  reduce: '减持', increase: '增持', buyback: '回购',
+  earnings_guide: '业绩预告', dividend: '分红', major_contract: '重大合同',
+  acquisition: '收购', restructure: '重组', placement: '定增',
+  convertible: '可转债', risk_warning: '风险提示', equity_incentive: '股权激励',
+  unlock: '解除限售', other: '其他',
+};
+
+const DIR_COLOR: Record<string, string> = {
+  positive: '#16a34a', negative: '#e5534b', neutral: 'var(--text-muted)',
+};
+
+function StockAnalysisCard({ item }: { item: StockAnalysis }) {
+  const t = item.tech;
+  const chgColor = (v: number | null) => v == null ? 'var(--text-muted)' : v > 0 ? '#e5534b' : v < 0 ? '#16a34a' : 'var(--text-secondary)';
+  const allAnns = [...item.today_announcements, ...item.recent_announcements];
+  const hasNewAnn = item.today_announcements.length > 0;
+
+  return (
+    <div style={{ borderBottom: '1px solid var(--border-subtle)', padding: '12px 0' }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '6px' }}>
+        <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+          {item.stock_name}
+        </span>
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-geist-mono)' }}>
+          {item.stock_code}
+        </span>
+        {hasNewAnn && (
+          <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '3px', background: 'rgba(229,83,75,0.12)', color: '#e5534b', fontWeight: 500 }}>
+            今日公告
+          </span>
+        )}
+      </div>
+
+      {/* Tech row */}
+      {t.close != null ? (
+        <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px', flexWrap: 'wrap' }}>
+          <span>收盘 <b style={{ color: 'var(--text-primary)' }}>{t.close}</b></span>
+          <span style={{ color: chgColor(t.chg_pct) }}>
+            日涨跌 {t.chg_pct != null ? (t.chg_pct > 0 ? '+' : '') + t.chg_pct + '%' : '--'}
+          </span>
+          <span style={{ color: chgColor(t.chg_5d_pct) }}>
+            5日 {t.chg_5d_pct != null ? (t.chg_5d_pct > 0 ? '+' : '') + t.chg_5d_pct + '%' : '--'}
+          </span>
+          {t.vol_ratio != null && (
+            <span style={{ color: t.vol_ratio >= 2 ? '#ca8a04' : 'var(--text-muted)' }}>
+              量比 {t.vol_ratio}
+            </span>
+          )}
+          <span style={{ color: 'var(--text-tertiary)', fontSize: '11px' }}>{t.trade_date}</span>
+        </div>
+      ) : (
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>暂无行情数据</div>
+      )}
+
+      {/* Announcements */}
+      {allAnns.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          {allAnns.map((a, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '12px' }}>
+              <span style={{ flexShrink: 0, fontSize: '10px', padding: '1px 5px', borderRadius: '3px',
+                background: `${DIR_COLOR[a.direction] || 'var(--text-muted)'}18`,
+                color: DIR_COLOR[a.direction] || 'var(--text-muted)', fontWeight: 500 }}>
+                {ANN_TYPE_LABEL[a.type] || a.type}
+              </span>
+              <span style={{ color: 'var(--text-secondary)', flex: 1 }}>{a.title}</span>
+              <span style={{ flexShrink: 0, fontSize: '11px', color: 'var(--text-tertiary)' }}>{a.date}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BatchAnalyzePanel({ result, onClose }: { result: BatchAnalyzeResult; onClose: () => void }) {
+  const hasAnnToday = result.stocks.some(s => s.today_announcements.length > 0);
+  const movers = [...result.stocks]
+    .filter(s => s.tech.chg_pct != null)
+    .sort((a, b) => Math.abs(b.tech.chg_pct!) - Math.abs(a.tech.chg_pct!));
+
+  return (
+    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-std)', borderRadius: '10px', marginBottom: '20px', overflow: 'hidden' }}>
+      {/* Panel header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>一键分析结果</span>
+          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{result.stocks.length} 支个股</span>
+          {result.announcement_fetched && (
+            <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px', background: 'rgba(94,106,210,0.1)', color: 'var(--accent)' }}>
+              已抓取今日公告
+            </span>
+          )}
+          {hasAnnToday && (
+            <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '3px', background: 'rgba(229,83,75,0.1)', color: '#e5534b' }}>
+              有今日公告
+            </span>
+          )}
+        </div>
+        <button onClick={onClose} style={{ fontSize: '13px', color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}>关闭</button>
+      </div>
+
+      {/* Top movers summary */}
+      {movers.length > 0 && (
+        <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', alignSelf: 'center' }}>涨跌幅排序：</span>
+          {movers.slice(0, 8).map(s => {
+            const pct = s.tech.chg_pct!;
+            const color = pct > 0 ? '#e5534b' : pct < 0 ? '#16a34a' : 'var(--text-muted)';
+            return (
+              <span key={s.stock_code} style={{ fontSize: '12px', color }}>
+                {s.stock_name} {pct > 0 ? '+' : ''}{pct}%
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Stock list */}
+      <div style={{ padding: '0 16px' }}>
+        {result.stocks.map(s => <StockAnalysisCard key={s.stock_code} item={s} />)}
+      </div>
+    </div>
+  );
+}
+
 function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClose: () => void }) {
   const overallLevel =
     result.overall_score >= 70 ? 'CRITICAL' :
@@ -596,6 +727,8 @@ export default function PositionsContent() {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<LayeredRiskResult | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeResult, setAnalyzeResult] = useState<BatchAnalyzeResult | null>(null);
 
   const { data: overviewData, isLoading: overviewLoading, isError: overviewError } = useQuery({
     queryKey: ['risk-overview'],
@@ -615,12 +748,18 @@ export default function PositionsContent() {
   const { data: marketData } = useQuery({
     queryKey: ['positions-market-data'],
     queryFn: () => positionsApi.marketData().then(r => r.data),
+    staleTime: 0,
+    refetchOnMount: true,
     refetchInterval: 5 * 60 * 1000,
   });
 
   const createMut = useMutation({
     mutationFn: (d: Parameters<typeof positionsApi.create>[0]) => positionsApi.create(d),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['positions'] }); resetForm(); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['positions'] });
+      queryClient.invalidateQueries({ queryKey: ['positions-market-data'] });
+      resetForm();
+    },
   });
 
   const updateMut = useMutation({
@@ -759,6 +898,21 @@ export default function PositionsContent() {
         <h2 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>实盘持仓</h2>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
+            disabled={analyzing}
+            onClick={async () => {
+              setAnalyzing(true);
+              setAnalyzeResult(null);
+              try {
+                const res = await positionsApi.batchAnalyze();
+                setAnalyzeResult(res.data);
+              } catch { setActionMsg('一键分析失败'); }
+              finally { setAnalyzing(false); }
+            }}
+            style={{ padding: '6px 16px', fontSize: '13px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '6px', cursor: analyzing ? 'wait' : 'pointer', opacity: analyzing ? 0.6 : 1 }}
+          >
+            {analyzing ? '分析中...' : '一键分析'}
+          </button>
+          <button
             disabled={scanning}
             onClick={async () => {
               setScanning(true);
@@ -873,6 +1027,10 @@ export default function PositionsContent() {
 
       {scanResult && (
         <RiskScanV2Panel result={scanResult} onClose={() => setScanResult(null)} />
+      )}
+
+      {analyzeResult && (
+        <BatchAnalyzePanel result={analyzeResult} onClose={() => setAnalyzeResult(null)} />
       )}
 
       {isLoading && <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>加载中...</div>}

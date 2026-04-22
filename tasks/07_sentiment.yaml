@@ -69,6 +69,22 @@ tasks:
     timeout_seconds: 300
     alert_on_failure: false
 
+  - id: positions_daily_report
+    name: "持仓个股日报生成并推送信箱"
+    module: scheduler.adapters
+    func: run_positions_daily_report
+    tags: [daily_report, daily]
+    schedule: "20:00"
+    depends_on:
+      - fetch_stock_announcements
+    params:
+      env: online
+    retry:
+      max_attempts: 2
+      delay_seconds: 120
+    timeout_seconds: 1800
+    alert_on_failure: true
+
   - id: fetch_polymarket
     name: "Polymarket 聪明钱信号"
     module: scheduler.adapters

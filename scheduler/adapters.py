@@ -695,3 +695,19 @@ def run_risk_assessment(user_id: int = 7, dry_run: bool = False, env: str = 'onl
         logger.info("[OK] risk assessment done: overall_score=%.1f level=%s saved to %s",
                     result.overall_score, result.macro.level if result.macro else '?', report_path)
         return report_path
+
+
+# ---------------------------------------------------------------------------
+# Daily position report adapter
+# ---------------------------------------------------------------------------
+
+def run_positions_daily_report(dry_run: bool = False, env: str = 'online'):
+    """Generate and deliver daily position stock report to all active users' inbox."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_positions_daily_report: would generate daily report for all users")
+        return
+
+    from strategist.daily_report.run_daily import run
+    result = run(dry_run=False)
+    logger.info("[OK] positions daily report done: %s", result)
+    return result
