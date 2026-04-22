@@ -197,12 +197,25 @@ def _get_announcements(codes: list[str], days: int = 7) -> dict:
 # ---------------------------------------------------------------------------
 
 _SYS_PROMPT = """你是一个专业的A股持仓分析助手，负责生成每日持仓个股日报。
-要求：
-1. 语言简洁专业，每支股票分析控制在3-5句话
+日报结构要求（必须严格按此顺序输出）：
+
+# 一、整体概览
+先给出当日持仓整体概况（2-4句话）：今日涨跌分布、异常量价信号、重要公告方向、整体风险提示。
+
+# 二、重点关注（L1 仓位）
+列出 level=L1 的个股，每股 4-6 句话，重点分析技术面异动和公告影响。
+
+# 三、一般关注（L2 仓位）
+列出 level=L2 的个股，每股 3-4 句话，简洁点评。
+
+# 四、观察仓位（L3 及其他）
+列出其余个股，每股 2-3 句话，只列关键信号。
+
+分析规范：
+1. 语言简洁专业，禁止使用任何 emoji 字符
 2. 公告分析要点明方向（利好/利空/中性）和影响程度
-3. 技术面重点关注异常量价（量比>2为放量，涨跌>3%为显著）
-4. 禁止使用任何 emoji 字符
-5. 禁止凭空编造数据，只分析给定数据"""
+3. 技术面重点关注异常量价（量比>2为放量，涨跌>3%为显著，持仓亏损>10%为风险警示）
+4. 禁止凭空编造数据，只分析给定数据，缺失字段标注"暂缺""""
 
 _ANN_TYPE_LABEL = {
     'reduce': '减持', 'increase': '增持', 'buyback': '回购',
@@ -213,70 +226,100 @@ _ANN_TYPE_LABEL = {
 }
 
 
+def _format_stock_block(p: dict, tech_map: dict, ann_map: dict, today: date) -> list[str]:
+    """格式化单只股票的数据块，返回行列表。"""
+    code = p['stock_code']
+    name = p['stock_name']
+    level = p['level'] or ''
+    cost = p['cost_price']
+    t = tech_map.get(code, {})
+    anns = ann_map.get(code, [])
+
+    tech_parts = []
+    if t.get('close') is not None:
+        close = t['close']
+        tech_parts.append(f'收盘价={close}')
+        if t.get('chg_pct') is not None:
+            sign = '+' if t['chg_pct'] > 0 else ''
+            tech_parts.append(f'日涨跌={sign}{t["chg_pct"]}%')
+        else:
+            tech_parts.append('日涨跌=暂缺')
+        if t.get('chg_5d_pct') is not None:
+            sign = '+' if t['chg_5d_pct'] > 0 else ''
+            tech_parts.append(f'5日涨跌={sign}{t["chg_5d_pct"]}%')
+        else:
+            tech_parts.append('5日涨跌=暂缺')
+        if t.get('vol_ratio') is not None:
+            tech_parts.append(f'量比={t["vol_ratio"]}')
+        else:
+            tech_parts.append('量比=暂缺')
+        if cost:
+            cost_pct = round((close - cost) / cost * 100, 2)
+            sign = '+' if cost_pct > 0 else ''
+            tech_parts.append(f'持仓盈亏={sign}{cost_pct}%')
+    else:
+        tech_parts.append('暂无行情数据')
+
+    lines = [
+        f'### {name}（{code}）',
+        f'技术面：{" | ".join(tech_parts)}',
+    ]
+
+    if anns:
+        today_str = today.isoformat()
+        today_anns = [a for a in anns if a['date'] == today_str]
+        recent_anns = [a for a in anns if a['date'] != today_str]
+        if today_anns:
+            lines.append(f'今日公告（{len(today_anns)}条）：')
+            for a in today_anns[:3]:
+                label = _ANN_TYPE_LABEL.get(a['type'], a['type'])
+                lines.append(f'  [{label}] {a["title"]} ({a["direction"]})')
+        if recent_anns:
+            lines.append(f'近期公告（{len(recent_anns[:3])}条）：')
+            for a in recent_anns[:3]:
+                label = _ANN_TYPE_LABEL.get(a['type'], a['type'])
+                lines.append(f'  [{label}/{a["date"]}] {a["title"]}')
+    else:
+        lines.append('公告：近7日无重大公告')
+
+    lines.append('')
+    return lines
+
+
 def _build_prompt(user_info: dict, tech_map: dict, ann_map: dict, today: date) -> str:
+    positions = user_info['positions']
+
+    # 按 level 分组
+    l1 = [p for p in positions if (p.get('level') or '').upper() == 'L1']
+    l2 = [p for p in positions if (p.get('level') or '').upper() == 'L2']
+    others = [p for p in positions if (p.get('level') or '').upper() not in ('L1', 'L2')]
+
     lines = [
         f'日期：{today.isoformat()}',
-        f'用户持仓共 {len(user_info["positions"])} 支个股，请逐一分析：',
+        f'用户持仓共 {len(positions)} 支个股（L1={len(l1)} L2={len(l2)} 其他={len(others)}），请按以下分组逐一分析：',
         '',
     ]
 
-    for p in user_info['positions']:
-        code = p['stock_code']
-        name = p['stock_name']
-        level = p['level']
-        cost = p['cost_price']
-        t = tech_map.get(code, {})
-        anns = ann_map.get(code, [])
-
-        # 技术面摘要，缺失字段明确标注"暂缺"，避免 LLM 自行推断
-        tech_parts = []
-        if t.get('close') is not None:
-            close = t['close']
-            tech_parts.append(f'收盘价={close}')
-            if t.get('chg_pct') is not None:
-                sign = '+' if t['chg_pct'] > 0 else ''
-                tech_parts.append(f'日涨跌={sign}{t["chg_pct"]}%')
-            else:
-                tech_parts.append('日涨跌=暂缺')
-            if t.get('chg_5d_pct') is not None:
-                sign = '+' if t['chg_5d_pct'] > 0 else ''
-                tech_parts.append(f'5日涨跌={sign}{t["chg_5d_pct"]}%')
-            else:
-                tech_parts.append('5日涨跌=暂缺')
-            if t.get('vol_ratio') is not None:
-                tech_parts.append(f'量比={t["vol_ratio"]}')
-            else:
-                tech_parts.append('量比=暂缺')
-            if cost:
-                cost_pct = round((close - cost) / cost * 100, 2)
-                sign = '+' if cost_pct > 0 else ''
-                tech_parts.append(f'持仓盈亏={sign}{cost_pct}%')
-        else:
-            tech_parts.append('暂无行情数据')
-
-        lines.append(f'## {name}（{code}，{level}）')
-        lines.append(f'技术面：{" | ".join(tech_parts)}')
-
-        if anns:
-            today_str = today.isoformat()
-            today_anns = [a for a in anns if a['date'] == today_str]
-            recent_anns = [a for a in anns if a['date'] != today_str]
-            if today_anns:
-                lines.append(f'今日公告（{len(today_anns)}条）：')
-                for a in today_anns[:3]:
-                    label = _ANN_TYPE_LABEL.get(a['type'], a['type'])
-                    lines.append(f'  [{label}] {a["title"]} ({a["direction"]})')
-            if recent_anns:
-                lines.append(f'近期公告（{len(recent_anns[:3])}条）：')
-                for a in recent_anns[:3]:
-                    label = _ANN_TYPE_LABEL.get(a['type'], a['type'])
-                    lines.append(f'  [{label}/{a["date"]}] {a["title"]}')
-        else:
-            lines.append('公告：近7日无重大公告')
-
+    if l1:
+        lines.append('## 重点关注（L1 仓位）')
         lines.append('')
+        for p in l1:
+            lines.extend(_format_stock_block(p, tech_map, ann_map, today))
 
-    lines.append('请为以上每支股票生成简洁的日报点评（每股3-5句话），最后给出整体持仓关注要点。')
+    if l2:
+        lines.append('## 一般关注（L2 仓位）')
+        lines.append('')
+        for p in l2:
+            lines.extend(_format_stock_block(p, tech_map, ann_map, today))
+
+    if others:
+        label = '观察仓位（L3 及其他）' if others else ''
+        lines.append(f'## {label}')
+        lines.append('')
+        for p in others:
+            lines.extend(_format_stock_block(p, tech_map, ann_map, today))
+
+    lines.append('请严格按上述日报结构（整体概览 -> 重点关注 -> 一般关注 -> 观察仓位）输出分析内容。')
     return '\n'.join(lines)
 
 

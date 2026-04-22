@@ -90,6 +90,7 @@ export default function InboxPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [filterType, setFilterType] = useState<string | undefined>(undefined);
   const [page, setPage] = useState(1);
+  const [listCollapsed, setListCollapsed] = useState(false);
 
   const { data: listData, isLoading } = useQuery({
     queryKey: ['inbox', filterType, page],
@@ -163,9 +164,27 @@ export default function InboxPage() {
           ))}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: selectedId ? '360px 1fr' : '1fr', gap: '16px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: selectedId ? (listCollapsed ? '32px 1fr' : '360px 1fr') : '1fr', gap: '16px', transition: 'grid-template-columns 0.2s ease' }}>
           {/* Message list */}
-          <div style={cardStyle}>
+          <div style={{ ...cardStyle, position: 'relative', overflow: listCollapsed ? 'hidden' : 'hidden', minWidth: listCollapsed ? '32px' : undefined }}>
+            {/* Collapse/expand toggle — only shown when a message is open */}
+            {selectedId && (
+              <button
+                onClick={() => setListCollapsed(c => !c)}
+                title={listCollapsed ? '展开列表' : '收起列表'}
+                style={{
+                  position: 'absolute', top: '8px', right: '8px', zIndex: 10,
+                  width: '20px', height: '20px', borderRadius: '4px',
+                  background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)',
+                  cursor: 'pointer', fontSize: '10px', color: 'var(--text-muted)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  padding: 0,
+                }}
+              >
+                {listCollapsed ? '›' : '‹'}
+              </button>
+            )}
+            {!listCollapsed && (<>
             {isLoading && <div style={{ padding: '20px', color: 'var(--text-muted)', fontSize: '13px' }}>加载中...</div>}
             {items.map(msg => (
               <div
@@ -201,6 +220,7 @@ export default function InboxPage() {
                 <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} style={{ fontSize: '12px', padding: '2px 8px', cursor: 'pointer', border: '1px solid var(--border-subtle)', borderRadius: '4px', background: 'var(--bg-panel)' }}>下一页</button>
               </div>
             )}
+            </>)}
           </div>
 
           {/* Message detail */}
