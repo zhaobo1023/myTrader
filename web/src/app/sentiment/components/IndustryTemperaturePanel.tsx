@@ -1217,7 +1217,7 @@ export default function IndustryTemperaturePanel() {
       <CollapsibleSection
         title="行业对数乖离率"
         subtitle="20EMA 减法版 | 30+ 中证行业主题指数"
-        defaultOpen={false}
+        defaultOpen={true}
       >
         <LogBiasCardContent />
       </CollapsibleSection>
