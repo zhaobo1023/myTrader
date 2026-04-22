@@ -85,7 +85,7 @@ async def export_positions(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """导出持仓为 CSV 文件。"""
+    """导出持仓为 CSV 文件，含最新收盘价、5日涨跌幅、持仓盈亏。"""
     query = select(UserPosition).where(UserPosition.user_id == current_user.id)
     if active_only:
         query = query.where(UserPosition.is_active == True)
@@ -96,16 +96,100 @@ async def export_positions(
     result = await db.execute(query)
     items = result.scalars().all()
 
+    # Fetch market data for all positions
+    market: dict = {}
+    if items:
+        codes = [p.stock_code for p in items]
+        cost_map = {p.stock_code: float(p.cost_price) if p.cost_price else None for p in items}
+
+        def _fetch(stock_codes):
+            from config.db import execute_query
+            placeholders = ', '.join(['%s'] * len(stock_codes))
+            data: dict = {}
+            try:
+                rows = execute_query(
+                    """
+                    SELECT sub.stock_code, sub.close_price, sub.trade_date
+                    FROM (
+                        SELECT stock_code, close_price, trade_date,
+                               ROW_NUMBER() OVER (PARTITION BY stock_code ORDER BY trade_date DESC) AS rn
+                        FROM trade_stock_daily
+                        WHERE stock_code IN ({})
+                    ) sub
+                    WHERE sub.rn = 1
+                    """.format(placeholders),
+                    tuple(stock_codes),
+                    env='online',
+                )
+                for r in rows:
+                    code = r['stock_code']
+                    close = float(r['close_price']) if r['close_price'] else None
+                    data[code] = {
+                        'close': close,
+                        'trade_date': str(r['trade_date']) if r['trade_date'] else None,
+                    }
+            except Exception as e:
+                logger.warning('[POSITIONS] export market-data latest close failed: %s', e)
+                return data
+
+            try:
+                rows = execute_query(
+                    """
+                    SELECT sub.stock_code, sub.close_price
+                    FROM (
+                        SELECT stock_code, close_price,
+                               ROW_NUMBER() OVER (PARTITION BY stock_code ORDER BY trade_date DESC) AS rn
+                        FROM trade_stock_daily
+                        WHERE stock_code IN ({})
+                    ) sub
+                    WHERE sub.rn = 6
+                    """.format(placeholders),
+                    tuple(stock_codes),
+                    env='online',
+                )
+                for r in rows:
+                    code = r['stock_code']
+                    if code in data and r['close_price'] is not None:
+                        close_5d = float(r['close_price'])
+                        data[code]['close_5d'] = close_5d
+                        close = data[code].get('close')
+                        if close is not None and close_5d > 0:
+                            data[code]['change_5d_pct'] = round((close - close_5d) / close_5d * 100, 2)
+            except Exception as e:
+                logger.warning('[POSITIONS] export market-data 5d close failed: %s', e)
+
+            for code, info in data.items():
+                cost = cost_map.get(code)
+                close = info.get('close')
+                if cost and cost > 0 and close is not None:
+                    info['cost_pct'] = round((close - cost) / cost * 100, 2)
+
+            return data
+
+        import asyncio
+        loop = asyncio.get_running_loop()
+        market = await loop.run_in_executor(None, _fetch, codes)
+
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(['股票代码', '股票名称', '仓位级别', '持股数量', '成本价', '账户', '备注', '状态', '创建时间'])
+    writer.writerow([
+        '股票代码', '股票名称', '仓位级别', '持股数量', '成本价',
+        '最新收盘价', '数据日期', '5日涨跌幅(%)', '持仓盈亏(%)',
+        '账户', '备注', '状态', '创建时间',
+    ])
     for p in items:
+        mkt = market.get(p.stock_code, {})
+        close = mkt.get('close')
         writer.writerow([
             p.stock_code,
             p.stock_name or '',
             p.level or '',
             p.shares if p.shares is not None else '',
             p.cost_price if p.cost_price is not None else '',
+            close if close is not None else '',
+            mkt.get('trade_date') or '',
+            mkt.get('change_5d_pct', ''),
+            mkt.get('cost_pct', ''),
             p.account or '',
             p.note or '',
             '持仓中' if p.is_active else '已清仓',
