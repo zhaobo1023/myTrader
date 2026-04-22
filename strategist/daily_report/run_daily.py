@@ -34,14 +34,20 @@ logger = logging.getLogger('myTrader.daily_report')
 # ---------------------------------------------------------------------------
 
 def _get_active_users_with_positions() -> list[dict]:
-    """查询所有有活跃持仓的用户及其持仓。"""
+    """
+    查询所有有活跃持仓且开启日报推送的用户及其持仓。
+    未配置通知偏好的用户视为默认开启（LEFT JOIN + COALESCE）。
+    """
     rows = execute_query(
         """
         SELECT u.id AS user_id, u.display_name, u.email,
                p.stock_code, p.stock_name, p.level, p.shares, p.cost_price
         FROM users u
         JOIN user_positions p ON p.user_id = u.id
-        WHERE p.is_active = 1 AND u.is_active = 1
+        LEFT JOIN user_notification_configs nc ON nc.user_id = u.id
+        WHERE p.is_active = 1
+          AND u.is_active = 1
+          AND COALESCE(nc.daily_report_enabled, 1) = 1
         ORDER BY u.id, p.level, p.stock_code
         """,
         env='online',
@@ -128,30 +134,50 @@ def _fetch_tech_data(codes: list[str]) -> dict:
 def _ensure_today_announcements(today: date) -> bool:
     """
     检查今日公告是否已抓取，没有则触发全市场抓取。
+    使用 announcement_fetch_lock 表的 INSERT IGNORE 保证幂等，
+    防止调度器和 API 并发重复触发。
     返回 True 表示本次触发了抓取。
     """
     today_str = today.isoformat()
     try:
-        rows = execute_query(
-            "SELECT COUNT(*) AS n FROM research_announcements WHERE ann_date = %s",
+        execute_update(
+            """CREATE TABLE IF NOT EXISTS announcement_fetch_lock (
+                fetch_date DATE NOT NULL,
+                status VARCHAR(10) NOT NULL DEFAULT 'fetching',
+                created_at DATETIME NOT NULL,
+                PRIMARY KEY (fetch_date)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+            env='online',
+        )
+        inserted = execute_update(
+            """INSERT IGNORE INTO announcement_fetch_lock (fetch_date, status, created_at)
+               VALUES (%s, 'fetching', NOW())""",
             (today_str,),
             env='online',
         )
-        if rows and rows[0]['n'] > 0:
-            logger.info(
-                '[daily_report] announcements for %s already exist (%d), skipping fetch',
-                today_str, rows[0]['n'],
-            )
+        if not inserted:
+            logger.info('[daily_report] announcements for %s already fetched/in-progress, skip', today_str)
             return False
     except Exception as e:
-        logger.warning('[daily_report] announcement check failed: %s', e)
+        logger.warning('[daily_report] announcement lock check failed: %s', e)
+        return False
 
     logger.info('[daily_report] fetching announcements for %s', today_str)
     try:
         from data_analyst.fetchers.announcement_fetcher import fetch_announcements_for_date
         fetch_announcements_for_date(today)
+        execute_update(
+            "UPDATE announcement_fetch_lock SET status='done' WHERE fetch_date=%s",
+            (today_str,),
+            env='online',
+        )
         return True
     except Exception as e:
+        execute_update(
+            "UPDATE announcement_fetch_lock SET status='error' WHERE fetch_date=%s",
+            (today_str,),
+            env='online',
+        )
         logger.warning('[daily_report] announcement fetch failed: %s', e)
         return False
 
@@ -202,7 +228,7 @@ def _build_prompt(user_info: dict, tech_map: dict, ann_map: dict, today: date) -
         t = tech_map.get(code, {})
         anns = ann_map.get(code, [])
 
-        # 技术面摘要
+        # 技术面摘要，缺失字段明确标注"暂缺"，避免 LLM 自行推断
         tech_parts = []
         if t.get('close') is not None:
             close = t['close']
@@ -210,11 +236,17 @@ def _build_prompt(user_info: dict, tech_map: dict, ann_map: dict, today: date) -
             if t.get('chg_pct') is not None:
                 sign = '+' if t['chg_pct'] > 0 else ''
                 tech_parts.append(f'日涨跌={sign}{t["chg_pct"]}%')
+            else:
+                tech_parts.append('日涨跌=暂缺')
             if t.get('chg_5d_pct') is not None:
                 sign = '+' if t['chg_5d_pct'] > 0 else ''
                 tech_parts.append(f'5日涨跌={sign}{t["chg_5d_pct"]}%')
+            else:
+                tech_parts.append('5日涨跌=暂缺')
             if t.get('vol_ratio') is not None:
                 tech_parts.append(f'量比={t["vol_ratio"]}')
+            else:
+                tech_parts.append('量比=暂缺')
             if cost:
                 cost_pct = round((close - cost) / cost * 100, 2)
                 sign = '+' if cost_pct > 0 else ''
@@ -270,7 +302,7 @@ def _send_to_inbox(user_id: int, title: str, content: str, dry_run: bool = False
         execute_update(
             """INSERT INTO inbox_messages (user_id, message_type, title, content, is_read, created_at)
                VALUES (%s, 'daily_report', %s, %s, 0, NOW())""",
-            (user_id, title[:199], content),
+            (user_id, title[:200], content),
             env='online',
         )
         logger.info('[daily_report] sent to user=%s', user_id)
@@ -339,7 +371,7 @@ def main():
         target_date = datetime.strptime(args.date, '%Y-%m-%d').date()
 
     result = run(dry_run=args.dry_run, target_date=target_date)
-    print(f'完成：{result}')
+    logger.info('[daily_report] 完成：%s', result)
 
 
 if __name__ == '__main__':

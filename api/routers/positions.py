@@ -424,11 +424,13 @@ async def batch_analyze(
     if not positions:
         return {'stocks': [], 'announcement_fetched': False}
 
-    codes = [p.stock_code for p in positions]
-    code_name = {p.stock_code: p.stock_name or p.stock_code for p in positions}
+    codes = [p.stock_code for p in positions if p.stock_code]
+    code_name = {p.stock_code: p.stock_name or p.stock_code for p in positions if p.stock_code}
+    if not codes:
+        return {'stocks': [], 'announcement_fetched': False}
 
     def _analyze(stock_codes, user_id):
-        from config.db import execute_query
+        from config.db import execute_query, execute_update
         from data_analyst.fetchers.announcement_fetcher import (
             fetch_announcements_for_date,
             get_announcements_for_codes,
@@ -496,21 +498,45 @@ async def batch_analyze(
         except Exception as e:
             logger.warning('[POSITIONS] batch-analyze tech query failed: %s', e)
 
-        # --- 当日公告检查：没有则触发全市场抓取 ---
+        # --- 当日公告检查：DB 层乐观锁防止并发重复抓取 ---
         announcement_fetched = False
         try:
-            # 检查今日是否已有公告数据（任意股票有即视为已抓取）
-            existing = execute_query(
-                "SELECT COUNT(*) AS n FROM research_announcements WHERE ann_date = %s",
+            execute_update(
+                """CREATE TABLE IF NOT EXISTS announcement_fetch_lock (
+                    fetch_date DATE NOT NULL,
+                    status VARCHAR(10) NOT NULL DEFAULT 'fetching',
+                    created_at DATETIME NOT NULL,
+                    PRIMARY KEY (fetch_date)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+                env='online',
+            )
+            # 尝试插入占位行，ON DUPLICATE KEY 保证只有第一个请求真正触发抓取
+            inserted = execute_update(
+                """INSERT IGNORE INTO announcement_fetch_lock (fetch_date, status, created_at)
+                   VALUES (%s, 'fetching', NOW())""",
                 (today_str,),
                 env='online',
             )
-            has_today = existing[0]['n'] > 0 if existing else False
-            if not has_today:
-                fetch_announcements_for_date(today)
-                announcement_fetched = True
+            if inserted:
+                # 本请求抢到锁，执行抓取
+                try:
+                    fetch_announcements_for_date(today)
+                    execute_update(
+                        "UPDATE announcement_fetch_lock SET status='done' WHERE fetch_date=%s",
+                        (today_str,),
+                        env='online',
+                    )
+                    announcement_fetched = True
+                except Exception as e:
+                    execute_update(
+                        "UPDATE announcement_fetch_lock SET status='error' WHERE fetch_date=%s",
+                        (today_str,),
+                        env='online',
+                    )
+                    logger.warning('[POSITIONS] batch-analyze announcement fetch failed: %s', e)
+            # else: 另一个请求已在处理或已完成，跳过
         except Exception as e:
-            logger.warning('[POSITIONS] batch-analyze announcement fetch failed: %s', e)
+            logger.warning('[POSITIONS] batch-analyze lock check failed: %s', e)
 
         # --- 读公告（当日 + 近7日） ---
         ann_map = get_announcements_for_codes(stock_codes, days=7)
@@ -519,17 +545,20 @@ async def batch_analyze(
 
     try:
         loop = asyncio.get_running_loop()
-        tech_map, ann_map, ann_fetched = await loop.run_in_executor(None, _analyze, codes, current_user.id)
+        task = loop.run_in_executor(None, _analyze, codes, current_user.id)
+        tech_map, ann_map, ann_fetched = await asyncio.wait_for(task, timeout=120)
+    except asyncio.TimeoutError:
+        logger.warning('[POSITIONS] batch-analyze timeout for user=%s', current_user.id)
+        raise HTTPException(status_code=504, detail='分析超时，请稍后重试')
     except Exception as exc:
         logger.error('[POSITIONS] batch-analyze failed for user=%s: %s', current_user.id, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
+    today_str = date.today().isoformat()
     stocks = []
     for code in codes:
         tech = tech_map.get(code, {})
         anns = ann_map.get(code, [])
-        # 判断公告中是否有当日新公告
-        today_str = date.today().isoformat()
         today_anns = [a for a in anns if a['date'] == today_str]
         recent_anns = [a for a in anns if a['date'] != today_str]
 

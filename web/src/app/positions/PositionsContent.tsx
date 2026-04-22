@@ -748,7 +748,7 @@ export default function PositionsContent() {
   const { data: marketData } = useQuery({
     queryKey: ['positions-market-data'],
     queryFn: () => positionsApi.marketData().then(r => r.data),
-    staleTime: 0,
+    staleTime: 30 * 1000,
     refetchOnMount: true,
     refetchInterval: 5 * 60 * 1000,
   });
