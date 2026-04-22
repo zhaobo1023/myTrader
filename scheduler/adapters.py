@@ -29,6 +29,23 @@ def run_log_bias(dry_run: bool = False, env: str = 'online'):
         run_daily(config)
 
 
+def run_log_bias_indices(dry_run: bool = False, env: str = 'online'):
+    """Adapter for strategist.log_bias.run_daily.run_daily_indices (CSI thematic indices)."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_log_bias_indices: would run CSI index log bias calculation")
+        return
+
+    from scheduler.task_logger import TaskLogger
+    from strategist.log_bias.config import LogBiasConfig
+    from strategist.log_bias.run_daily import run_daily_indices
+
+    with TaskLogger('calc_log_bias_indices', 'indicator', env=env):
+        config = LogBiasConfig()
+        config.db_env = env
+        ok_count = run_daily_indices(config)
+        logger.info("CSI index log bias: %d indices OK", ok_count)
+
+
 def run_technical_indicator_scan(dry_run: bool = False, env: str = 'online'):
     """Adapter for data_analyst.indicators.technical.TechnicalIndicatorCalculator."""
     if dry_run:
@@ -595,9 +612,10 @@ def run_dashboard_compute(dry_run: bool = False, env: str = 'online'):
         try:
             import redis
             import os
+            _env = os.environ
             r = redis.Redis(
-                host=os.getenv('REDIS_HOST', 'localhost'),
-                port=int(os.getenv('REDIS_PORT', '6379')),
+                host=_env.get('REDIS_HOST', 'localhost'),
+                port=int(_env.get('REDIS_PORT', '6379')),
                 db=0,
             )
             r.setex('market_overview:dashboard', 6 * 3600, json.dumps(result, default=str))
