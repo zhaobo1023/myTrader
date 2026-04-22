@@ -282,9 +282,25 @@ def _build_prompt(user_info: dict, tech_map: dict, ann_map: dict, today: date) -
 
 def _generate_report(prompt: str) -> str:
     try:
-        from investment_rag.embeddings.embed_model import LLMClient
-        llm = LLMClient()
-        return llm.generate(prompt, system_prompt=_SYS_PROMPT, temperature=0.5, max_tokens=4096)
+        import httpx
+        from openai import OpenAI
+        from investment_rag.config import DEFAULT_CONFIG
+        cfg = DEFAULT_CONFIG
+        client = OpenAI(
+            api_key=cfg.llm_api_key,
+            base_url=cfg.llm_base_url,
+            http_client=httpx.Client(timeout=180.0),
+        )
+        resp = client.chat.completions.create(
+            model=cfg.llm_model,
+            messages=[
+                {'role': 'system', 'content': _SYS_PROMPT},
+                {'role': 'user', 'content': prompt},
+            ],
+            temperature=0.5,
+            max_tokens=4096,
+        )
+        return resp.choices[0].message.content or ''
     except Exception as e:
         logger.error('[daily_report] LLM generate failed: %s', e)
         return f'日报生成失败：{e}'
