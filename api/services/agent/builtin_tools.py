@@ -643,3 +643,253 @@ async def switch_persona(params: dict, ctx: AgentContext) -> dict:
         "persona_name": persona["name"],
         "message": f"已切换到「{persona['name']}」分析模式。",
     }
+
+
+# ============================================================
+# T15: trade_position (action) - 加仓/减仓/清仓
+# ============================================================
+
+@builtin_tool(
+    name="trade_position",
+    description=(
+        "对用户持仓执行加仓、减仓或清仓操作，自动记录操作日志。"
+        "加仓会重算加权平均成本；减仓保留原成本；清仓关闭持仓并计算总盈亏。"
+        "使用场景：用户说'加仓XX'、'减仓XX'、'清仓XX'、'卖出XX'等。"
+        "必须先通过 query_portfolio 确认持仓存在后再调用。"
+        "参数: stock_code(必填), action(必填: add/reduce/close), price(必填), shares(减仓/加仓时必填)"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "stock_code": {
+                "type": "string",
+                "description": "股票代码，6位数字，如 '002594'",
+            },
+            "action": {
+                "type": "string",
+                "enum": ["add", "reduce", "close"],
+                "description": "操作类型：add=加仓，reduce=减仓，close=清仓",
+            },
+            "price": {
+                "type": "number",
+                "description": "成交价，必须大于0",
+            },
+            "shares": {
+                "type": "integer",
+                "description": "股数，加仓/减仓时必填；清仓时可不填",
+                "minimum": 1,
+            },
+        },
+        "required": ["stock_code", "action", "price"],
+    },
+    category="action",
+    requires_tier="free",
+)
+async def trade_position(params: dict, ctx: AgentContext) -> dict:
+    """Execute add/reduce/close trade on a position."""
+    from sqlalchemy import select
+    from api.models.user_position import UserPosition
+    from api.models.trade_operation_log import TradeOperationLog
+    import json as _json
+
+    stock_code = params.get("stock_code", "").strip()
+    action = params.get("action", "").lower()
+    price = params.get("price")
+    shares = params.get("shares")
+
+    if not stock_code:
+        return {"success": False, "error": "stock_code 不能为空"}
+    if action not in ("add", "reduce", "close"):
+        return {"success": False, "error": "action 必须是 add/reduce/close"}
+    if not price or price <= 0:
+        return {"success": False, "error": "price 必须大于 0"}
+    if action in ("add", "reduce") and not shares:
+        return {"success": False, "error": f"{action} 操作需要填写 shares 股数"}
+
+    # 查找持仓（允许带 .SH/.SZ 后缀的 stock_code）
+    base_code = stock_code.split(".")[0]
+    result = await ctx.db.execute(
+        select(UserPosition).where(
+            UserPosition.user_id == ctx.user.id,
+            UserPosition.is_active == True,
+        )
+    )
+    all_positions = result.scalars().all()
+    position = next(
+        (p for p in all_positions if (p.stock_code or "").split(".")[0] == base_code),
+        None,
+    )
+
+    if not position:
+        return {"success": False, "error": f"未找到持仓 {stock_code}，请先确认持仓存在"}
+
+    shares_before = position.shares or 0
+    cost_before = position.cost_price
+    name = position.stock_name or position.stock_code
+    pnl_pct = None
+
+    if action == "add":
+        new_shares = shares_before + shares
+        if cost_before and shares_before > 0:
+            new_cost = round(
+                (cost_before * shares_before + price * shares) / new_shares, 4
+            )
+        else:
+            new_cost = price
+        position.shares = new_shares
+        position.cost_price = new_cost
+        op_type = "add_reduce"
+        detail = f"加仓 {name} @{price} +{shares}股 新股数={new_shares}股 新成本={new_cost}"
+        before_val = _json.dumps({"shares": shares_before, "cost_price": cost_before})
+        after_val = _json.dumps({"shares": new_shares, "cost_price": new_cost})
+        summary = (
+            f"加仓成功：{name}({stock_code})\n"
+            f"- 操作：@{price} +{shares}股\n"
+            f"- 股数：{shares_before} -> {new_shares} 股\n"
+            f"- 持仓成本：{cost_before} -> {new_cost}"
+        )
+
+    elif action == "reduce":
+        if shares >= shares_before:
+            return {"success": False, "error": f"减仓股数({shares})不能大于等于持仓股数({shares_before})，如需清仓请用 close"}
+        new_shares = shares_before - shares
+        pnl_pct = round((price - cost_before) / cost_before * 100, 2) if cost_before else None
+        position.shares = new_shares
+        op_type = "add_reduce"
+        pnl_str = f"{pnl_pct:+.2f}%" if pnl_pct is not None else "暂缺"
+        detail = f"减仓 {name} @{price} -{shares}股 剩余={new_shares}股 本次盈亏={pnl_str}"
+        before_val = _json.dumps({"shares": shares_before})
+        after_val = _json.dumps({"shares": new_shares})
+        summary = (
+            f"减仓成功：{name}({stock_code})\n"
+            f"- 操作：@{price} -{shares}股\n"
+            f"- 股数：{shares_before} -> {new_shares} 股\n"
+            f"- 本次盈亏：{pnl_str}"
+        )
+
+    else:  # close
+        pnl_pct = round((price - cost_before) / cost_before * 100, 2) if cost_before else None
+        position.is_active = False
+        op_type = "close_position"
+        pnl_str = f"{pnl_pct:+.2f}%" if pnl_pct is not None else "暂缺"
+        detail = f"清仓 {name} @{price} {shares_before}股 盈亏={pnl_str}"
+        before_val = _json.dumps({"shares": shares_before, "cost_price": cost_before})
+        after_val = _json.dumps({"shares": 0, "pnl_pct": pnl_pct})
+        summary = (
+            f"清仓完成：{name}({stock_code})\n"
+            f"- 成交价：{price}，持仓成本：{cost_before}\n"
+            f"- 总盈亏：{pnl_str}"
+        )
+
+    ctx.db.add(TradeOperationLog(
+        user_id=ctx.user.id,
+        operation_type=op_type,
+        stock_code=position.stock_code,
+        stock_name=position.stock_name,
+        detail=detail,
+        before_value=before_val,
+        after_value=after_val,
+        source="agent",
+    ))
+
+    logger.info('[trade_position] user=%s action=%s stock=%s price=%s shares=%s',
+                ctx.user.id, action, stock_code, price, shares)
+
+    return {
+        "success": True,
+        "action": action,
+        "stock_code": stock_code,
+        "stock_name": name,
+        "shares_before": shares_before,
+        "shares_after": position.shares if action != "close" else 0,
+        "cost_before": cost_before,
+        "cost_after": position.cost_price if action != "close" else None,
+        "pnl_pct": pnl_pct,
+        "closed": action == "close",
+        "message": summary,
+    }
+
+
+# ============================================================
+# T16: get_trade_logs - 查询操作日志
+# ============================================================
+
+@builtin_tool(
+    name="get_trade_logs",
+    description=(
+        "查询用户的持仓操作日志（加仓、减仓、清仓、建仓记录）。"
+        "当用户询问'操作记录'、'交易日志'、'最近买卖了什么'、'XX股票的操作历史'等时使用。"
+        "参数: stock_code(可选，筛选特定股票), limit(可选，条数，默认20)"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "stock_code": {
+                "type": "string",
+                "description": "股票代码，6位数字，可选，不填则返回所有操作记录",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "返回条数，默认20，最多50",
+                "default": 20,
+                "minimum": 1,
+                "maximum": 50,
+            },
+        },
+        "required": [],
+    },
+    category="data",
+    requires_tier="free",
+)
+async def get_trade_logs(params: dict, ctx: AgentContext) -> dict:
+    """Query user's trade operation logs."""
+    from config.db import execute_query
+
+    stock_code = params.get("stock_code", "").strip()
+    limit = min(int(params.get("limit", 20)), 50)
+
+    base_code = stock_code.split(".")[0] if stock_code else ""
+
+    try:
+        if base_code:
+            rows = await _run_sync(
+                execute_query,
+                """SELECT operation_type, stock_code, stock_name, detail, created_at
+                   FROM trade_operation_logs
+                   WHERE user_id=%s AND stock_code LIKE %s
+                   ORDER BY created_at DESC LIMIT %s""",
+                (ctx.user.id, f"{base_code}%", limit),
+                env="online",
+            )
+        else:
+            rows = await _run_sync(
+                execute_query,
+                """SELECT operation_type, stock_code, stock_name, detail, created_at
+                   FROM trade_operation_logs
+                   WHERE user_id=%s
+                   ORDER BY created_at DESC LIMIT %s""",
+                (ctx.user.id, limit),
+                env="online",
+            )
+
+        OP_LABEL = {
+            "open_position": "建仓",
+            "close_position": "清仓",
+            "add_reduce": "加减仓",
+            "modify_info": "修改",
+        }
+
+        logs = []
+        for r in rows:
+            logs.append({
+                "type": OP_LABEL.get(r["operation_type"], r["operation_type"]),
+                "stock_code": r["stock_code"],
+                "stock_name": r["stock_name"],
+                "detail": r["detail"],
+                "date": str(r["created_at"])[:10],
+            })
+
+        return {"logs": logs, "total": len(logs)}
+    except Exception as e:
+        logger.error('[get_trade_logs] failed: %s', e)
+        return {"logs": [], "error": str(e)}
