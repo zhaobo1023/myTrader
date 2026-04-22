@@ -3,7 +3,7 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { positionsApi, riskApi, PositionItem, PositionMarketData, RiskOverviewData, BatchAnalyzeResult, StockAnalysis } from '@/lib/api-client';
+import { positionsApi, riskApi, PositionItem, PositionMarketData, RiskOverviewData, BatchAnalyzeResult, StockAnalysis, TradeActionResponse } from '@/lib/api-client';
 import { useAddToCandidate } from '@/hooks/useStockAdd';
 import StockSearchInput from '@/components/stock/StockSearchInput';
 import type { StockSearchResult } from '@/lib/api-client';
@@ -729,6 +729,12 @@ export default function PositionsContent() {
   const [exporting, setExporting] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeResult, setAnalyzeResult] = useState<BatchAnalyzeResult | null>(null);
+  // 加减仓弹窗状态
+  const [tradeTarget, setTradeTarget] = useState<PositionItem | null>(null);
+  const [tradeForm, setTradeForm] = useState({ action: 'add' as 'add' | 'reduce' | 'close', price: '', shares: '' });
+  const [tradeResult, setTradeResult] = useState<TradeActionResponse | null>(null);
+  const [tradeError, setTradeError] = useState<string | null>(null);
+  const [tradeLoading, setTradeLoading] = useState(false);
 
   const { data: overviewData, isLoading: overviewLoading, isError: overviewError } = useQuery({
     queryKey: ['risk-overview'],
@@ -777,6 +783,40 @@ export default function PositionsContent() {
     setEditId(null);
     setForm({ stock_code: '', stock_name: '', level: 'L2', shares: '', cost_price: '', account: '', note: '' });
   }, []);
+
+  const openTradeDialog = (p: PositionItem) => {
+    setTradeTarget(p);
+    setTradeForm({ action: 'add', price: '', shares: '' });
+    setTradeResult(null);
+    setTradeError(null);
+  };
+
+  const closeTradeDialog = () => {
+    setTradeTarget(null);
+    setTradeResult(null);
+    setTradeError(null);
+  };
+
+  const submitTrade = async () => {
+    if (!tradeTarget) return;
+    const price = parseFloat(tradeForm.price);
+    const shares = tradeForm.shares ? parseInt(tradeForm.shares) : undefined;
+    if (!price || price <= 0) { setTradeError('请输入有效成交价'); return; }
+    if (tradeForm.action !== 'close' && !shares) { setTradeError('请输入股数'); return; }
+    setTradeLoading(true);
+    setTradeError(null);
+    try {
+      const res = await positionsApi.trade(tradeTarget.id, { action: tradeForm.action, price, shares });
+      setTradeResult(res.data);
+      queryClient.invalidateQueries({ queryKey: ['positions'] });
+      queryClient.invalidateQueries({ queryKey: ['positions-market-data'] });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : '操作失败';
+      setTradeError(msg);
+    } finally {
+      setTradeLoading(false);
+    }
+  };
 
   const handleSubmit = () => {
     const payload = {
@@ -1012,6 +1052,125 @@ export default function PositionsContent() {
         </div>
       )}
 
+      {/* 加减仓弹窗 */}
+      {tradeTarget && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={e => { if (e.target === e.currentTarget) closeTradeDialog(); }}>
+          <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '24px', width: '360px', maxWidth: '92vw' }}>
+            <h3 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 4px' }}>
+              {tradeTarget.stock_name || tradeTarget.stock_code}
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 400, marginLeft: '6px' }}>{tradeTarget.stock_code}</span>
+            </h3>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+              当前持仓：{tradeTarget.shares ?? '-'} 股 · 成本 {tradeTarget.cost_price?.toFixed(2) ?? '-'}
+            </div>
+
+            {tradeResult ? (
+              /* 操作结果 */
+              <div>
+                <div style={{ padding: '12px', borderRadius: '6px', background: tradeResult.closed ? 'rgba(220,38,38,0.05)' : 'rgba(22,163,74,0.06)', border: `1px solid ${tradeResult.closed ? 'rgba(220,38,38,0.2)' : 'rgba(22,163,74,0.2)'}`, marginBottom: '16px', fontSize: '13px' }}>
+                  {tradeResult.action === 'add' && (
+                    <>
+                      <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>加仓成功</div>
+                      <div style={{ color: 'var(--text-secondary)' }}>股数：{tradeResult.shares_before} → {tradeResult.shares_after} 股</div>
+                      <div style={{ color: 'var(--text-secondary)' }}>成本：{tradeResult.cost_before?.toFixed(2)} → {tradeResult.cost_after?.toFixed(2)}</div>
+                    </>
+                  )}
+                  {tradeResult.action === 'reduce' && (
+                    <>
+                      <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>减仓成功</div>
+                      <div style={{ color: 'var(--text-secondary)' }}>股数：{tradeResult.shares_before} → {tradeResult.shares_after} 股</div>
+                      {tradeResult.pnl_pct != null && (
+                        <div style={{ color: tradeResult.pnl_pct >= 0 ? '#dc2626' : '#16a34a', fontWeight: 600 }}>
+                          本次盈亏：{tradeResult.pnl_pct > 0 ? '+' : ''}{tradeResult.pnl_pct.toFixed(2)}%
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {tradeResult.closed && (
+                    <>
+                      <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>清仓完成</div>
+                      <div style={{ color: 'var(--text-secondary)' }}>持仓已关闭</div>
+                      {tradeResult.pnl_pct != null && (
+                        <div style={{ color: tradeResult.pnl_pct >= 0 ? '#dc2626' : '#16a34a', fontWeight: 700, fontSize: '15px', marginTop: '4px' }}>
+                          总盈亏：{tradeResult.pnl_pct > 0 ? '+' : ''}{tradeResult.pnl_pct.toFixed(2)}%
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+                <button onClick={closeTradeDialog} style={{ width: '100%', padding: '8px', fontSize: '13px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>关闭</button>
+              </div>
+            ) : (
+              /* 操作表单 */
+              <div>
+                {/* 操作类型 */}
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+                  {(['add', 'reduce', 'close'] as const).map(a => (
+                    <button key={a} onClick={() => setTradeForm(f => ({ ...f, action: a }))}
+                      style={{ flex: 1, padding: '6px', fontSize: '13px', borderRadius: '6px', border: '1px solid', cursor: 'pointer',
+                        background: tradeForm.action === a ? 'var(--accent)' : 'var(--bg-canvas)',
+                        color: tradeForm.action === a ? '#fff' : 'var(--text-secondary)',
+                        borderColor: tradeForm.action === a ? 'var(--accent)' : 'var(--border-subtle)',
+                      }}>
+                      {a === 'add' ? '加仓' : a === 'reduce' ? '减仓' : '清仓'}
+                    </button>
+                  ))}
+                </div>
+
+                {/* 成交价 */}
+                <div style={{ marginBottom: '10px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>成交价</label>
+                  <input type="number" step="0.01" placeholder="请输入成交价" value={tradeForm.price}
+                    onChange={e => setTradeForm(f => ({ ...f, price: e.target.value }))}
+                    style={{ width: '100%', padding: '7px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px', boxSizing: 'border-box' }} />
+                </div>
+
+                {/* 股数（清仓时隐藏） */}
+                {tradeForm.action !== 'close' && (
+                  <div style={{ marginBottom: '10px' }}>
+                    <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                      股数{tradeForm.action === 'reduce' && tradeTarget.shares ? `（当前 ${tradeTarget.shares} 股）` : ''}
+                    </label>
+                    <input type="number" min="1" placeholder="请输入股数" value={tradeForm.shares}
+                      onChange={e => setTradeForm(f => ({ ...f, shares: e.target.value }))}
+                      style={{ width: '100%', padding: '7px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px', boxSizing: 'border-box' }} />
+                  </div>
+                )}
+
+                {/* 预计盈亏提示（减仓/清仓时实时计算） */}
+                {tradeForm.action !== 'add' && tradeForm.price && tradeTarget.cost_price && (() => {
+                  const pnl = ((parseFloat(tradeForm.price) - tradeTarget.cost_price) / tradeTarget.cost_price * 100);
+                  const color = pnl >= 0 ? '#dc2626' : '#16a34a';
+                  return (
+                    <div style={{ fontSize: '12px', color, marginBottom: '10px', padding: '6px 10px', borderRadius: '5px', background: `${color}10` }}>
+                      预计盈亏：{pnl > 0 ? '+' : ''}{pnl.toFixed(2)}%
+                    </div>
+                  );
+                })()}
+
+                {tradeError && (
+                  <div style={{ fontSize: '12px', color: '#e5534b', marginBottom: '10px' }}>{tradeError}</div>
+                )}
+
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={submitTrade} disabled={tradeLoading}
+                    style={{ flex: 1, padding: '8px', fontSize: '13px',
+                      background: tradeForm.action === 'close' ? '#dc2626' : 'var(--accent)',
+                      color: '#fff', border: 'none', borderRadius: '6px', cursor: tradeLoading ? 'wait' : 'pointer', opacity: tradeLoading ? 0.6 : 1 }}>
+                    {tradeLoading ? '提交中...' : tradeForm.action === 'add' ? '确认加仓' : tradeForm.action === 'reduce' ? '确认减仓' : '确认清仓'}
+                  </button>
+                  <button onClick={closeTradeDialog}
+                    style={{ padding: '8px 14px', fontSize: '13px', background: 'var(--bg-canvas)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', borderRadius: '6px', cursor: 'pointer' }}>
+                    取消
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* 常驻风险概览 */}
       {overviewLoading && (
         <div style={{ marginBottom: '12px', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', fontSize: '12px', color: 'var(--text-muted)' }}>
@@ -1112,6 +1271,7 @@ export default function PositionsContent() {
                       <td style={{ padding: '6px 6px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.account || '-'}</td>
                       <td style={{ padding: '6px 6px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                         <button onClick={() => startEdit(p)} style={{ fontSize: '12px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', marginRight: '6px' }}>编辑</button>
+                        <button onClick={() => openTradeDialog(p)} style={{ fontSize: '12px', color: '#16a34a', background: 'none', border: 'none', cursor: 'pointer', marginRight: '6px' }}>调仓</button>
                         <button onClick={() => quickAnalyze(p)} disabled={analyzingId === p.id}
                           style={{ fontSize: '12px', color: '#7c3aed', background: 'none', border: 'none', cursor: analyzingId === p.id ? 'default' : 'pointer', marginRight: '6px', opacity: analyzingId === p.id ? 0.5 : 1 }}>
                           {analyzingId === p.id ? '检查中...' : '分析'}

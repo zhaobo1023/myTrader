@@ -474,7 +474,20 @@ export const positionsApi = {
     downloadCsv('/api/positions/export', params || {}, 'positions.csv'),
   batchAnalyze: () =>
     apiClient.post<BatchAnalyzeResult>('/api/positions/batch-analyze'),
+  trade: (id: number, data: { action: 'add' | 'reduce' | 'close'; price: number; shares?: number }) =>
+    apiClient.post<TradeActionResponse>(`/api/positions/${id}/trade`, data),
 };
+
+export interface TradeActionResponse {
+  position_id: number;
+  action: string;
+  shares_before: number | null;
+  shares_after: number | null;
+  cost_before: number | null;
+  cost_after: number | null;
+  pnl_pct: number | null;
+  closed: boolean;
+}
 
 export interface StockTech {
   trade_date: string;

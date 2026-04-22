@@ -24,6 +24,8 @@ from api.schemas.positions import (
     PositionResponse,
     PositionListResponse,
     PositionImportRequest,
+    TradeActionRequest,
+    TradeActionResponse,
 )
 
 logger = logging.getLogger('myTrader.api')
@@ -371,6 +373,127 @@ async def delete_position(
     ))
 
     logger.info('[POSITIONS] user=%s deactivated position=%s', current_user.id, position_id)
+
+
+@router.post('/{position_id}/trade', response_model=TradeActionResponse)
+async def trade_position(
+    position_id: int,
+    req: TradeActionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    加仓/减仓/清仓操作：
+    - add：加仓，重算加权平均成本
+    - reduce：减仓，保留原成本不变
+    - close：清仓，is_active=False，计算盈亏%
+    """
+    result = await db.execute(
+        select(UserPosition).where(
+            UserPosition.id == position_id,
+            UserPosition.user_id == current_user.id,
+            UserPosition.is_active == True,
+        )
+    )
+    position = result.scalar_one_or_none()
+    if not position:
+        raise HTTPException(status_code=404, detail='Position not found')
+
+    action = req.action.lower()
+    if action not in ('add', 'reduce', 'close'):
+        raise HTTPException(status_code=400, detail='action must be add/reduce/close')
+
+    shares_before = position.shares or 0
+    cost_before = position.cost_price
+    name = position.stock_name or position.stock_code
+    pnl_pct = None
+    closed = False
+
+    if action == 'add':
+        if req.shares is None:
+            raise HTTPException(status_code=400, detail='shares required for add')
+        trade_shares = req.shares
+        new_shares = shares_before + trade_shares
+        # Weighted average cost
+        if cost_before and shares_before > 0:
+            new_cost = round(
+                (cost_before * shares_before + req.price * trade_shares) / new_shares, 4
+            )
+        else:
+            new_cost = req.price
+        position.shares = new_shares
+        position.cost_price = new_cost
+        op_type = 'add_reduce'
+        detail = _build_detail(
+            '加仓', name, position.stock_code,
+            price=f'@{req.price}', shares=f'+{trade_shares}股',
+            new_shares=f'{new_shares}股', new_cost=f'{new_cost}',
+        )
+        before_val = json.dumps({'shares': shares_before, 'cost_price': cost_before})
+        after_val = json.dumps({'shares': new_shares, 'cost_price': new_cost})
+
+    elif action == 'reduce':
+        if req.shares is None:
+            raise HTTPException(status_code=400, detail='shares required for reduce')
+        trade_shares = req.shares
+        if trade_shares >= shares_before:
+            raise HTTPException(status_code=400, detail='reduce shares must be less than current shares; use close to exit fully')
+        new_shares = shares_before - trade_shares
+        # Cost stays unchanged on reduce
+        new_cost = cost_before
+        pnl_pct = round((req.price - cost_before) / cost_before * 100, 2) if cost_before else None
+        position.shares = new_shares
+        op_type = 'add_reduce'
+        pnl_str = f' 本次盈亏={pnl_pct:+.2f}%' if pnl_pct is not None else ''
+        detail = _build_detail(
+            '减仓', name, position.stock_code,
+            price=f'@{req.price}', shares=f'-{trade_shares}股',
+            remaining=f'{new_shares}股',
+        ) + pnl_str
+        before_val = json.dumps({'shares': shares_before})
+        after_val = json.dumps({'shares': new_shares})
+
+    else:  # close
+        # Calculate P&L
+        if cost_before and cost_before > 0:
+            pnl_pct = round((req.price - cost_before) / cost_before * 100, 2)
+        position.is_active = False
+        closed = True
+        new_shares = 0
+        new_cost = cost_before
+        op_type = 'close_position'
+        pnl_str = f' 盈亏={pnl_pct:+.2f}%' if pnl_pct is not None else ''
+        detail = _build_detail(
+            '清仓', name, position.stock_code,
+            price=f'@{req.price}', shares=f'{shares_before}股',
+        ) + pnl_str
+        before_val = json.dumps({'shares': shares_before, 'cost_price': cost_before})
+        after_val = json.dumps({'shares': 0, 'pnl_pct': pnl_pct})
+
+    db.add(TradeOperationLog(
+        user_id=current_user.id,
+        operation_type=op_type,
+        stock_code=position.stock_code,
+        stock_name=position.stock_name,
+        detail=detail,
+        before_value=before_val,
+        after_value=after_val,
+        source='manual',
+    ))
+
+    logger.info('[POSITIONS] user=%s trade=%s position=%s price=%s shares=%s',
+                current_user.id, action, position_id, req.price, req.shares)
+
+    return TradeActionResponse(
+        position_id=position_id,
+        action=action,
+        shares_before=shares_before,
+        shares_after=new_shares,
+        cost_before=cost_before,
+        cost_after=new_cost,
+        pnl_pct=pnl_pct,
+        closed=closed,
+    )
 
 
 @router.post('/risk-scan')
