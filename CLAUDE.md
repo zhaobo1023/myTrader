@@ -90,6 +90,25 @@ results = execute_query("SELECT ...", env='online')              # 显式指定
 
 `.env` 关键配置：`DB_ENV=local`，`LOCAL_DB_*` / `ONLINE_DB_*` 分别配置本地和线上。
 
+### yfinance 本机抓取
+
+阿里云 ECS 访问 Yahoo Finance 会被限流/封 IP。yfinance 相关数据（全球资产 + A 股指数 fallback）需要从**本机 macOS 抓取后写入线上数据库**：
+
+```bash
+# 手动同步所有 yfinance 指标
+DB_ENV=online python scripts/yfinance_sync.py
+
+# 只同步指定指标
+DB_ENV=online python scripts/yfinance_sync.py --indicators ovx vix gvz idx_all_a
+
+# 同步最近 30 天
+DB_ENV=online python scripts/yfinance_sync.py --days 30
+```
+
+涉及指标: btc, brent_oil, spy, qqq, dia, vix, gvz, ovx, dxy, usdcny, idx_all_a, idx_sse, idx_csi300, idx_csi500。
+
+本机 crontab 每日 07:30 (工作日) 自动执行。服务器上 `fetch_macro_data_hourly` 仍正常运行 AKShare 数据源，两者互补（`ON DUPLICATE KEY UPDATE`）。
+
 ## 代码规范 [CRITICAL]
 
 ### Python 语法
@@ -111,6 +130,7 @@ results = execute_query("SELECT ...", env='online')              # 显式指定
 ## 工作规范
 
 ### 协作风格
+- **所有回复使用中文**。代码注释、变量名、commit message 可以用英文，但与用户的对话一律用中文。
 - 用户说"do it"或给出简短确认时，直接执行最明显的下一步，不要反问可以推断的内容。
 - **实现任何功能前，先列出：1) 计划修改的文件列表，2) 最小化方案描述。等待确认后再写代码。**
 - 实现大功能前确认 scope：询问"要完整版还是精简版？"，不要默认做完整实现。

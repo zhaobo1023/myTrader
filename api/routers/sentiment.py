@@ -121,10 +121,10 @@ async def get_fear_index_history(
         items = []
         for row in data:
             items.append(FearIndexResponse(
-                vix=row['vix'],
-                ovx=row['ovx'],
-                gvz=row['gvz'],
-                us10y=row['us10y'],
+                vix=float(row['vix']) if row.get('vix') is not None else None,
+                ovx=float(row['ovx']) if row.get('ovx') is not None else None,
+                gvz=float(row['gvz']) if row.get('gvz') is not None else None,
+                us10y=float(row['us10y']) if row.get('us10y') is not None else None,
                 fear_greed_score=row['fear_greed_score'],
                 market_regime=row['market_regime'],
                 vix_level=row['vix_level'],

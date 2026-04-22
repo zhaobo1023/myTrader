@@ -246,16 +246,20 @@ class FearIndexService:
 
         us10y_strategy = '数据缺失'
         if us10y is not None:
-            if us10y > 4.4:
+            if us10y > 4.8:
                 us10y_strategy = '利率偏高，看好价值股和防御板块'
-            elif us10y > 4.3:
-                us10y_strategy = '利率处于分水岭，密切关注方向选择'
+            elif us10y > 4.5:
+                us10y_strategy = '利率处于中性偏高，关注方向选择'
+            elif us10y > 4.0:
+                us10y_strategy = '利率中性，成长与价值均衡配置'
+            elif us10y > 3.5:
+                us10y_strategy = '利率偏低，资金偏好成长股'
             else:
                 us10y_strategy = '宽松预期，资金回流成长股'
 
         result = FearIndexResult(
             vix=vix,
-            ovx=None,
+            ovx=_latest('ovx'),
             gvz=_latest('gvz'),
             us10y=us10y,
             fear_greed_score=composite,

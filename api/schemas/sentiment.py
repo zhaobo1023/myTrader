@@ -11,10 +11,10 @@ from pydantic import BaseModel, Field
 
 class FearIndexResponse(BaseModel):
     """恐慌指数响应"""
-    vix: float = Field(..., description="VIX恐慌指数")
-    ovx: float = Field(..., description="OVX原油波动率")
-    gvz: float = Field(..., description="GVZ黄金波动率")
-    us10y: float = Field(..., description="美国10年期国债收益率")
+    vix: Optional[float] = Field(None, description="VIX恐慌指数")
+    ovx: Optional[float] = Field(None, description="OVX原油波动率")
+    gvz: Optional[float] = Field(None, description="GVZ黄金波动率")
+    us10y: Optional[float] = Field(None, description="美国10年期国债收益率")
     fear_greed_score: int = Field(..., description="恐慌贪婪评分0-100")
     market_regime: str = Field(..., description="市场状态")
     vix_level: str = Field(..., description="VIX级别描述")

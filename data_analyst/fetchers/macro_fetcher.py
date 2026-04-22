@@ -456,6 +456,7 @@ def fetch_index_daily(symbol: str, start_date: str) -> pd.DataFrame:
     # 需要 sh/sz 前缀；上证指数用 sh，深证/中证用 sz，部分两边都有
     _EXCHANGE_MAP = {
         '000001': 'sh', '000300': 'sh', '000905': 'sh',
+        '000985': 'sz',  # 中证全A
     }
     for prefix in [_EXCHANGE_MAP.get(symbol, 'sh'), 'sz']:
         try:
@@ -479,10 +480,27 @@ def fetch_index_daily(symbol: str, start_date: str) -> pd.DataFrame:
                 df['date'] = pd.to_datetime(df['date'])
                 df = df[['date', 'close']].rename(columns={'close': 'value'})
                 df = df[df['date'] >= start_dt]
-                if not df.empty:
+                # 校验: 指数收盘价应 > 100，否则可能返回了 PE 等非价格数据
+                if not df.empty and df['value'].iloc[-1] > 100:
                     return df
         except Exception:
             continue
+
+    # --- 尝试方案 4: yfinance (A 股指数最后 fallback) ---
+    _YF_INDEX_MAP = {
+        '000001': '000001.SS',  # 上证指数
+        '000300': '000300.SS',  # 沪深300
+        '000905': '000905.SS',  # 中证500
+        '000985': '000985.SS',  # 中证全指
+    }
+    yf_ticker = _YF_INDEX_MAP.get(symbol)
+    if yf_ticker:
+        try:
+            df = _yfinance_fallback(yf_ticker, start_date)
+            if not df.empty:
+                return df
+        except Exception:
+            pass
 
     return pd.DataFrame()
 
@@ -946,6 +964,7 @@ for _key, _ak_src, _ak_sym, _yf in [
     ('dia',       'us_index', '.DJI', 'DIA'),           # Dow Jones
     ('vix',       None,       '',     '^VIX'),           # No AKShare source
     ('gvz',       None,       '',     '^GVZ'),           # No AKShare source
+    ('ovx',       None,       '',     '^OVX'),           # OVX oil volatility
     ('dxy',       None,       '',     'DX-Y.NYB'),       # No AKShare source
 ]:
     FETCH_FUNCTIONS[_key] = _make_global_asset_fetcher(_ak_src, _ak_sym, _yf)
