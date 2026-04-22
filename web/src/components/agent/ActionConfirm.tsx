@@ -34,7 +34,7 @@ export default function ActionConfirm({ action }: { action: AgentAction }) {
           // Look up position id by stock_code, then call trade API
           const stockCode = (payload.stock_code as string || '').split('.')[0];
           const listRes = await positionsApi.list({ active_only: true });
-          const pos = listRes.items.find(
+          const pos = listRes.data.items.find(
             (p) => (p.stock_code || '').split('.')[0] === stockCode
           );
           if (!pos) throw new Error(`未找到持仓 ${payload.stock_code}`);
