@@ -4,7 +4,7 @@
 - 用户说 "/task" 或 "取下一个任务" 或 "继续"
 
 ## 任务队列位置
-/Users/zhaobo/Documents/notes/Finance/投研系统设计/tasks_myTrader.md
+/Users/zhaobo/Documents/notes/Daily/task/tasks_myTrader.md
 
 ---
 
@@ -82,6 +82,6 @@ python -m pytest <相关测试> -x -q
 ## 月末归档（说 "/task archive" 触发）
 
 1. 读取 tasks_myTrader.md 中所有 [DONE] 条目
-2. 写入 tasks_archive/myTrader-YYYY-MM.md（追加，文件头注明归档时间）
+2. 写入 /Users/zhaobo/Documents/notes/Daily/task/tasks_archive/myTrader-YYYY-MM.md（追加，文件头注明归档时间）
 3. 从 tasks_myTrader.md 中删除这些条目
 4. 输出：归档了 N 条，tasks_myTrader.md 当前剩余 M 条 TODO
