@@ -506,7 +506,7 @@ function TopBar({
 // ----------------------------------------------------------------
 // Mobile Nav (drawer)
 // ----------------------------------------------------------------
-function MobileNav({ topBar }: { topBar?: React.ReactNode }) {
+function MobileNav({ topBar, theme, onToggleTheme }: { topBar?: React.ReactNode; theme: 'dark' | 'light'; onToggleTheme: () => void }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
@@ -555,6 +555,13 @@ function MobileNav({ topBar }: { topBar?: React.ReactNode }) {
         ) : (
           <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--ink)', letterSpacing: '-0.01em' }}>myTrader</span>
         )}
+        <button
+          onClick={onToggleTheme}
+          title={theme === 'dark' ? '切换浅色' : '切换深色'}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-2)', padding: 4, display: 'flex', alignItems: 'center', flexShrink: 0 }}
+        >
+          <NavIcon name="theme" size={18} />
+        </button>
         <Link href="/inbox" style={{ color: 'var(--ink-2)', display: 'flex' }} title="信箱">
           <NavIcon name="mail" size={18} />
         </Link>
@@ -642,7 +649,7 @@ export default function AppShell({
           <Sidebar collapsed={sidebarCollapsed} onToggle={handleToggleSidebar} />
         </div>
         <div className="mt-main">
-          <MobileNav topBar={topBar} />
+          <MobileNav topBar={topBar} theme={theme} onToggleTheme={toggleTheme} />
           <div className="mt-desktop-topbar" style={{ flexDirection: 'column' }}>
             <TopBar theme={theme} onToggleTheme={toggleTheme} topBarSlot={topBar} />
           </div>

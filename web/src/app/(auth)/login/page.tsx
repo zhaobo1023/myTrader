@@ -18,7 +18,7 @@ export default function LoginPage() {
 
     try {
       await login(username, password);
-      router.push('/dashboard');
+      router.push('/sentiment');
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { detail?: string } } };
       setError(axiosErr.response?.data?.detail || '登录失败');

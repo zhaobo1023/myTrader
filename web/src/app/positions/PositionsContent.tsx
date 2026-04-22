@@ -1199,7 +1199,7 @@ export default function PositionsContent() {
         <div key={g.level} style={{ marginBottom: '24px' }}>
           <h2 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '10px' }}>{g.level} ({g.items.length})</h2>
           <div className="table-scroll" style={cardStyle}>
-            <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+            <table style={{ width: '100%', minWidth: '720px', fontSize: '13px', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '11%' }} />
                 <col style={{ width: '13%' }} />

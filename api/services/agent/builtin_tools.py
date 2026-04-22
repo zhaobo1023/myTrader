@@ -52,29 +52,35 @@ def _safe_float(val: Any) -> Any:
     requires_tier="free",
 )
 async def query_portfolio(params: dict, ctx: AgentContext) -> dict:
-    """Query user's portfolio stocks."""
+    """Query user's active positions from user_position table."""
     try:
-        from api.services.portfolio_mgmt_service import get_enriched_stocks
-        user_id = ctx.user.id
-        stocks = await _run_sync(get_enriched_stocks, user_id)
-        if not stocks:
-            return {"stocks": [], "message": "当前没有持仓数据"}
+        from sqlalchemy import select
+        from api.models.user_position import UserPosition
+        stmt = select(UserPosition).where(
+            UserPosition.user_id == ctx.user.id,
+            UserPosition.is_active == True,
+        ).order_by(UserPosition.level, UserPosition.stock_code)
+        result = await ctx.db.execute(stmt)
+        positions = result.scalars().all()
+        if not positions:
+            return {"positions": [], "message": "当前没有持仓记录"}
 
-        # Limit fields and count
-        result = []
-        for s in stocks[:30]:
-            result.append({
-                "stock_code": s.get("stock_code", ""),
-                "stock_name": s.get("stock_name", ""),
-                "position_pct": _safe_float(s.get("position_pct")),
-                "profit_27": _safe_float(s.get("profit_27")),
-                "pe": _safe_float(s.get("PE")),
-                "market_cap": _safe_float(s.get("market_cap")),
+        data = []
+        for p in positions:
+            data.append({
+                "id": p.id,
+                "stock_code": p.stock_code or "",
+                "stock_name": p.stock_name or "",
+                "level": p.level or "",
+                "shares": p.shares,
+                "cost_price": _safe_float(p.cost_price),
+                "account": p.account or "",
+                "note": p.note or "",
             })
-        return {"stocks": result, "total": len(stocks)}
+        return {"positions": data, "total": len(data)}
     except Exception as e:
         logger.error('[query_portfolio] failed: %s', e)
-        return {"stocks": [], "error": str(e)}
+        return {"positions": [], "error": str(e)}
 
 
 # ============================================================

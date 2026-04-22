@@ -3,11 +3,12 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import type { AgentAction } from '@/lib/agent-store';
-import { watchlistApi } from '@/lib/api-client';
+import { watchlistApi, positionsApi } from '@/lib/api-client';
 
 const ACTION_LABELS: Record<string, string> = {
   add_watchlist: '添加到关注列表',
   add_position: '添加到持仓',
+  trade_position: '调仓操作',
   navigate: '页面跳转',
   show_chart: '查看图表',
 };
@@ -29,6 +30,21 @@ export default function ActionConfirm({ action }: { action: AgentAction }) {
             (payload.note as string) || '',
           );
           break;
+        case 'trade_position': {
+          // Look up position id by stock_code, then call trade API
+          const stockCode = (payload.stock_code as string || '').split('.')[0];
+          const listRes = await positionsApi.list({ active_only: true });
+          const pos = listRes.items.find(
+            (p) => (p.stock_code || '').split('.')[0] === stockCode
+          );
+          if (!pos) throw new Error(`未找到持仓 ${payload.stock_code}`);
+          await positionsApi.trade(pos.id, {
+            action: payload.action as 'add' | 'reduce' | 'close',
+            price: Number(payload.price),
+            shares: payload.shares ? Number(payload.shares) : undefined,
+          });
+          break;
+        }
         case 'navigate':
           router.push(payload.path as string);
           break;
@@ -47,9 +63,11 @@ export default function ActionConfirm({ action }: { action: AgentAction }) {
   const description =
     action.action === 'add_watchlist'
       ? `${payload.stock_name || ''}(${payload.stock_code || ''})`
-      : action.action === 'navigate'
-        ? `${payload.path || ''}`
-        : JSON.stringify(payload);
+      : action.action === 'trade_position'
+        ? `${payload.stock_code || ''} · ${payload.action === 'add' ? '加仓' : payload.action === 'reduce' ? '减仓' : '清仓'} · @${payload.price}${payload.shares ? ` · ${payload.shares}股` : ''}`
+        : action.action === 'navigate'
+          ? `${payload.path || ''}`
+          : JSON.stringify(payload);
 
   return (
     <>
