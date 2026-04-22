@@ -1,87 +1,93 @@
 # Task Skill
 
 ## 触发条件
-- 用户说 "/task" 或 "取下一个任务" 或 "继续"
+- `/task` — 执行一个任务后停下，等待确认
+- `/task all` — 连续执行所有 TODO 任务，直到队列空或遇到需确认的任务
+- `/task archive` — 月末归档所有 DONE 条目
 
 ## 任务队列位置
 /Users/zhaobo/Documents/notes/Daily/task/tasks_myTrader.md
 
 ---
 
-## 执行流程
+## 单次执行流程（/task）
 
-### 步骤 1 - 读取队列，取最高优先级任务
+### 步骤 1 - 取任务
 
-读取 tasks_myTrader.md，找到第一个 [TODO] 条目（P1 优先于 P2 优先于 P3）。
+读取 tasks_myTrader.md，取优先级最高的 [TODO]（P1 > P2 > P3，同级按顺序）。
 
-如果没有 [TODO]，输出：
+无 [TODO] 时输出：
 ```
-[QUEUE EMPTY] 任务队列为空，请在 tasks_myTrader.md 中添加新任务。
-```
-然后停止。
-
-### 步骤 2 - 确认任务
-
-输出任务摘要，格式：
-```
-## 取到任务：<标题>
-- 优先级：<P1/P2/P3>
-- 描述：<描述>
-- 验收：<验收条件>
-
-开始执行...
+[QUEUE EMPTY] 队列为空，请在 tasks_myTrader.md 添加任务。
 ```
 
-将 tasks_myTrader.md 中该条目的 `[TODO]` 改为 `[DOING]`。
+### 步骤 2 - 标记并告知
 
-### 步骤 3 - 执行任务
+将该条目改为 `[DOING]`，输出：
+```
+[TASK] <标题> (P1/P2/P3)
+描述：<描述>
+验收：<验收条件>
+```
 
-**自主执行，不询问用户**（除非任务描述明确说需要确认）。
+### 步骤 3 - 自主执行
+
+**不询问用户，直接执行。** 以下情况例外（暂停并说明原因）：
+- 任务描述里明确写了"需确认"
+- 涉及不可逆操作（删表、清数据、强制覆盖生产配置）
+- 找不到关键文件且无法通过 Grep/Glob 定位
 
 执行规则：
-- 用 Glob/Grep 定位文件，不猜文件名
-- 遵守 CLAUDE.md 的所有 CRITICAL 规则
-- 涉及数据库 schema 变更，先列改动再执行
-- 涉及生产部署，使用 /deploy 技能
+- Glob/Grep 定位文件，不猜路径
+- 遵守 CLAUDE.md 所有 CRITICAL 规则
+- 涉及 DB schema 变更：先输出改动列表再执行
+- 涉及生产部署：走 /deploy 技能
 
-如果任务有验收条件且可自动验证（pytest / 语法检查），执行验证：
+有可自动验证的验收条件时执行：
 ```bash
-python -m pytest <相关测试> -x -q
+python -m pytest <相关测试> -x -q 2>&1 | tail -5
 ```
 
-### 步骤 4 - 完成，更新队列
+### 步骤 4 - 更新队列（tasks 文件只记状态，不堆日志）
 
-将 tasks_myTrader.md 中该条目改为 `[DONE]`，并追加完成信息：
+将条目移到"已完成任务"区，改为：
 ```
 ## [DONE] <标题>
-优先级：<P1/P2/P3>
-描述：<原描述>
-验收：<原验收>
-完成时间：<YYYY-MM-DD>
-结果：<一句话说明实际做了什么，或测试结果>
+优先级：P1/P2/P3
+完成：<YYYY-MM-DD>
+结果：<一句话，如 "pytest PASSED 12，commit abc1234" 或 "已部署，服务正常">
 ```
 
-将条目移动到 tasks_myTrader.md 的"已完成任务"区域。
+### 步骤 5 - 输出执行摘要（显示在 iTerm）
 
-### 步骤 5 - 报告
-
-输出执行摘要：
 ```
-## 任务完成：<标题>
-- 状态：[DONE]
-- 改动文件：<列表>
-- 验收结果：<pytest PASSED N / 人工验收>
-- commit：<commit hash 或 "未提交">
-
-队列剩余：<N> 个 TODO 任务
-说 "/task" 继续取下一个。
+[DONE] <标题>
+改动文件：<列表>
+验收：<pytest PASSED N / 人工验收>
+commit：<hash>
+队列剩余：<N> 个 TODO
 ```
 
 ---
 
-## 月末归档（说 "/task archive" 触发）
+## 连续执行模式（/task all）
+
+重复执行单次流程，每完成一个任务自动取下一个，直到：
+- 队列为空 → 输出 `[QUEUE EMPTY] 全部任务已完成`
+- 遇到需人工确认的任务 → 暂停，说明原因，等待指令
+
+每个任务之间输出分隔线：
+```
+─────────────────────────────────────
+[N/M] 完成：<上一个标题> → 开始：<下一个标题>
+─────────────────────────────────────
+```
+
+---
+
+## 月末归档（/task archive）
 
 1. 读取 tasks_myTrader.md 中所有 [DONE] 条目
-2. 写入 /Users/zhaobo/Documents/notes/Daily/task/tasks_archive/myTrader-YYYY-MM.md（追加，文件头注明归档时间）
-3. 从 tasks_myTrader.md 中删除这些条目
-4. 输出：归档了 N 条，tasks_myTrader.md 当前剩余 M 条 TODO
+2. 追加写入 `/Users/zhaobo/Documents/notes/Daily/task/tasks_archive/myTrader-YYYY-MM.md`
+3. 从 tasks_myTrader.md 删除这些条目
+4. 输出：`归档 N 条 → tasks_archive/myTrader-YYYY-MM.md，队列剩余 M 条 TODO`
