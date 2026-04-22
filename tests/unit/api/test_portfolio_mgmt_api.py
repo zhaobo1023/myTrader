@@ -23,8 +23,22 @@ from fastapi.testclient import TestClient
 
 def _build_test_app():
     from api.routers.portfolio_mgmt import router
+    from api.middleware.auth import get_current_user
+
+    # Stub user object satisfying User model attributes used in portfolio_mgmt
+    class _FakeUser:
+        id = 0
+        email = 'test@test.com'
+        display_name = 'Test'
+        is_active = True
+        is_admin = False
+
+    async def _override_auth():
+        return _FakeUser()
+
     app = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[get_current_user] = _override_auth
     return app
 
 
