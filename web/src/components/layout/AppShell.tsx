@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuthStore } from '@/lib/store';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useTrack } from '@/hooks/useTrack';
 import { NAV_PERMISSIONS, hasPermission } from '@/lib/permissions';
 import FloatingAssistant from '@/components/agent/FloatingAssistant';
@@ -137,9 +137,13 @@ function useTheme() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   useEffect(() => {
-    const saved = localStorage.getItem('mt-theme') as 'dark' | 'light' | null;
-    const current = document.documentElement.getAttribute('data-theme') as 'dark' | 'light';
-    setTheme(saved || current || 'dark');
+    try {
+      const saved = localStorage.getItem('mt-theme') as 'dark' | 'light' | null;
+      const current = document.documentElement.getAttribute('data-theme') as 'dark' | 'light';
+      setTheme(saved || current || 'dark');
+    } catch {
+      setTheme('dark');
+    }
   }, []);
 
   const toggle = useCallback(() => {

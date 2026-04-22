@@ -4,6 +4,10 @@
    Design tokens — Brand / Market / Type / Radii (global)
    ============================================================ */
 :root {
+  /* Dark defaults — overridden by [data-theme] but prevent undefined vars on SSR */
+  --bg:  oklch(0.16 0.012 260);
+  --ink: oklch(0.97 0.006 260);
+
   /* Brand — Amber/Gold */
   --brand:      oklch(0.80 0.14 78);
   --brand-soft: oklch(0.80 0.14 78 / 0.12);
