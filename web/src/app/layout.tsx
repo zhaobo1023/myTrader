@@ -35,6 +35,18 @@ export const viewport = {
   maximumScale: 1,
 };
 
+// Inline script to apply saved theme before first paint (avoids flash)
+const themeScript = `
+(function(){
+  try {
+    var t = localStorage.getItem('mt-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+  } catch(e) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+})();
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -43,9 +55,14 @@ export default function RootLayout({
   return (
     <html
       lang="zh-CN"
+      data-theme="dark"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col" style={{ background: 'var(--bg-canvas)', color: 'var(--text-primary)' }}>
+      <head>
+        {/* Blocking theme init — must run before body renders */}
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body className="min-h-full flex flex-col">
         <PostHogProvider>
           <TrackingDelegate />
           <QueryProvider>{children}</QueryProvider>
