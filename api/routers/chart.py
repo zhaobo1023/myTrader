@@ -8,9 +8,8 @@ Endpoints:
   GET /api/chart/combined/{stock_code}  - Merged K-line + indicators
 """
 import logging
-from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Path, Depends
 
 from api.middleware.auth import get_current_user
 from api.models.user import User
@@ -19,10 +18,13 @@ from api.services import chart_service as svc
 logger = logging.getLogger('myTrader.api')
 router = APIRouter(prefix='/api/chart', tags=['chart'])
 
+# Stock code pattern: 6 digits optionally followed by .SH/.SZ/.BJ
+_STOCK_CODE_PATTERN = r'^[0-9]{6}(\.(SH|SZ|BJ))?$'
+
 
 @router.get('/kline/{stock_code}')
 async def get_kline(
-    stock_code: str,
+    stock_code: str = Path(..., pattern=_STOCK_CODE_PATTERN),
     period: str = Query(default='daily', description='daily|weekly|monthly'),
     limit: int = Query(default=500, ge=30, le=2000),
     current_user: User = Depends(get_current_user),
@@ -39,7 +41,7 @@ async def get_kline(
 
 @router.get('/indicators/{stock_code}')
 async def get_indicators(
-    stock_code: str,
+    stock_code: str = Path(..., pattern=_STOCK_CODE_PATTERN),
     limit: int = Query(default=500, ge=30, le=2000),
     current_user: User = Depends(get_current_user),
 ):
@@ -53,7 +55,7 @@ async def get_indicators(
 
 @router.get('/combined/{stock_code}')
 async def get_combined(
-    stock_code: str,
+    stock_code: str = Path(..., pattern=_STOCK_CODE_PATTERN),
     period: str = Query(default='daily', description='daily|weekly|monthly'),
     limit: int = Query(default=500, ge=30, le=2000),
     current_user: User = Depends(get_current_user),

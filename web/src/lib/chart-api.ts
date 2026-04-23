@@ -47,7 +47,7 @@ export const chartApi = {
       params: { period, limit },
     }),
   indicators: (stockCode: string, limit: number = 500) =>
-    apiClient.get(`/api/chart/indicators/${stockCode}`, {
+    apiClient.get<KLineResponse>(`/api/chart/indicators/${stockCode}`, {
       params: { limit },
     }),
 };

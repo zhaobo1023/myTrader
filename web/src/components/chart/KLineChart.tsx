@@ -64,8 +64,8 @@ export default function KLineChart({ stockCode, stockName }: Props) {
         setData([]);
         return;
       }
-      // API returns DESC order, reverse to ASC for chart
-      setData([...rows].reverse());
+      // API returns chronological (ASC) order
+      setData(rows);
     } catch {
       setError('加载失败');
       setData([]);
