@@ -59,3 +59,10 @@ def run_log_bias_strategy(self):
     from scheduler.adapters import run_log_bias as _fn
     logger.info('[CELERY] run_log_bias_strategy start')
     return _fn()
+
+
+@celery_app.task(name='scheduler.adapters.run_positions_daily_report', bind=True, max_retries=1)
+def run_positions_daily_report(self):
+    from scheduler.adapters import run_positions_daily_report as _fn
+    logger.info('[CELERY] run_positions_daily_report start')
+    return _fn()

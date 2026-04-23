@@ -232,6 +232,12 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=20, minute=40, day_of_week='1-5'),
     },
 
+    # 20:50 - 持仓个股日报生成并推送信箱
+    'daily-positions-report': {
+        'task': 'scheduler.adapters.run_positions_daily_report',
+        'schedule': crontab(hour=20, minute=50, day_of_week='1-5'),
+    },
+
     # ============================================================
     # 晚间收尾
     # ============================================================
