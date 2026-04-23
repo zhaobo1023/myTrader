@@ -68,9 +68,14 @@ def run_positions_daily_report(self):
     return _fn()
 
 
-@celery_app.task(name='scheduler.adapters.fetch_stock_daily_incremental', bind=True, max_retries=1,
-                 soft_time_limit=10800, time_limit=12000)  # 3h soft / 3.3h hard
+@celery_app.task(name='scheduler.adapters.fetch_stock_daily_incremental', bind=True, max_retries=0,
+                 soft_time_limit=10800, time_limit=12000)  # 3h soft / 3.3h hard, no retry
 def fetch_stock_daily_incremental(self):
+    from celery.exceptions import SoftTimeLimitExceeded
     from scheduler.adapters import fetch_stock_daily_incremental as _fn
     logger.info('[CELERY] fetch_stock_daily_incremental start')
-    return _fn()
+    try:
+        return _fn()
+    except SoftTimeLimitExceeded:
+        logger.error('[CELERY] fetch_stock_daily_incremental: soft time limit (3h) exceeded, aborting')
+        raise

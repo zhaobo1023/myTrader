@@ -269,6 +269,7 @@ def _format_stock_block(p: dict, tech_map: dict, ann_map: dict, today: date) -> 
             sign = '+' if cost_pct > 0 else ''
             tech_parts.append(f'持仓盈亏={sign}{cost_pct}%')
     else:
+        data_stale = True
         tech_parts.append('暂无行情数据')
 
     stale_warning = ' [数据陈旧，请勿以今日行情描述]' if data_stale else ''
@@ -323,7 +324,11 @@ def _build_prompt(user_info: dict, tech_map: dict, ann_map: dict, today: date) -
         f'用户持仓共 {len(positions)} 支个股（L1={len(l1)} L2={len(l2)} 其他={len(others)}），请按以下分组逐一分析：',
     ]
     if stale_codes:
-        lines.append(f'[数据警告] 以下 {len(stale_codes)} 只股票的行情数据非今日（{today_str}），分析时必须明确标注实际数据日期，不得以"今日"描述：{", ".join(stale_codes)}')
+        stale_list = ', '.join(stale_codes)
+        lines.append(
+            f'[数据警告] 以下 {len(stale_codes)} 只股票行情非今日（{today_str}），'
+            f'分析时必须标注实际数据日期，不得以"今日"描述：{stale_list}'
+        )
     if missing_codes:
         lines.append(f'[数据缺失] 以下股票无行情数据：{", ".join(missing_codes)}，分析时标注[暂无行情数据]')
     lines.append('')
@@ -419,32 +424,38 @@ def run(dry_run: bool = False, target_date: Optional[date] = None) -> dict:
     # 技术面数据（批量一次查询）
     tech_map = _fetch_tech_data(all_codes)
 
-    # 数据质量检查：统计陈旧数据比例
+    # 数据质量检查：全局 log（方便运维排查）
     today_str = today.isoformat()
-    stale_count = sum(
+    global_stale = sum(
         1 for code in all_codes
         if tech_map.get(code, {}).get('trade_date', today_str) != today_str
         and tech_map.get(code, {}).get('trade_date')
     )
-    missing_count = sum(1 for code in all_codes if code not in tech_map)
-    if stale_count > 0 or missing_count > 0:
+    global_missing = sum(1 for code in all_codes if code not in tech_map)
+    if global_stale > 0 or global_missing > 0:
         logger.warning(
             '[daily_report] data quality: stale=%d missing=%d total=%d',
-            stale_count, missing_count, len(all_codes),
+            global_stale, global_missing, len(all_codes),
         )
 
     # 公告抓取（当日全市场，去重）
     _ensure_today_announcements(today)
     ann_map = _get_announcements(all_codes, days=7)
 
-    # 按用户生成日报
+    # 按用户生成日报（stale_count 独立计算，避免跨用户误报）
     sent = 0
-    data_note = f'[部分数据非今日，共{stale_count}只陈旧] ' if stale_count > 0 else ''
-    title = f'{data_note}持仓个股日报 {today.isoformat()}'
+    base_title = f'持仓个股日报 {today.isoformat()}'
     for user in users:
         logger.info('[daily_report] generating for user=%s (%d positions)',
                     user['user_id'], len(user['positions']))
         try:
+            user_stale = sum(
+                1 for p in user['positions']
+                if tech_map.get(p['stock_code'], {}).get('trade_date', today_str) != today_str
+                and tech_map.get(p['stock_code'], {}).get('trade_date')
+            )
+            data_note = f'[部分数据非今日，共{user_stale}只陈旧] ' if user_stale > 0 else ''
+            title = f'{data_note}{base_title}'
             prompt = _build_prompt(user, tech_map, ann_map, today)
             content = _generate_report(prompt)
             _send_to_inbox(user['user_id'], title, content, dry_run=dry_run)
