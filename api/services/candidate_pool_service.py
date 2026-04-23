@@ -10,19 +10,19 @@ Handles:
 """
 import json
 import logging
-import os
 from datetime import date, datetime, timedelta
 from typing import Optional
 
 import requests
 
 from config.db import execute_query, execute_update, execute_many
+from config.settings import CURRENT_ENV, FEISHU_WEBHOOK_URL
 
 logger = logging.getLogger('myTrader.candidate_pool')
 
-_DB_ENV = os.getenv('DB_ENV', 'online')
+_DB_ENV = CURRENT_ENV
 
-FEISHU_WEBHOOK = os.getenv('FEISHU_WEBHOOK_URL', '')
+FEISHU_WEBHOOK = FEISHU_WEBHOOK_URL
 
 ALERT_COLORS = {
     'red': '#e5534b',
@@ -60,10 +60,10 @@ def _latest_trade_date() -> str:
 # Candidate pool CRUD
 # ---------------------------------------------------------------------------
 
-def list_stocks(status: Optional[str] = None, source_type: Optional[str] = None) -> list:
+def list_stocks(user_id: int, status: Optional[str] = None, source_type: Optional[str] = None) -> list:
     """Return all candidate pool stocks with latest monitor snapshot."""
-    where = []
-    params = []
+    where = ['c.user_id = %s']
+    params = [user_id]
     if status:
         where.append('c.status = %s')
         params.append(status)
@@ -71,7 +71,7 @@ def list_stocks(status: Optional[str] = None, source_type: Optional[str] = None)
         where.append('c.source_type = %s')
         params.append(source_type)
 
-    where_sql = ('WHERE ' + ' AND '.join(where)) if where else ''
+    where_sql = 'WHERE ' + ' AND '.join(where)
 
     sql = f"""
         SELECT
@@ -141,6 +141,7 @@ def list_stocks(status: Optional[str] = None, source_type: Optional[str] = None)
 
 
 def add_stock(
+    user_id: int,
     stock_code: str,
     stock_name: str,
     source_type: str,
@@ -152,10 +153,10 @@ def add_stock(
     today = _today()
     snap_json = json.dumps(entry_snapshot or {}, ensure_ascii=False)
 
-    # Check if already in pool
+    # Check if already in pool for this user
     existing = execute_query(
-        'SELECT id, status FROM candidate_pool_stocks WHERE stock_code = %s',
-        (stock_code,), env=_DB_ENV,
+        'SELECT id, status FROM candidate_pool_stocks WHERE user_id = %s AND stock_code = %s',
+        (user_id, stock_code), env=_DB_ENV,
     )
     if existing:
         row = existing[0]
@@ -164,38 +165,39 @@ def add_stock(
                SET stock_name=%s, source_type=%s, source_detail=%s,
                    entry_snapshot=%s, add_date=%s, status='watching',
                    memo=%s, updated_at=NOW()
-               WHERE stock_code=%s''',
-            (stock_name, source_type, source_detail, snap_json, today, memo, stock_code),
+               WHERE user_id=%s AND stock_code=%s''',
+            (stock_name, source_type, source_detail, snap_json, today, memo, user_id, stock_code),
             env=_DB_ENV,
         )
         return {'action': 'updated', 'stock_code': stock_code, 'id': row['id']}
 
     execute_update(
         '''INSERT INTO candidate_pool_stocks
-           (stock_code, stock_name, source_type, source_detail,
+           (user_id, stock_code, stock_name, source_type, source_detail,
             entry_snapshot, add_date, status, memo, created_at, updated_at)
-           VALUES (%s, %s, %s, %s, %s, %s, 'watching', %s, NOW(), NOW())''',
-        (stock_code, stock_name, source_type, source_detail, snap_json, today, memo),
+           VALUES (%s, %s, %s, %s, %s, %s, %s, 'watching', %s, NOW(), NOW())''',
+        (user_id, stock_code, stock_name, source_type, source_detail, snap_json, today, memo),
         env=_DB_ENV,
     )
     rows = execute_query(
-        'SELECT id FROM candidate_pool_stocks WHERE stock_code = %s', (stock_code,), env=_DB_ENV
+        'SELECT id FROM candidate_pool_stocks WHERE user_id = %s AND stock_code = %s',
+        (user_id, stock_code), env=_DB_ENV,
     )
     new_id = rows[0]['id'] if rows else None
     return {'action': 'added', 'stock_code': stock_code, 'id': new_id}
 
 
-def update_stock(stock_code: str, status: Optional[str] = None, memo: Optional[str] = None) -> bool:
-    parts = []
-    params = []
+def update_stock(user_id: int, stock_code: str, status: Optional[str] = None, memo: Optional[str] = None) -> bool:
+    parts = ['user_id=%s']
+    params = [user_id]
     if status is not None:
         parts.append('status=%s')
         params.append(status)
     if memo is not None:
         parts.append('memo=%s')
         params.append(memo)
-    if not parts:
-        return False
+    parts.append('stock_code=%s')
+    params.append(stock_code)
     parts.append('updated_at=NOW()')
     params.append(stock_code)
     execute_update(
@@ -205,10 +207,10 @@ def update_stock(stock_code: str, status: Optional[str] = None, memo: Optional[s
     return True
 
 
-def remove_stock(stock_code: str) -> bool:
+def remove_stock(user_id: int, stock_code: str) -> bool:
     execute_update(
-        'DELETE FROM candidate_pool_stocks WHERE stock_code=%s',
-        (stock_code,), env=_DB_ENV,
+        'DELETE FROM candidate_pool_stocks WHERE user_id = %s AND stock_code = %s',
+        (user_id, stock_code), env=_DB_ENV,
     )
     return True
 

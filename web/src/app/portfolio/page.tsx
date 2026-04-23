@@ -4,19 +4,18 @@ import React, { Suspense, useState, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import AppShell from '@/components/layout/AppShell';
 import PositionsContent from '@/app/positions/PositionsContent';
-import SimPoolContent from '@/app/sim-pool/SimPoolContent';
+
 import CandidatePoolContent from '@/app/candidate-pool/CandidatePoolContent';
 import TradeLogContent from '@/app/trade-log/TradeLogContent';
 import StockSearchInput from '@/components/stock/StockSearchInput';
 import { StockSearchResult } from '@/lib/api-client';
 import { useAddToPositions, useAddToCandidate } from '@/hooks/useStockAdd';
 
-type Tab = 'positions' | 'sim' | 'candidate' | 'log';
+type Tab = 'positions' | 'candidate' | 'log';
 type AddTarget = 'positions' | 'candidate';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'positions', label: '实盘持仓' },
-  { key: 'sim', label: '模拟池' },
   { key: 'candidate', label: '候选观察' },
   { key: 'log', label: '调仓日志' },
 ];
@@ -140,15 +139,14 @@ function PortfolioInner() {
 
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState<Tab>(
-    tabParam === 'sim' ? 'sim' : 'positions'
+    tabParam === 'candidate' ? 'candidate' : 'positions'
   );
   const [selectedStock, setSelectedStock] = useState<StockSearchResult | null>(null);
   const [addTarget, setAddTarget] = useState<AddTarget>('positions');
 
   useEffect(() => {
     const t = searchParams.get('tab');
-    if (t === 'sim') setActiveTab('sim');
-    else if (t === 'candidate') setActiveTab('candidate');
+    if (t === 'candidate') setActiveTab('candidate');
     else if (t === 'log') setActiveTab('log');
     else setActiveTab('positions');
   }, [searchParams]);
@@ -222,7 +220,6 @@ function PortfolioInner() {
       </div>
 
       {activeTab === 'positions' && <PositionsContent />}
-      {activeTab === 'sim' && <SimPoolContent />}
       {activeTab === 'candidate' && <CandidatePoolContent />}
       {activeTab === 'log' && <TradeLogContent />}
     </>

@@ -6,13 +6,15 @@ import AppShell from '@/components/layout/AppShell';
 import StrategyContent from './StrategyContent';
 import ThemePoolContent from '@/app/theme-pool/ThemePoolContent';
 import IndustryStockScreener from './components/IndustryStockScreener';
+import SimPoolContent from '@/app/sim-pool/SimPoolContent';
 
-type Tab = 'preset' | 'theme' | 'industry';
+type Tab = 'preset' | 'theme' | 'industry' | 'sim';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'preset', label: 'AI选股' },
   { key: 'theme', label: '主题选股' },
   { key: 'industry', label: '行业选股' },
+  { key: 'sim', label: '模拟池' },
 ];
 
 function StrategyInner() {
@@ -28,6 +30,7 @@ function StrategyInner() {
     const t = searchParams.get('tab');
     if (t === 'theme') setActiveTab('theme');
     else if (t === 'industry') setActiveTab('industry');
+    else if (t === 'sim') setActiveTab('sim');
     else setActiveTab('preset');
   }, [searchParams]);
 
@@ -62,6 +65,7 @@ function StrategyInner() {
       {activeTab === 'preset' && <StrategyContent />}
       {activeTab === 'theme' && <ThemePoolContent />}
       {activeTab === 'industry' && <IndustryStockScreener />}
+      {activeTab === 'sim' && <SimPoolContent />}
     </>
   );
 }

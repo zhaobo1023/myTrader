@@ -19,9 +19,11 @@ Endpoints:
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 
+from api.middleware.auth import get_current_user
+from api.models.user import User
 from api.services import candidate_pool_service as svc
 
 logger = logging.getLogger('myTrader.api')
@@ -54,10 +56,11 @@ class UpdateStockRequest(BaseModel):
 async def list_stocks(
     status: Optional[str] = Query(None, description='watching|focused|excluded'),
     source_type: Optional[str] = Query(None, description='industry|strategy|manual'),
+    current_user: User = Depends(get_current_user),
 ):
     """List all candidate pool stocks with latest monitor snapshot."""
     try:
-        data = svc.list_stocks(status=status, source_type=source_type)
+        data = svc.list_stocks(current_user.id, status=status, source_type=source_type)
         return {'count': len(data), 'data': data}
     except Exception as e:
         logger.error('[candidate_pool] list_stocks error: %s', e)
@@ -65,13 +68,17 @@ async def list_stocks(
 
 
 @router.post('/stocks')
-async def add_stock(body: AddStockRequest):
+async def add_stock(
+    body: AddStockRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Add a stock to the candidate pool."""
     valid_sources = {'industry', 'strategy', 'manual'}
     if body.source_type not in valid_sources:
         raise HTTPException(status_code=400, detail=f'source_type must be one of {valid_sources}')
     try:
         result = svc.add_stock(
+            user_id=current_user.id,
             stock_code=body.stock_code,
             stock_name=body.stock_name,
             source_type=body.source_type,
@@ -86,13 +93,17 @@ async def add_stock(body: AddStockRequest):
 
 
 @router.patch('/stocks/{stock_code}')
-async def update_stock(stock_code: str, body: UpdateStockRequest):
+async def update_stock(
+    stock_code: str,
+    body: UpdateStockRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Update stock status or memo."""
     valid_statuses = {'watching', 'focused', 'excluded', None}
     if body.status not in valid_statuses:
         raise HTTPException(status_code=400, detail='Invalid status value')
     try:
-        ok = svc.update_stock(stock_code, status=body.status, memo=body.memo)
+        ok = svc.update_stock(current_user.id, stock_code, status=body.status, memo=body.memo)
         return {'success': ok}
     except Exception as e:
         logger.error('[candidate_pool] update_stock error: %s', e)
@@ -100,10 +111,13 @@ async def update_stock(stock_code: str, body: UpdateStockRequest):
 
 
 @router.delete('/stocks/{stock_code}')
-async def remove_stock(stock_code: str):
+async def remove_stock(
+    stock_code: str,
+    current_user: User = Depends(get_current_user),
+):
     """Remove a stock from the candidate pool."""
     try:
-        svc.remove_stock(stock_code)
+        svc.remove_stock(current_user.id, stock_code)
         return {'success': True, 'stock_code': stock_code}
     except Exception as e:
         logger.error('[candidate_pool] remove_stock error: %s', e)
@@ -114,6 +128,7 @@ async def remove_stock(stock_code: str):
 async def get_stock_history(
     stock_code: str,
     days: int = Query(default=30, ge=1, le=120),
+    current_user: User = Depends(get_current_user),
 ):
     """Return daily monitor history for a stock."""
     try:
@@ -129,7 +144,9 @@ async def get_stock_history(
 # ---------------------------------------------------------------------------
 
 @router.get('/industries')
-async def list_industries():
+async def list_industries(
+    current_user: User = Depends(get_current_user),
+):
     """List all available SW industry names (from AKShare)."""
     try:
         data = svc.list_industries()
@@ -145,6 +162,7 @@ async def get_industry_stocks(
     min_rps: float = Query(default=0, ge=0, le=100),
     sort_by: str = Query(default='rps_250', description='rps_250|rps_120|rps_20|rps_slope'),
     limit: int = Query(default=100, ge=1, le=500),
+    current_user: User = Depends(get_current_user),
 ):
     """Screen stocks in a given industry with RPS + price data."""
     try:
@@ -169,7 +187,9 @@ async def get_industry_stocks(
 # ---------------------------------------------------------------------------
 
 @router.post('/monitor/trigger')
-async def trigger_monitor():
+async def trigger_monitor(
+    current_user: User = Depends(get_current_user),
+):
     """Manually trigger daily monitor computation."""
     try:
         result = svc.run_daily_monitor()
@@ -180,10 +200,12 @@ async def trigger_monitor():
 
 
 @router.get('/monitor/latest')
-async def get_latest_monitor():
+async def get_latest_monitor(
+    current_user: User = Depends(get_current_user),
+):
     """Return latest monitor snapshot summary."""
     try:
-        stocks = svc.list_stocks()
+        stocks = svc.list_stocks(current_user.id)
         from collections import Counter
         alert_counts = Counter(s.get('alert_level', 'info') for s in stocks if s.get('monitor_date'))
         return {
@@ -197,7 +219,9 @@ async def get_latest_monitor():
 
 
 @router.post('/monitor/push')
-async def push_feishu():
+async def push_feishu(
+    current_user: User = Depends(get_current_user),
+):
     """Push today's monitor report to Feishu."""
     try:
         ok = svc.push_feishu_daily_report()

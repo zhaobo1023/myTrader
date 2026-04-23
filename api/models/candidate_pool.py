@@ -34,12 +34,14 @@ class AlertLevel(str, enum.Enum):
 class CandidatePoolStock(Base):
     __tablename__ = 'candidate_pool_stocks'
     __table_args__ = (
-        UniqueConstraint('stock_code', name='uq_candidate_stock_code'),
-        Index('ix_candidate_pool_stocks_source', 'source_type', 'add_date'),
-        Index('ix_candidate_pool_stocks_status', 'status'),
+        UniqueConstraint('user_id', 'stock_code', name='uq_candidate_user_stock'),
+        Index('ix_candidate_pool_stocks_user', 'user_id'),
+        Index('ix_candidate_pool_stocks_source', 'user_id', 'source_type', 'add_date'),
+        Index('ix_candidate_pool_stocks_status', 'user_id', 'status'),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False, default=0)
     stock_code = Column(String(12), nullable=False)
     stock_name = Column(String(20), nullable=False, default='')
 
