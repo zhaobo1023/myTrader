@@ -132,6 +132,12 @@ celery_app.conf.beat_schedule = {
     # 收盘后 -- 独立任务 (无依赖, 错开执行)
     # ============================================================
 
+    # 16:15 - A股日线行情增量拉取 (AKShare，约5000只，预计1-2小时)
+    'daily-stock-daily-fetch': {
+        'task': 'scheduler.adapters.fetch_stock_daily_incremental',
+        'schedule': crontab(hour=16, minute=15, day_of_week='1-5'),
+    },
+
     # 16:20 - Dashboard 数据拉取 (涨跌家数/成交额/涨跌停/两融/新高低)
     'daily-dashboard-fetch': {
         'task': 'fetch_dashboard_data',

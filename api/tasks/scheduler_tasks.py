@@ -66,3 +66,11 @@ def run_positions_daily_report(self):
     from scheduler.adapters import run_positions_daily_report as _fn
     logger.info('[CELERY] run_positions_daily_report start')
     return _fn()
+
+
+@celery_app.task(name='scheduler.adapters.fetch_stock_daily_incremental', bind=True, max_retries=1,
+                 soft_time_limit=10800, time_limit=12000)  # 3h soft / 3.3h hard
+def fetch_stock_daily_incremental(self):
+    from scheduler.adapters import fetch_stock_daily_incremental as _fn
+    logger.info('[CELERY] fetch_stock_daily_incremental start')
+    return _fn()
