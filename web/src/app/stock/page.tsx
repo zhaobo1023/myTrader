@@ -3,12 +3,13 @@
 import React, { useState, useRef, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import AppShell from '@/components/layout/AppShell';
+import KLineChart from '@/components/chart/KLineChart';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type StockTab = 'one-pager' | 'comprehensive' | 'technical' | 'fundamental' | 'news' | 'risk';
+type StockTab = 'kline' | 'one-pager' | 'comprehensive' | 'technical' | 'fundamental' | 'news' | 'risk';
 
 interface StockOption {
   stock_code: string;
@@ -60,6 +61,7 @@ interface ReportTask {
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
 const TAB_CONFIG: { key: StockTab; label: string }[] = [
+  { key: 'kline',         label: 'K线图' },
   { key: 'one-pager',     label: '一页纸研究' },
   { key: 'comprehensive', label: '综合分析' },
   { key: 'technical',     label: '技术面分析' },
@@ -70,6 +72,7 @@ const TAB_CONFIG: { key: StockTab; label: string }[] = [
 
 // Map tab -> report_type used by the unified API
 const TAB_REPORT_TYPE: Record<StockTab, string> = {
+  'kline':         '',
   'one-pager':     'one_pager',
   'comprehensive': 'five_section',
   'technical':     'technical_report',
@@ -1852,6 +1855,9 @@ function StockDetail({
       </div>
 
       <div key={stock.stock_code}>
+        {activeTab === 'kline' && (
+          <KLineChart stockCode={stock.stock_code} stockName={stock.stock_name || undefined} />
+        )}
         {activeTab === 'one-pager' && (
           <MarkdownReportTab
             stock={stock}
@@ -1983,7 +1989,7 @@ function StockPageInner() {
   const codeParam = searchParams.get('code');
 
   const [selectedStock, setSelectedStock] = useState<StockOption | null>(null);
-  const [activeTab, setActiveTab] = useState<StockTab>('one-pager');
+  const [activeTab, setActiveTab] = useState<StockTab>('kline');
   const [watchlistVersion, setWatchlistVersion] = useState(0);
 
   // If navigated with ?code=xxx, auto-select that stock
@@ -2009,7 +2015,7 @@ function StockPageInner() {
 
   const handleSelect = useCallback((s: StockOption) => {
     setSelectedStock(s);
-    setActiveTab('one-pager');
+    setActiveTab('kline');
     setWatchlistVersion((v) => v + 1);
   }, []);
 

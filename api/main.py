@@ -38,6 +38,7 @@ from api.routers.risk import router as risk_router
 from api.routers.inbox import router as inbox_router
 from api.routers.agent import router as agent_router
 from api.routers.trade_operation_log import router as trade_log_router
+from api.routers.chart import router as chart_router
 
 logger = logging.getLogger('myTrader.api')
 
@@ -156,6 +157,7 @@ app.include_router(inbox_router)
 app.include_router(documents_router)
 app.include_router(agent_router)
 app.include_router(trade_log_router)
+app.include_router(chart_router)
 
 
 @app.exception_handler(Exception)
