@@ -12,7 +12,9 @@ git reset --hard origin/main
 
 # ── 2. Graceful API reload (zero downtime) ───────────────────
 echo "[2/5] Graceful API reload via SIGHUP..."
-if docker exec mytrader-api kill -HUP 1 2>/dev/null; then
+# Use host PID namespace (slim images lack `kill` binary)
+API_PID=$(docker inspect --format="{{.State.Pid}}" mytrader-api 2>/dev/null || echo "")
+if [ -n "$API_PID" ] && kill -HUP "$API_PID" 2>/dev/null; then
   # Wait for new workers to be ready
   for i in $(seq 1 10); do
     sleep 2
