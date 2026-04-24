@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAddToPositions } from '@/hooks/useStockAdd';
-import { candidatePoolApi } from '@/lib/candidate-pool-api';
+import { candidatePoolApi, TagItem } from '@/lib/candidate-pool-api';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -19,6 +19,12 @@ interface EntrySnapshot {
   strategy_name?: string | null;
 }
 
+interface StockTag {
+  id: number;
+  name: string;
+  color: string;
+}
+
 interface CandidateStock {
   id: number;
   stock_code: string;
@@ -29,6 +35,7 @@ interface CandidateStock {
   status: 'watching' | 'focused' | 'excluded';
   memo: string | null;
   entry_snapshot: EntrySnapshot;
+  tags: StockTag[];
   // monitor
   monitor_date: string | null;
   close: number | null;
@@ -187,6 +194,9 @@ function StockRow({
   onRemove,
   onUpgrade,
   upgrading,
+  allTags,
+  onTagStock,
+  onUntagStock,
 }: {
   stock: CandidateStock;
   expanded: boolean;
@@ -195,11 +205,15 @@ function StockRow({
   onRemove: (code: string) => void;
   onUpgrade: (stock: CandidateStock, level: string) => void;
   upgrading: boolean;
+  allTags: TagItem[];
+  onTagStock: (stockId: number, tagId: number) => void;
+  onUntagStock: (stockId: number, tagId: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [memo, setMemo] = useState(stock.memo || '');
   const [saving, setSaving] = useState(false);
   const [showLevelPicker, setShowLevelPicker] = useState(false);
+  const [showTagPicker, setShowTagPicker] = useState(false);
 
   async function saveMemo() {
     setSaving(true);
@@ -216,6 +230,9 @@ function StockRow({
   const alertColor = ALERT_COLORS[stock.alert_level] || 'var(--text-muted)';
   const rowBg = stock.alert_level === 'red' ? 'rgba(229,83,75,0.03)' : 'transparent';
 
+  const taggedIds = new Set(stock.tags.map(t => t.id));
+  const untagged = allTags.filter(t => !taggedIds.has(t.id));
+
   return (
     <>
       <tr
@@ -231,6 +248,18 @@ function StockRow({
         <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
           <div style={{ fontWeight: 510, color: 'var(--text-primary)', fontSize: '13px' }}>{stock.stock_name}</div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-geist-mono)', marginTop: '1px' }}>{stock.stock_code}</div>
+          {stock.tags.length > 0 && (
+            <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap', marginTop: '3px' }}>
+              {stock.tags.map(t => (
+                <span key={t.id} style={{
+                  fontSize: '9px', padding: '1px 5px', borderRadius: '8px',
+                  color: t.color, background: `${t.color}18`, fontWeight: 510,
+                }}>
+                  {t.name}
+                </span>
+              ))}
+            </div>
+          )}
         </td>
         <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap' }}>
           <span style={{
@@ -334,6 +363,58 @@ function StockRow({
                 </button>
               </div>
 
+              {/* Tags section */}
+              <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', flexShrink: 0 }}>标签：</span>
+                {stock.tags.map(t => (
+                  <span key={t.id} style={{
+                    fontSize: '11px', padding: '2px 8px', borderRadius: '10px',
+                    color: t.color, background: `${t.color}18`, fontWeight: 510,
+                    display: 'inline-flex', alignItems: 'center', gap: '4px',
+                  }}>
+                    {t.name}
+                    <span
+                      onClick={() => onUntagStock(stock.id, t.id)}
+                      style={{ cursor: 'pointer', fontWeight: 700, fontSize: '12px', opacity: 0.6 }}
+                    >
+                      x
+                    </span>
+                  </span>
+                ))}
+                {showTagPicker ? (
+                  <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    {untagged.length > 0 ? untagged.map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => { onTagStock(stock.id, t.id); setShowTagPicker(false); }}
+                        style={{
+                          fontSize: '10px', padding: '2px 6px', borderRadius: '6px',
+                          border: `1px solid ${t.color}40`, background: 'transparent',
+                          color: t.color, cursor: 'pointer',
+                        }}
+                      >
+                        + {t.name}
+                      </button>
+                    )) : (
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>所有标签已关联</span>
+                    )}
+                    <button
+                      onClick={() => setShowTagPicker(false)}
+                      style={{ fontSize: '11px', padding: '2px 6px', borderRadius: '4px', background: 'none', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', cursor: 'pointer' }}
+                    >
+                      取消
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowTagPicker(true)}
+                    style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', background: 'transparent', border: '1px dashed var(--border-subtle)', color: 'var(--text-muted)', cursor: 'pointer' }}
+                  >
+                    + 添加标签
+                  </button>
+                )}
+              </div>
+
               {/* Entry snapshot */}
               <div style={{ padding: '10px 16px', display: 'flex', gap: '24px', flexWrap: 'wrap', borderBottom: '1px solid var(--border-subtle)', fontSize: '12px' }}>
                 <div>
@@ -410,18 +491,33 @@ export default function CandidatePoolContent() {
   const [loading, setLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [filterSource, setFilterSource] = useState<string>('');
+  const [filterTagId, setFilterTagId] = useState<number | ''>('');
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
   const [triggering, setTriggering] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [upgradingCode, setUpgradingCode] = useState<string | null>(null);
+  const [allTags, setAllTags] = useState<TagItem[]>([]);
+  const [showCreateTag, setShowCreateTag] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagColor, setNewTagColor] = useState('#5e6ad2');
+
+  const loadTags = useCallback(async () => {
+    try {
+      const res = await candidatePoolApi.listTags();
+      setAllTags((res.data as { data?: TagItem[] }).data || []);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const loadStocks = useCallback(async () => {
     setLoading(true);
     try {
-      const params: { status?: string; source_type?: string } = {};
+      const params: { status?: string; source_type?: string; tag_id?: number } = {};
       if (filterStatus) params.status = filterStatus;
       if (filterSource) params.source_type = filterSource;
+      if (filterTagId) params.tag_id = filterTagId;
       const res = await candidatePoolApi.list(params);
       setStocks((res.data as { data?: CandidateStock[] }).data || []);
     } catch {
@@ -429,8 +525,9 @@ export default function CandidatePoolContent() {
     } finally {
       setLoading(false);
     }
-  }, [filterStatus, filterSource]);
+  }, [filterStatus, filterSource, filterTagId]);
 
+  useEffect(() => { loadTags(); }, [loadTags]);
   useEffect(() => { loadStocks(); }, [loadStocks]);
 
   async function handleStatusChange(code: string, status: string) {
@@ -506,6 +603,49 @@ export default function CandidatePoolContent() {
       setActionMsg('推送请求失败');
     } finally {
       setPushing(false);
+    }
+  }
+
+  async function handleCreateTag() {
+    if (!newTagName.trim()) return;
+    try {
+      await candidatePoolApi.createTag(newTagName.trim(), newTagColor);
+      setShowCreateTag(false);
+      setNewTagName('');
+      setNewTagColor('#5e6ad2');
+      loadTags();
+    } catch {
+      setActionMsg('创建标签失败');
+    }
+  }
+
+  async function handleDeleteTag(tagId: number) {
+    if (!confirm('确认删除此标签？将解除所有关联。')) return;
+    try {
+      await candidatePoolApi.deleteTag(tagId);
+      loadTags();
+      if (filterTagId === tagId) setFilterTagId('');
+      loadStocks();
+    } catch {
+      setActionMsg('删除标签失败');
+    }
+  }
+
+  async function handleTagStock(stockId: number, tagId: number) {
+    try {
+      await candidatePoolApi.tagStock(stockId, tagId);
+      loadStocks();
+    } catch {
+      setActionMsg('关联标签失败');
+    }
+  }
+
+  async function handleUntagStock(stockId: number, tagId: number) {
+    try {
+      await candidatePoolApi.untagStock(stockId, tagId);
+      loadStocks();
+    } catch {
+      setActionMsg('解除标签失败');
     }
   }
 
@@ -614,7 +754,65 @@ export default function CandidatePoolContent() {
           <option value='strategy'>策略</option>
           <option value='manual'>手动</option>
         </select>
+        <select value={filterTagId} onChange={e => setFilterTagId(e.target.value ? Number(e.target.value) : '')} style={selectStyle}>
+          <option value=''>全部标签</option>
+          {allTags.map(t => (
+            <option key={t.id} value={t.id}>{t.name} ({t.stock_count ?? 0})</option>
+          ))}
+        </select>
         <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>共 {displayed.length} 只</span>
+        <div style={{ flex: 1 }} />
+        {/* Tag management */}
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {allTags.map(t => (
+            <span key={t.id} style={{
+              fontSize: '11px', padding: '2px 8px', borderRadius: '10px',
+              color: t.color, background: `${t.color}18`, fontWeight: 510,
+              display: 'inline-flex', alignItems: 'center', gap: '4px',
+            }}>
+              {t.name}
+              <span
+                onClick={() => handleDeleteTag(t.id)}
+                style={{ cursor: 'pointer', fontWeight: 700, fontSize: '11px', opacity: 0.5 }}
+                title='删除标签'
+              >
+                x
+              </span>
+            </span>
+          ))}
+          {showCreateTag ? (
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+              <input
+                value={newTagName}
+                onChange={e => setNewTagName(e.target.value)}
+                placeholder='标签名'
+                maxLength={20}
+                style={{ fontSize: '11px', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border-subtle)', background: 'var(--bg-input)', color: 'var(--text-primary)', width: '70px' }}
+                autoFocus
+                onKeyDown={e => { if (e.key === 'Enter') handleCreateTag(); }}
+              />
+              <input
+                type='color'
+                value={newTagColor}
+                onChange={e => setNewTagColor(e.target.value)}
+                style={{ width: '22px', height: '22px', border: 'none', padding: 0, cursor: 'pointer', borderRadius: '4px' }}
+              />
+              <button onClick={handleCreateTag} style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer' }}>
+                创建
+              </button>
+              <button onClick={() => { setShowCreateTag(false); setNewTagName(''); }} style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: 'transparent', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                取消
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowCreateTag(true)}
+              style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', background: 'transparent', border: '1px dashed var(--border-subtle)', color: 'var(--text-muted)', cursor: 'pointer' }}
+            >
+              + 新标签
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}
@@ -653,6 +851,9 @@ export default function CandidatePoolContent() {
                     onRemove={handleRemove}
                     onUpgrade={handleUpgrade}
                     upgrading={upgradingCode === stock.stock_code}
+                    allTags={allTags}
+                    onTagStock={handleTagStock}
+                    onUntagStock={handleUntagStock}
                   />
                 ))}
               </tbody>
