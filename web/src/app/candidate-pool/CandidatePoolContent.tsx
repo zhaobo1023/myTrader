@@ -519,6 +519,7 @@ export default function CandidatePoolContent() {
   const [filterSource, setFilterSource] = useState<string>(() => loadPrefs().filterSource);
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
   const [upgradingCode, setUpgradingCode] = useState<string | null>(null);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   // Persist filter preferences
   useEffect(() => {
@@ -626,6 +627,18 @@ export default function CandidatePoolContent() {
 
   return (
     <>
+      {/* Action feedback toast */}
+      {actionMsg && (
+        <div style={{
+          position: 'fixed', top: '16px', right: '16px', zIndex: 9999,
+          padding: '8px 16px', borderRadius: '6px', fontSize: '13px',
+          background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)',
+          color: 'var(--text-primary)', boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+        }}>
+          {actionMsg}
+        </div>
+      )}
+
       {/* Header */}
       <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
         <div>

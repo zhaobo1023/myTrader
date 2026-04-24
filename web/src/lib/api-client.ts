@@ -434,6 +434,15 @@ export interface PositionMarketData {
   cost_pct?: number;
 }
 
+export interface MarketDataFreshness {
+  expected_date: string;
+  is_market_hours: boolean;
+  is_after_close: boolean;
+  data_ready: boolean;
+  stale_count: number;
+  total_count: number;
+}
+
 // 通用 CSV 下载工具：从后端拿 blob 并触发浏览器下载
 export async function downloadCsv(path: string, params: Record<string, unknown>, filename: string) {
   const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
@@ -470,6 +479,8 @@ export const positionsApi = {
     apiClient.post<{ created: number; skipped: number }>('/api/positions/import', { items }),
   marketData: () =>
     apiClient.get<Record<string, PositionMarketData>>('/api/positions/market-data'),
+  marketDataFreshness: () =>
+    apiClient.get<MarketDataFreshness>('/api/positions/market-data/freshness'),
   export: (params?: { level?: string; active_only?: boolean }) =>
     downloadCsv('/api/positions/export', params || {}, 'positions.csv'),
   batchAnalyze: () =>
@@ -592,13 +603,20 @@ export interface TradeLogItem {
 }
 
 export const tradeLogApi = {
-  list: (params?: { operation_type?: string; from_date?: string; to_date?: string; page?: number; page_size?: number }) =>
+  list: (params?: { operation_type?: string; from_date?: string; to_date?: string; stock_code?: string; page?: number; page_size?: number }) =>
     apiClient.get<{ items: TradeLogItem[]; total: number }>('/api/trade-logs', { params }),
   create: (data: { stock_code?: string; stock_name?: string; detail?: string }) =>
     apiClient.post<TradeLogItem>('/api/trade-logs', data),
-  stats: (days?: number) =>
-    apiClient.get<{ period_days: number; total: number; by_type: Record<string, number> }>('/api/trade-logs/stats', { params: { days } }),
-  export: (params?: { operation_type?: string; from_date?: string; to_date?: string }) =>
+  stats: (params?: { days?: number; stock_code?: string }) =>
+    apiClient.get<{
+      period_days: number;
+      stock_code: string | null;
+      total: number;
+      by_type: Record<string, number>;
+      top_stocks: { stock_code: string; stock_name: string; total: number; open: number; close: number; add_reduce: number }[];
+      close_summary: { count: number; stocks: [string, string][] };
+    }>('/api/trade-logs/stats', { params }),
+  export: (params?: { operation_type?: string; from_date?: string; to_date?: string; stock_code?: string }) =>
     downloadCsv('/api/trade-logs/export', params || {}, 'trade_logs.csv'),
 };
 

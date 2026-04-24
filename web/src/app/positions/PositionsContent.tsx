@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { positionsApi, riskApi, PositionItem, PositionMarketData, RiskOverviewData, BatchAnalyzeResult, StockAnalysis, TradeActionResponse } from '@/lib/api-client';
+import { positionsApi, riskApi, PositionItem, PositionMarketData, MarketDataFreshness, RiskOverviewData, BatchAnalyzeResult, StockAnalysis, TradeActionResponse } from '@/lib/api-client';
 import { useAddToCandidate } from '@/hooks/useStockAdd';
 import StockSearchInput from '@/components/stock/StockSearchInput';
 import type { StockSearchResult } from '@/lib/api-client';
@@ -759,6 +759,39 @@ export default function PositionsContent() {
     refetchInterval: 5 * 60 * 1000,
   });
 
+  // -- Market data freshness check (once per session, avoids repeated calls) --
+  const FRESHNESS_KEY = 'positions_freshness_checked';
+  const [freshness, setFreshness] = useState<MarketDataFreshness | null>(null);
+  const freshnessChecked = useRef(false);
+
+  useEffect(() => {
+    if (freshnessChecked.current) return;
+    try {
+      const cached = sessionStorage.getItem(FRESHNESS_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        // Invalidate cache if older than 30 minutes
+        if (parsed._ts && Date.now() - parsed._ts < 30 * 60 * 1000) {
+          setFreshness(parsed);
+          freshnessChecked.current = true;
+          return;
+        }
+      }
+    } catch { /* ignore */ }
+    freshnessChecked.current = true;
+    positionsApi.marketDataFreshness().then(r => {
+      const result = { ...r.data, _ts: Date.now() };
+      setFreshness(result);
+      try { sessionStorage.setItem(FRESHNESS_KEY, JSON.stringify(result)); } catch { /* ignore */ }
+      // If data is stale, refetch market data after a short delay (pipeline may be running)
+      if (!r.data.data_ready && r.data.is_after_close) {
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ['positions-market-data'] });
+        }, 60_000);
+      }
+    }).catch(() => { /* silent - non-critical */ });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const createMut = useMutation({
     mutationFn: (d: Parameters<typeof positionsApi.create>[0]) => positionsApi.create(d),
     onSuccess: () => {
@@ -933,7 +966,7 @@ export default function PositionsContent() {
   };
 
   return (
-    <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+    <div style={{ margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <h2 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>实盘持仓</h2>
         <div style={{ display: 'flex', gap: '8px' }}>
@@ -988,35 +1021,50 @@ export default function PositionsContent() {
         </div>
       </div>
 
-      {/* Add/Edit Form */}
-      {showAdd && (
+      {/* Data freshness banner */}
+      {freshness && !freshness.data_ready && freshness.is_after_close && (
+        <div style={{
+          padding: '8px 14px', marginBottom: '12px', borderRadius: '6px',
+          background: 'color-mix(in srgb, var(--accent) 10%, transparent)',
+          border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)',
+          fontSize: '12px', color: 'var(--text-secondary)',
+        }}>
+          [DATA] 行情数据更新中 -- {freshness.stale_count}/{freshness.total_count} 只个股数据尚未更新至 {freshness.expected_date}，数据将在流水线完成后自动刷新
+        </div>
+      )}
+      {freshness && freshness.is_market_hours && (
+        <div style={{
+          padding: '8px 14px', marginBottom: '12px', borderRadius: '6px',
+          background: 'color-mix(in srgb, #16a34a 8%, transparent)',
+          border: '1px solid color-mix(in srgb, #16a34a 25%, transparent)',
+          fontSize: '12px', color: 'var(--text-secondary)',
+        }}>
+          [LIVE] 当前为交易时段，行情数据展示为上一交易日收盘价，盘后将自动更新
+        </div>
+      )}
+
+      {/* Add Form (inline, only for new positions) */}
+      {showAdd && !editId && (
         <div style={{ ...cardStyle, marginBottom: '20px' }}>
           <h3 style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '12px' }}>
-            {editId ? '编辑持仓' : '添加持仓'}
+            添加持仓
           </h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '10px' }}>
-            {/* Stock search / display */}
-            {editId ? (
-              <div style={{ padding: '6px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px', background: 'var(--bg-canvas)', color: 'var(--text-muted)' }}>
-                {form.stock_name ? `${form.stock_name} (${form.stock_code})` : form.stock_code}
+            {form.stock_code ? (
+              <div
+                onClick={() => setForm({ ...form, stock_code: '', stock_name: '' })}
+                title="点击重新选择"
+                style={{ padding: '6px 10px', fontSize: '13px', border: '1px solid var(--accent)', borderRadius: '6px', background: 'color-mix(in srgb, var(--accent) 8%, transparent)', color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+              >
+                <span>{form.stock_name ? `${form.stock_name} ${form.stock_code}` : form.stock_code}</span>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>x</span>
               </div>
             ) : (
-              form.stock_code ? (
-                <div
-                  onClick={() => setForm({ ...form, stock_code: '', stock_name: '' })}
-                  title="点击重新选择"
-                  style={{ padding: '6px 10px', fontSize: '13px', border: '1px solid var(--accent)', borderRadius: '6px', background: 'color-mix(in srgb, var(--accent) 8%, transparent)', color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-                >
-                  <span>{form.stock_name ? `${form.stock_name} ${form.stock_code}` : form.stock_code}</span>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>x</span>
-                </div>
-              ) : (
-                <StockSearchInput
-                  placeholder="搜索股票代码或名称"
-                  width="100%"
-                  onSelect={(s: StockSearchResult) => setForm({ ...form, stock_code: s.stock_code, stock_name: s.stock_name })}
-                />
-              )
+              <StockSearchInput
+                placeholder="搜索股票代码或名称"
+                width="100%"
+                onSelect={(s: StockSearchResult) => setForm({ ...form, stock_code: s.stock_code, stock_name: s.stock_name })}
+              />
             )}
             <select value={form.level} onChange={e => setForm({ ...form, level: e.target.value })}
               style={{ padding: '6px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px' }}>
@@ -1034,14 +1082,72 @@ export default function PositionsContent() {
           <div style={{ marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
             <button
               onClick={handleSubmit}
-              disabled={!form.stock_code || createMut.isPending || updateMut.isPending}
+              disabled={!form.stock_code || createMut.isPending}
               style={{ padding: '6px 16px', fontSize: '13px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '6px', cursor: form.stock_code ? 'pointer' : 'not-allowed', opacity: form.stock_code ? 1 : 0.5 }}
             >
-              {(createMut.isPending || updateMut.isPending) ? '保存中...' : (editId ? '保存' : '添加')}
+              {createMut.isPending ? '保存中...' : '添加'}
             </button>
             <button onClick={resetForm} style={{ padding: '6px 16px', fontSize: '13px', background: 'var(--bg-canvas)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', borderRadius: '6px', cursor: 'pointer' }}>
               取消
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Modal */}
+      {editId && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={e => { if (e.target === e.currentTarget) resetForm(); }}
+        >
+          <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '24px', width: '420px', maxWidth: '92vw' }}>
+            <h3 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 16px' }}>
+              编辑持仓
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 400, marginLeft: '8px' }}>
+                {form.stock_name ? `${form.stock_name} (${form.stock_code})` : form.stock_code}
+              </span>
+            </h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>级别</label>
+                <select value={form.level} onChange={e => setForm({ ...form, level: e.target.value })}
+                  style={{ width: '100%', padding: '7px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px', boxSizing: 'border-box' }}>
+                  {LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>股数</label>
+                <input placeholder="股数" type="number" value={form.shares} onChange={e => setForm({ ...form, shares: e.target.value })}
+                  style={{ width: '100%', padding: '7px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px', boxSizing: 'border-box' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>成本价</label>
+                <input placeholder="成本价" type="number" step="0.01" value={form.cost_price} onChange={e => setForm({ ...form, cost_price: e.target.value })}
+                  style={{ width: '100%', padding: '7px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px', boxSizing: 'border-box' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>账户</label>
+                <input placeholder="账户" value={form.account} onChange={e => setForm({ ...form, account: e.target.value })}
+                  style={{ width: '100%', padding: '7px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px', boxSizing: 'border-box' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>备注</label>
+                <input placeholder="备注" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })}
+                  style={{ width: '100%', padding: '7px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px', boxSizing: 'border-box' }} />
+              </div>
+            </div>
+            <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
+              <button
+                onClick={handleSubmit}
+                disabled={!form.stock_code || updateMut.isPending}
+                style={{ flex: 1, padding: '8px', fontSize: '13px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', opacity: updateMut.isPending ? 0.6 : 1 }}
+              >
+                {updateMut.isPending ? '保存中...' : '保存'}
+              </button>
+              <button onClick={resetForm} style={{ padding: '8px 14px', fontSize: '13px', background: 'var(--bg-canvas)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', borderRadius: '6px', cursor: 'pointer' }}>
+                取消
+              </button>
+            </div>
           </div>
         </div>
       )}

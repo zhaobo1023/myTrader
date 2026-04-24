@@ -134,6 +134,35 @@ async def export_positions(
                 logger.warning('[POSITIONS] export market-data latest close failed: %s', e)
                 return data
 
+            # ETF latest close (codes missing from trade_stock_daily)
+            etf_codes = [c for c in stock_codes if c not in data]
+            if etf_codes:
+                etf_ph = ', '.join(['%s'] * len(etf_codes))
+                try:
+                    rows = execute_query(
+                        """
+                        SELECT sub.fund_code, sub.close_price, sub.trade_date
+                        FROM (
+                            SELECT fund_code, close_price, trade_date,
+                                   ROW_NUMBER() OVER (PARTITION BY fund_code ORDER BY trade_date DESC) AS rn
+                            FROM trade_etf_daily
+                            WHERE fund_code IN ({})
+                        ) sub
+                        WHERE sub.rn = 1
+                        """.format(etf_ph),
+                        tuple(etf_codes),
+                        env='online',
+                    )
+                    for r in rows:
+                        code = r['fund_code']
+                        close = float(r['close_price']) if r['close_price'] else None
+                        data[code] = {
+                            'close': close,
+                            'trade_date': str(r['trade_date']) if r['trade_date'] else None,
+                        }
+                except Exception as e:
+                    logger.warning('[POSITIONS] export market-data ETF latest close failed: %s', e)
+
             try:
                 rows = execute_query(
                     """
@@ -159,6 +188,36 @@ async def export_positions(
                             data[code]['change_5d_pct'] = round((close - close_5d) / close_5d * 100, 2)
             except Exception as e:
                 logger.warning('[POSITIONS] export market-data 5d close failed: %s', e)
+
+            # ETF 5-day close
+            etf_codes_in_data = [c for c in etf_codes if c in data and 'change_5d_pct' not in data[c]]
+            if etf_codes_in_data:
+                etf_ph2 = ', '.join(['%s'] * len(etf_codes_in_data))
+                try:
+                    rows = execute_query(
+                        """
+                        SELECT sub.fund_code, sub.close_price
+                        FROM (
+                            SELECT fund_code, close_price,
+                                   ROW_NUMBER() OVER (PARTITION BY fund_code ORDER BY trade_date DESC) AS rn
+                            FROM trade_etf_daily
+                            WHERE fund_code IN ({})
+                        ) sub
+                        WHERE sub.rn = 6
+                        """.format(etf_ph2),
+                        tuple(etf_codes_in_data),
+                        env='online',
+                    )
+                    for r in rows:
+                        code = r['fund_code']
+                        if code in data and r['close_price'] is not None:
+                            close_5d = float(r['close_price'])
+                            data[code]['close_5d'] = close_5d
+                            close = data[code].get('close')
+                            if close is not None and close_5d > 0:
+                                data[code]['change_5d_pct'] = round((close - close_5d) / close_5d * 100, 2)
+                except Exception as e:
+                    logger.warning('[POSITIONS] export market-data ETF 5d close failed: %s', e)
 
             for code, info in data.items():
                 cost = cost_map.get(code)
@@ -697,6 +756,122 @@ async def batch_analyze(
     return {'stocks': stocks, 'announcement_fetched': ann_fetched}
 
 
+@router.get('/market-data/freshness')
+async def check_market_data_freshness(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check if position market data is up-to-date.
+
+    Returns the expected latest trading day, whether the data is ready,
+    and whether markets are currently open -- so the frontend can decide
+    whether to show a stale-data banner and avoid repeated checks.
+    """
+    import asyncio
+    from datetime import date, datetime, time, timedelta
+
+    now = datetime.now()
+    today = now.date()
+    current_time = now.time()
+
+    # Market hours: 09:30 - 15:00, Monday-Friday
+    is_weekday = today.weekday() < 5
+    market_open = time(9, 30)
+    market_close = time(15, 0)
+    # Data pipeline starts 16:15, typically ready by ~17:30
+    data_ready_time = time(17, 30)
+
+    is_market_hours = is_weekday and market_open <= current_time <= market_close
+    is_after_close = is_weekday and current_time > market_close
+
+    # Determine the expected latest trading day with data
+    # After 17:30 on a weekday -> expect today's data
+    # Before 17:30 on a weekday -> expect previous trading day data
+    # Weekend -> expect last Friday's data
+    def _get_expected_date():
+        if is_weekday and current_time >= data_ready_time:
+            return today
+        # Walk backwards to find the previous weekday
+        d = today if not is_weekday else today - timedelta(days=1)
+        while d.weekday() >= 5:
+            d -= timedelta(days=1)
+        return d
+
+    expected_date = _get_expected_date()
+
+    # Get active positions
+    result = await db.execute(
+        select(UserPosition.stock_code).where(
+            UserPosition.user_id == current_user.id,
+            UserPosition.is_active == True,
+        )
+    )
+    codes = [r[0] for r in result.all()]
+    if not codes:
+        return {
+            'expected_date': str(expected_date),
+            'is_market_hours': is_market_hours,
+            'is_after_close': is_after_close,
+            'data_ready': True,
+            'stale_count': 0,
+            'total_count': 0,
+        }
+
+    def _check(stock_codes):
+        from config.db import execute_query
+        placeholders = ', '.join(['%s'] * len(stock_codes))
+        try:
+            rows = execute_query(
+                """
+                SELECT stock_code, MAX(trade_date) AS latest_date
+                FROM trade_stock_daily
+                WHERE stock_code IN ({})
+                GROUP BY stock_code
+                """.format(placeholders),
+                tuple(stock_codes),
+                env='online',
+            )
+            found = {r['stock_code']: str(r['latest_date']) for r in rows}
+        except Exception:
+            found = {}
+
+        # Also check ETF table for codes not found
+        missing = [c for c in stock_codes if c not in found]
+        if missing:
+            etf_ph = ', '.join(['%s'] * len(missing))
+            try:
+                rows = execute_query(
+                    """
+                    SELECT fund_code, MAX(trade_date) AS latest_date
+                    FROM trade_etf_daily
+                    WHERE fund_code IN ({})
+                    GROUP BY fund_code
+                    """.format(etf_ph),
+                    tuple(missing),
+                    env='online',
+                )
+                for r in rows:
+                    found[r['fund_code']] = str(r['latest_date'])
+            except Exception:
+                pass
+
+        expected_str = str(expected_date)
+        stale = [c for c in stock_codes if found.get(c, '') < expected_str]
+        return len(stale), found
+
+    loop = asyncio.get_running_loop()
+    stale_count, _detail = await loop.run_in_executor(None, _check, codes)
+
+    return {
+        'expected_date': str(expected_date),
+        'is_market_hours': is_market_hours,
+        'is_after_close': is_after_close,
+        'data_ready': stale_count == 0,
+        'stale_count': stale_count,
+        'total_count': len(codes),
+    }
+
+
 @router.get('/market-data')
 async def get_positions_market_data(
     current_user: User = Depends(get_current_user),
@@ -752,6 +927,35 @@ async def get_positions_market_data(
             logger.warning('[POSITIONS] market-data latest close query failed: %s', e)
             return data
 
+        # ETF latest close (codes missing from trade_stock_daily)
+        etf_codes = [c for c in stock_codes if c not in data]
+        if etf_codes:
+            etf_ph = ', '.join(['%s'] * len(etf_codes))
+            try:
+                rows = execute_query(
+                    """
+                    SELECT sub.fund_code, sub.close_price, sub.trade_date
+                    FROM (
+                        SELECT fund_code, close_price, trade_date,
+                               ROW_NUMBER() OVER (PARTITION BY fund_code ORDER BY trade_date DESC) AS rn
+                        FROM trade_etf_daily
+                        WHERE fund_code IN ({})
+                    ) sub
+                    WHERE sub.rn = 1
+                    """.format(etf_ph),
+                    tuple(etf_codes),
+                    env='online',
+                )
+                for r in rows:
+                    code = r['fund_code']
+                    close = float(r['close_price']) if r['close_price'] else None
+                    data[code] = {
+                        'close': close,
+                        'trade_date': str(r['trade_date']) if r['trade_date'] else None,
+                    }
+            except Exception as e:
+                logger.warning('[POSITIONS] market-data ETF latest close query failed: %s', e)
+
         # 5 trading days ago close
         try:
             rows = execute_query(
@@ -778,6 +982,36 @@ async def get_positions_market_data(
                         data[code]['change_5d_pct'] = round((close - close_5d) / close_5d * 100, 2)
         except Exception as e:
             logger.warning('[POSITIONS] market-data 5d close query failed: %s', e)
+
+        # ETF 5-day close
+        etf_codes_in_data = [c for c in etf_codes if c in data and 'change_5d_pct' not in data[c]]
+        if etf_codes_in_data:
+            etf_ph2 = ', '.join(['%s'] * len(etf_codes_in_data))
+            try:
+                rows = execute_query(
+                    """
+                    SELECT sub.fund_code, sub.close_price
+                    FROM (
+                        SELECT fund_code, close_price,
+                               ROW_NUMBER() OVER (PARTITION BY fund_code ORDER BY trade_date DESC) AS rn
+                        FROM trade_etf_daily
+                        WHERE fund_code IN ({})
+                    ) sub
+                    WHERE sub.rn = 6
+                    """.format(etf_ph2),
+                    tuple(etf_codes_in_data),
+                    env='online',
+                )
+                for r in rows:
+                    code = r['fund_code']
+                    if code in data and r['close_price'] is not None:
+                        close_5d = float(r['close_price'])
+                        data[code]['close_5d'] = close_5d
+                        close = data[code].get('close')
+                        if close is not None and close_5d > 0:
+                            data[code]['change_5d_pct'] = round((close - close_5d) / close_5d * 100, 2)
+            except Exception as e:
+                logger.warning('[POSITIONS] market-data ETF 5d close query failed: %s', e)
 
         # Calculate cost gain/loss %
         for code, info in data.items():
