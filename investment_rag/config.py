@@ -44,6 +44,9 @@ class RAGConfig:
     bm25_top_k: int = 20
     final_top_k: int = 5
 
+    # --- Local Model Service ---
+    local_model_service_url: str = ""  # e.g. http://mytrader-model-service:8500
+
     # --- Collections ---
     collections: list = field(default_factory=lambda: [
         "reports", "announcements", "notes", "macro"
@@ -85,6 +88,7 @@ def load_config() -> RAGConfig:
         reranker_base_url=os.getenv('RAG_RERANKER_BASE_URL', _env.get('RAG_RERANKER_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')),
         chroma_persist_dir=os.getenv('CHROMA_PERSIST_DIR') or _env.get('CHROMA_PERSIST_DIR', ''),
         research_dir=os.getenv('RAG_RESEARCH_DIR', _env.get('RAG_RESEARCH_DIR', '')),
+        local_model_service_url=os.getenv('LOCAL_MODEL_SERVICE_URL', _env.get('LOCAL_MODEL_SERVICE_URL', '')),
     )
 
 
