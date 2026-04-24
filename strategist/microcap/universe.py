@@ -22,7 +22,8 @@ def get_daily_universe(trade_date: str, percentile: float = 0.20,
                        exclude_risk: bool = False,
                        max_debt_ratio: float = 0.70,
                        require_positive_profit: bool = True,
-                       require_positive_cashflow: bool = True) -> List[str]:
+                       require_positive_cashflow: bool = True,
+                       env: str = None) -> List[str]:
     """
     获取指定日期的股票池（市值后 percentile 的股票）。
 
@@ -37,11 +38,12 @@ def get_daily_universe(trade_date: str, percentile: float = 0.20,
         max_debt_ratio: 资产负债率上限（0.70 = 70%），排除超过此值的股票
         require_positive_profit: 要求最近年报净利润 > 0
         require_positive_cashflow: 要求最近年报经营现金流 > 0
+        env: 数据库环境 ('local'/'online')，None 时使用 DB_ENV 默认值
 
     Returns:
         股票代码列表，格式 ['000001.SZ', '600519.SH', ...]
     """
-    conn = get_connection()
+    conn = get_connection(env=env)
     try:
         # 构建 SQL：获取指定日期的市值数据
         sql = """

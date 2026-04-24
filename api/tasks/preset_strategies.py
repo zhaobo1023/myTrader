@@ -237,6 +237,7 @@ def _run_microcap_pure_mv(run_id: int, env: str) -> dict:
         max_debt_ratio=0.70,
         require_positive_profit=True,
         require_positive_cashflow=True,
+        env=env,
     )
 
     if not universe:

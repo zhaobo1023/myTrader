@@ -144,6 +144,12 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=16, minute=20, day_of_week='1-5'),
     },
 
+    # 16:18 - 估值数据增量拉取 (Tushare daily_basic: total_mv/pe_ttm/pb 等)
+    'daily-basic-fetch': {
+        'task': 'fetch_daily_basic_incremental',
+        'schedule': crontab(hour=16, minute=18, day_of_week='1-5'),
+    },
+
     # 16:25 - 复盘数据预检（检查今日数据是否就绪）
     'daily-evening-precheck': {
         'task': 'precheck_evening_data',

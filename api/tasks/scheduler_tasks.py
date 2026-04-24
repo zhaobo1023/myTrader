@@ -79,3 +79,48 @@ def fetch_stock_daily_incremental(self):
     except SoftTimeLimitExceeded:
         logger.error('[CELERY] fetch_stock_daily_incremental: soft time limit (3h) exceeded, aborting')
         raise
+
+
+@celery_app.task(name='fetch_daily_basic_incremental', bind=True, max_retries=0,
+                 soft_time_limit=7200, time_limit=8400)
+def fetch_daily_basic_incremental(self):
+    """Fetch daily basic data (total_mv, pe_ttm, pb, etc.).
+
+    Tries Tushare daily_basic API first (fast, bulk per-date).
+    Falls back to AKShare stock_value_em (slower, per-stock) if Tushare unavailable.
+    """
+    from datetime import date, timedelta
+    logger.info('[CELERY] fetch_daily_basic_incremental start')
+
+    today = date.today()
+    end_str = today.strftime('%Y%m%d')
+    start_str = (today - timedelta(days=7)).strftime('%Y%m%d')
+
+    # Try Tushare first (fast path: ~1 API call per date)
+    try:
+        from data_analyst.fetchers.daily_basic_fetcher import (
+            _fetch_daily_basic_bulk,
+            _daily_basic_available,
+        )
+        if _daily_basic_available():
+            logger.info('[CELERY] fetch_daily_basic_incremental: using Tushare, range %s ~ %s', start_str, end_str)
+            total = _fetch_daily_basic_bulk(start_str, end_str)
+            logger.info('[CELERY] fetch_daily_basic_incremental done (Tushare): %d rows', total)
+            return {'status': 'ok', 'source': 'tushare', 'rows': total}
+        else:
+            logger.info('[CELERY] fetch_daily_basic_incremental: Tushare daily_basic API not available, trying AKShare')
+    except Exception as e:
+        logger.warning('[CELERY] fetch_daily_basic_incremental: Tushare failed (%s), trying AKShare', e)
+
+    # Fallback to AKShare (slower: 1 API call per stock)
+    try:
+        from data_analyst.financial_fetcher.daily_basic_history_fetcher import run as akshare_run
+        start_iso = (today - timedelta(days=7)).isoformat()
+        end_iso = today.isoformat()
+        logger.info('[CELERY] fetch_daily_basic_incremental: using AKShare, range %s ~ %s', start_iso, end_iso)
+        akshare_run(start_date=start_iso, end_date=end_iso, force=False, test=False)
+        logger.info('[CELERY] fetch_daily_basic_incremental done (AKShare)')
+        return {'status': 'ok', 'source': 'akshare'}
+    except Exception as e:
+        logger.error('[CELERY] fetch_daily_basic_incremental: AKShare also failed: %s', e)
+        raise
