@@ -238,6 +238,12 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=20, minute=10, day_of_week='1-5'),
     },
 
+    # 20:20 - 候��池每日监控 (RPS/价格涨跌/信号)
+    'daily-candidate-monitor': {
+        'task': 'monitor_candidate_pool',
+        'schedule': crontab(hour=20, minute=20, day_of_week='1-5'),
+    },
+
     # 20:40 - 主题池评分
     'daily-theme-pool-score': {
         'task': 'scheduler.adapters.run_theme_pool_score',

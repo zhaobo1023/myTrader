@@ -2,7 +2,10 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAddToPositions } from '@/hooks/useStockAdd';
-import { candidatePoolApi } from '@/lib/candidate-pool-api';
+import { candidatePoolApi, MemoItem } from '@/lib/candidate-pool-api';
+import StockSearchInput from '@/components/stock/StockSearchInput';
+import type { StockSearchResult } from '@/lib/api-client';
+import { chartApi } from '@/lib/chart-api';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -123,7 +126,7 @@ function AlertBadge({ level, signals }: { level: string; signals: string[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// History mini-chart (sparkline)
+// History panel
 // ---------------------------------------------------------------------------
 function HistoryPanel({ stockCode, stockName }: { stockCode: string; stockName: string }) {
   const [data, setData] = useState<HistoryRow[]>([]);
@@ -177,6 +180,139 @@ function HistoryPanel({ stockCode, stockName }: { stockCode: string; stockName: 
 }
 
 // ---------------------------------------------------------------------------
+// Mini K-line panel (sparkline using SVG path)
+// ---------------------------------------------------------------------------
+function KLinePanel({ stockCode }: { stockCode: string }) {
+  const [prices, setPrices] = useState<number[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    chartApi.kline(stockCode, 'daily', 60)
+      .then(r => {
+        const pts = (r.data.data || []).map(d => d.close).filter(v => v != null) as number[];
+        setPrices(pts);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [stockCode]);
+
+  if (loading) return <div style={{ padding: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>加载K线...</div>;
+  if (!prices.length) return <div style={{ padding: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>暂无K线数据</div>;
+
+  const W = 400;
+  const H = 80;
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const range = max - min || 1;
+  const pts = prices.map((p, i) => {
+    const x = (i / (prices.length - 1)) * W;
+    const y = H - ((p - min) / range) * H;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const pathD = 'M' + pts.join('L');
+  const lastClose = prices[prices.length - 1];
+  const firstClose = prices[0];
+  const lineColor = lastClose >= firstClose ? '#27a644' : '#e5534b';
+
+  return (
+    <div style={{ padding: '12px 16px' }}>
+      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px' }}>近60日收盘走势</div>
+      <svg width={W} height={H} style={{ display: 'block', maxWidth: '100%' }}>
+        <path d={pathD} fill="none" stroke={lineColor} strokeWidth="1.5" />
+      </svg>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Memos panel
+// ---------------------------------------------------------------------------
+function MemosPanel({ stockCode }: { stockCode: string }) {
+  const [memos, setMemos] = useState<MemoItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [newContent, setNewContent] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  const loadMemos = useCallback(() => {
+    setLoading(true);
+    candidatePoolApi.listMemos(stockCode)
+      .then(r => setMemos((r.data as { data?: MemoItem[] }).data || []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [stockCode]);
+
+  useEffect(() => { loadMemos(); }, [loadMemos]);
+
+  async function handleAdd() {
+    if (!newContent.trim()) return;
+    setAdding(true);
+    try {
+      await candidatePoolApi.addMemo(stockCode, newContent.trim());
+      setNewContent('');
+      loadMemos();
+    } catch {
+      // ignore
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function handleDelete(id: number) {
+    try {
+      await candidatePoolApi.deleteMemo(stockCode, id);
+      setMemos(prev => prev.filter(m => m.id !== id));
+    } catch {
+      // ignore
+    }
+  }
+
+  return (
+    <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>备注记录</div>
+
+      {/* Add new memo */}
+      <div style={{ display: 'flex', gap: '6px', marginBottom: memos.length ? '10px' : '0' }}>
+        <input
+          value={newContent}
+          onChange={e => setNewContent(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAdd(); } }}
+          placeholder="添加备注（Enter 提交）"
+          style={{ flex: 1, fontSize: '12px', padding: '5px 8px', borderRadius: '5px', border: '1px solid var(--border-std)', background: 'var(--bg-input)', color: 'var(--text-primary)' }}
+        />
+        <button
+          onClick={handleAdd}
+          disabled={adding || !newContent.trim()}
+          style={{ fontSize: '11px', padding: '5px 12px', borderRadius: '5px', background: newContent.trim() ? 'var(--accent)' : 'var(--bg-card)', color: newContent.trim() ? '#fff' : 'var(--text-muted)', border: 'none', cursor: newContent.trim() ? 'pointer' : 'default' }}
+        >
+          {adding ? '...' : '添加'}
+        </button>
+      </div>
+
+      {/* Memo list */}
+      {loading && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>加载中...</div>}
+      {!loading && memos.map(m => (
+        <div key={m.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', padding: '6px 0', borderTop: '1px solid var(--border-subtle)' }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>{m.content}</div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{m.created_at.slice(0, 16)}</div>
+          </div>
+          <button
+            onClick={() => handleDelete(m.id)}
+            style={{ fontSize: '11px', color: '#e5534b', background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', flexShrink: 0 }}
+          >
+            删除
+          </button>
+        </div>
+      ))}
+      {!loading && memos.length === 0 && (
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>暂无备注</div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Stock row
 // ---------------------------------------------------------------------------
 function StockRow({
@@ -196,21 +332,8 @@ function StockRow({
   onUpgrade: (stock: CandidateStock, level: string) => void;
   upgrading: boolean;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [memo, setMemo] = useState(stock.memo || '');
-  const [saving, setSaving] = useState(false);
   const [showLevelPicker, setShowLevelPicker] = useState(false);
-
-  async function saveMemo() {
-    setSaving(true);
-    try {
-      await candidatePoolApi.updateMemo(stock.stock_code, memo);
-    } catch {
-      // ignore
-    }
-    setSaving(false);
-    setEditing(false);
-  }
+  const [showKLine, setShowKLine] = useState(false);
 
   const statusStyle = STATUS_COLORS[stock.status] || STATUS_COLORS.watching;
   const alertColor = ALERT_COLORS[stock.alert_level] || 'var(--text-muted)';
@@ -219,7 +342,7 @@ function StockRow({
   return (
     <>
       <tr
-        style={{ background: expanded ? 'var(--bg-card-hover)' : rowBg, cursor: 'pointer' }}
+        style={{ background: expanded ? 'var(--bg-card-hover)' : rowBg, cursor: 'pointer', opacity: stock.status === 'excluded' ? 0.6 : 1 }}
         onClick={onToggleExpand}
         onMouseEnter={e => { if (!expanded) (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-card-hover)'; }}
         onMouseLeave={e => { if (!expanded) (e.currentTarget as HTMLTableRowElement).style.background = rowBg; }}
@@ -233,10 +356,7 @@ function StockRow({
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-geist-mono)', marginTop: '1px' }}>{stock.stock_code}</div>
         </td>
         <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap' }}>
-          <span style={{
-            fontSize: '11px', padding: '2px 7px', borderRadius: '10px',
-            color: statusStyle.color, background: statusStyle.bg,
-          }}>
+          <span style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '10px', color: statusStyle.color, background: statusStyle.bg }}>
             {STATUS_LABELS[stock.status] || stock.status}
           </span>
         </td>
@@ -252,9 +372,7 @@ function StockRow({
           <div style={{ fontSize: '11px', color: pctColor(stock.pct_since_add) }}>{pctFmt(stock.pct_since_add)}</div>
         </td>
         <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'var(--font-geist-mono)', fontSize: '12px' }}>
-          <div style={{ color: (stock.rps_250 ?? 0) >= 80 ? '#27a644' : 'var(--text-secondary)' }}>
-            {fmt(stock.rps_250)}
-          </div>
+          <div style={{ color: (stock.rps_250 ?? 0) >= 80 ? '#27a644' : 'var(--text-secondary)' }}>{fmt(stock.rps_250)}</div>
           {stock.rps_change != null && (
             <div style={{ fontSize: '11px', color: pctColor(stock.rps_change) }}>
               {stock.rps_change > 0 ? '+' : ''}{stock.rps_change.toFixed(1)}
@@ -293,6 +411,12 @@ function StockRow({
                   </button>
                 ))}
                 <div style={{ flex: 1 }} />
+                <button
+                  onClick={() => setShowKLine(v => !v)}
+                  style={{ fontSize: '11px', color: 'var(--text-secondary)', background: 'none', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '3px 10px', cursor: 'pointer' }}
+                >
+                  {showKLine ? '收起K线' : '查看K线'}
+                </button>
                 {showLevelPicker ? (
                   <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                     <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>级别：</span>
@@ -301,21 +425,12 @@ function StockRow({
                         key={lv}
                         onClick={() => { onUpgrade(stock, lv); setShowLevelPicker(false); }}
                         disabled={upgrading}
-                        style={{
-                          fontSize: '11px', padding: '3px 8px', borderRadius: '4px',
-                          border: '1px solid var(--accent)', background: 'rgba(94,106,210,0.08)',
-                          color: 'var(--accent)', cursor: upgrading ? 'default' : 'pointer', fontWeight: 510,
-                        }}
+                        style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--accent)', background: 'rgba(94,106,210,0.08)', color: 'var(--accent)', cursor: upgrading ? 'default' : 'pointer', fontWeight: 510 }}
                       >
                         {lv}
                       </button>
                     ))}
-                    <button
-                      onClick={() => setShowLevelPicker(false)}
-                      style={{ fontSize: '11px', padding: '3px 6px', borderRadius: '4px', background: 'none', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', cursor: 'pointer' }}
-                    >
-                      取消
-                    </button>
+                    <button onClick={() => setShowLevelPicker(false)} style={{ fontSize: '11px', padding: '3px 6px', borderRadius: '4px', background: 'none', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', cursor: 'pointer' }}>取消</button>
                   </div>
                 ) : (
                   <button
@@ -333,6 +448,9 @@ function StockRow({
                   移出观察池
                 </button>
               </div>
+
+              {/* K-line (collapsible) */}
+              {showKLine && <KLinePanel stockCode={stock.stock_code} />}
 
               {/* Entry snapshot */}
               <div style={{ padding: '10px 16px', display: 'flex', gap: '24px', flexWrap: 'wrap', borderBottom: '1px solid var(--border-subtle)', fontSize: '12px' }}>
@@ -362,33 +480,8 @@ function StockRow({
                 )}
               </div>
 
-              {/* Memo */}
-              <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)', paddingTop: '4px', flexShrink: 0 }}>备注：</span>
-                {editing ? (
-                  <>
-                    <input
-                      value={memo}
-                      onChange={e => setMemo(e.target.value)}
-                      style={{ flex: 1, fontSize: '12px', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--border-std)', background: 'var(--bg-input)', color: 'var(--text-primary)' }}
-                      autoFocus
-                    />
-                    <button onClick={saveMemo} disabled={saving} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '4px', background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer' }}>
-                      {saving ? '保存中' : '保存'}
-                    </button>
-                    <button onClick={() => { setEditing(false); setMemo(stock.memo || ''); }} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '4px', background: 'transparent', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', cursor: 'pointer' }}>
-                      取消
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <span style={{ flex: 1, fontSize: '12px', color: memo ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
-                      {memo || '点击添加备注'}
-                    </span>
-                    <button onClick={() => setEditing(true)} style={{ fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px' }}>编辑</button>
-                  </>
-                )}
-              </div>
+              {/* Multi-memos */}
+              <MemosPanel stockCode={stock.stock_code} />
 
               {/* History */}
               <HistoryPanel stockCode={stock.stock_code} stockName={stock.stock_name} />
@@ -408,22 +501,29 @@ export default function CandidatePoolContent() {
   const addPos = useAddToPositions();
   const [stocks, setStocks] = useState<CandidateStock[]>([]);
   const [loading, setLoading] = useState(false);
-  const [filterStatus, setFilterStatus] = useState<string>('');
+  const [filterStatus, setFilterStatus] = useState<string>('active'); // default: hide excluded
   const [filterSource, setFilterSource] = useState<string>('');
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
-  const [triggering, setTriggering] = useState(false);
-  const [pushing, setPushing] = useState(false);
-  const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [upgradingCode, setUpgradingCode] = useState<string | null>(null);
+
+  // Add stock form state
+  const [selectedStock, setSelectedStock] = useState<StockSearchResult | null>(null);
+  const [addingStock, setAddingStock] = useState(false);
 
   const loadStocks = useCallback(async () => {
     setLoading(true);
     try {
+      // 'active' is a UI-only filter: fetch watching + focused
       const params: { status?: string; source_type?: string } = {};
-      if (filterStatus) params.status = filterStatus;
+      if (filterStatus && filterStatus !== 'active') params.status = filterStatus;
       if (filterSource) params.source_type = filterSource;
       const res = await candidatePoolApi.list(params);
-      setStocks((res.data as { data?: CandidateStock[] }).data || []);
+      let data = (res.data as { data?: CandidateStock[] }).data || [];
+      // client-side: when filterStatus='active', hide excluded
+      if (filterStatus === 'active') {
+        data = data.filter(s => s.status !== 'excluded');
+      }
+      setStocks(data);
     } catch {
       // ignore
     } finally {
@@ -432,6 +532,26 @@ export default function CandidatePoolContent() {
   }, [filterStatus, filterSource]);
 
   useEffect(() => { loadStocks(); }, [loadStocks]);
+
+  async function handleAddStock() {
+    if (!selectedStock) return;
+    setAddingStock(true);
+    try {
+      await candidatePoolApi.add({
+        stock_code: selectedStock.stock_code,
+        stock_name: selectedStock.stock_name,
+        source_type: 'manual',
+      });
+      setSelectedStock(null);
+      loadStocks();
+      setActionMsg(`${selectedStock.stock_name} 已加入候选池`);
+      setTimeout(() => setActionMsg(null), 3000);
+    } catch {
+      setActionMsg('添加失败');
+    } finally {
+      setAddingStock(false);
+    }
+  }
 
   async function handleStatusChange(code: string, status: string) {
     try {
@@ -456,14 +576,8 @@ export default function CandidatePoolContent() {
   async function handleUpgrade(stock: CandidateStock, level: string) {
     setUpgradingCode(stock.stock_code);
     try {
-      await addPos.mutateAsync({
-        stock_code: stock.stock_code,
-        stock_name: stock.stock_name,
-        level,
-      });
-      const shouldRemove = confirm(
-        `${stock.stock_name} 已加入实盘持仓(${level})，是否同时从候选观察移除？`
-      );
+      await addPos.mutateAsync({ stock_code: stock.stock_code, stock_name: stock.stock_name, level });
+      const shouldRemove = confirm(`${stock.stock_name} 已加入实盘持仓(${level})，是否同时从候选观察移除？`);
       if (shouldRemove) {
         try {
           await candidatePoolApi.remove(stock.stock_code);
@@ -480,46 +594,10 @@ export default function CandidatePoolContent() {
     }
   }
 
-  async function handleTriggerMonitor() {
-    setTriggering(true);
-    setActionMsg(null);
-    try {
-      const res = await candidatePoolApi.triggerMonitor();
-      const j = res.data as { monitored?: number; trade_date?: string };
-      setActionMsg(`监控完成：${j.monitored} 只股票，${j.trade_date || ''}`);
-      loadStocks();
-    } catch {
-      setActionMsg('监控触发失败');
-    } finally {
-      setTriggering(false);
-    }
-  }
-
-  async function handlePushFeishu() {
-    setPushing(true);
-    setActionMsg(null);
-    try {
-      const res = await candidatePoolApi.pushFeishu();
-      const j = res.data as { success?: boolean };
-      setActionMsg(j.success ? '飞书推送成功' : '飞书推送失败（检查 webhook 配置）');
-    } catch {
-      setActionMsg('推送请求失败');
-    } finally {
-      setPushing(false);
-    }
-  }
-
-  // Alert counts for summary bar
   const alertCounts = stocks.reduce((acc, s) => {
     if (s.monitor_date) acc[s.alert_level] = (acc[s.alert_level] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
-
-  const displayed = stocks.filter(s => {
-    if (filterStatus && s.status !== filterStatus) return false;
-    if (filterSource && s.source_type !== filterSource) return false;
-    return true;
-  });
 
   const selectStyle: React.CSSProperties = {
     fontSize: '12px', padding: '5px 10px', borderRadius: '6px',
@@ -530,56 +608,48 @@ export default function CandidatePoolContent() {
   return (
     <>
       {/* Header */}
-      <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
+      <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
         <div>
-          <h2 style={{ fontSize: '16px', fontWeight: 580, color: 'var(--text-primary)', margin: '0 0 4px' }}>
-            候选观察
-          </h2>
+          <h2 style={{ fontSize: '16px', fontWeight: 580, color: 'var(--text-primary)', margin: '0 0 4px' }}>候选观察</h2>
           <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
             从行业或策略加入的候选股票，每日盘后自动监控技术面
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-          <button
-            onClick={handleTriggerMonitor}
-            disabled={triggering}
-            style={{
-              fontSize: '12px', padding: '6px 14px', borderRadius: '6px',
-              background: triggering ? 'transparent' : 'var(--accent)', color: triggering ? 'var(--accent)' : '#fff',
-              border: '1px solid var(--accent)', cursor: triggering ? 'default' : 'pointer', fontWeight: 510,
-            }}
-          >
-            {triggering ? '监控中...' : '触发监控'}
-          </button>
-          <button
-            onClick={handlePushFeishu}
-            disabled={pushing}
-            style={{
-              fontSize: '12px', padding: '6px 14px', borderRadius: '6px',
-              background: 'transparent', color: 'var(--text-secondary)',
-              border: '1px solid var(--border-subtle)', cursor: pushing ? 'default' : 'pointer',
-            }}
-          >
-            {pushing ? '推送中...' : '推送飞书'}
-          </button>
-          <button
-            onClick={loadStocks}
-            style={{
-              fontSize: '12px', padding: '6px 12px', borderRadius: '6px',
-              background: 'transparent', color: 'var(--text-muted)',
-              border: '1px solid var(--border-subtle)', cursor: 'pointer',
-            }}
-          >
+          <button onClick={loadStocks} style={{ fontSize: '12px', padding: '6px 12px', borderRadius: '6px', background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', cursor: 'pointer' }}>
             刷新
           </button>
         </div>
       </div>
 
-      {actionMsg && (
-        <div style={{ marginBottom: '12px', padding: '8px 14px', borderRadius: '6px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', fontSize: '12px', color: 'var(--text-secondary)' }}>
-          {actionMsg}
-        </div>
-      )}
+      {/* Search add */}
+      <div style={{ marginBottom: '16px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <StockSearchInput
+          onSelect={setSelectedStock}
+          placeholder="搜索添加个股或ETF到候选池..."
+          width="280px"
+        />
+        {selectedStock && (
+          <>
+            <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 510 }}>
+              {selectedStock.stock_name} <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{selectedStock.stock_code}</span>
+            </span>
+            <button
+              onClick={handleAddStock}
+              disabled={addingStock}
+              style={{ fontSize: '12px', padding: '5px 14px', borderRadius: '6px', background: 'var(--accent)', color: '#fff', border: 'none', cursor: addingStock ? 'default' : 'pointer', opacity: addingStock ? 0.6 : 1 }}
+            >
+              {addingStock ? '添加中...' : '加入候选池'}
+            </button>
+            <button
+              onClick={() => setSelectedStock(null)}
+              style={{ fontSize: '12px', padding: '5px 10px', borderRadius: '6px', background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', cursor: 'pointer' }}
+            >
+              取消
+            </button>
+          </>
+        )}
+      </div>
 
       {/* Alert summary bar */}
       {Object.keys(alertCounts).length > 0 && (
@@ -588,11 +658,7 @@ export default function CandidatePoolContent() {
             const cnt = alertCounts[level] || 0;
             if (!cnt) return null;
             return (
-              <span key={level} style={{
-                fontSize: '12px', padding: '4px 12px', borderRadius: '20px',
-                color: ALERT_COLORS[level], background: ALERT_BG[level] || 'var(--bg-tag)',
-                border: `1px solid ${ALERT_COLORS[level]}40`, fontWeight: 510,
-              }}>
+              <span key={level} style={{ fontSize: '12px', padding: '4px 12px', borderRadius: '20px', color: ALERT_COLORS[level], background: ALERT_BG[level] || 'var(--bg-tag)', border: `1px solid ${ALERT_COLORS[level]}40`, fontWeight: 510 }}>
                 {level === 'red' ? '需关注' : level === 'yellow' ? '提醒' : level === 'green' ? '积极信号' : '正常'} {cnt}
               </span>
             );
@@ -603,10 +669,11 @@ export default function CandidatePoolContent() {
       {/* Filters */}
       <div style={{ marginBottom: '16px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={selectStyle}>
-          <option value=''>全部状态</option>
+          <option value='active'>观察中 + 重点关注</option>
+          <option value=''>全部（含已排除）</option>
           <option value='watching'>观察中</option>
           <option value='focused'>重点关注</option>
-          <option value='excluded'>已排除</option>
+          <option value='excluded'>仅已排除</option>
         </select>
         <select value={filterSource} onChange={e => setFilterSource(e.target.value)} style={selectStyle}>
           <option value=''>全部来源</option>
@@ -614,19 +681,15 @@ export default function CandidatePoolContent() {
           <option value='strategy'>策略</option>
           <option value='manual'>手动</option>
         </select>
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>共 {displayed.length} 只</span>
+        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>共 {stocks.length} 只</span>
       </div>
 
       {/* Table */}
       {loading ? (
         <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>加载中...</div>
-      ) : displayed.length === 0 ? (
-        <div style={{
-          padding: '60px 20px', textAlign: 'center',
-          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px',
-          color: 'var(--text-muted)', fontSize: '13px',
-        }}>
-          候选观察为空，从「行业」或「策略」页面添加股票
+      ) : stocks.length === 0 ? (
+        <div style={{ padding: '60px 20px', textAlign: 'center', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px', color: 'var(--text-muted)', fontSize: '13px' }}>
+          {filterStatus === 'active' ? '候选观察为空，搜索添加个股或从「行业」「策略」页面加入' : '无匹配记录'}
         </div>
       ) : (
         <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px', overflow: 'hidden' }}>
@@ -636,14 +699,12 @@ export default function CandidatePoolContent() {
                 <tr style={{ background: 'var(--bg-panel)', borderBottom: '1px solid var(--border-subtle)' }}>
                   <th style={{ width: '4px', padding: '0' }} />
                   {['股票', '状态', '来源', '加入日', '价格/涨跌', 'RPS250/变化', '今日信号', ''].map(h => (
-                    <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontWeight: 510, color: 'var(--text-muted)', fontSize: '11px', whiteSpace: 'nowrap' }}>
-                      {h}
-                    </th>
+                    <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontWeight: 510, color: 'var(--text-muted)', fontSize: '11px', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {displayed.map(stock => (
+                {stocks.map(stock => (
                   <StockRow
                     key={stock.stock_code}
                     stock={stock}

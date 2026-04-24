@@ -22,12 +22,20 @@ export const candidatePoolApi = {
     apiClient.delete(`/api/candidate-pool/stocks/${stockCode}`),
   history: (stockCode: string, days: number = 30) =>
     apiClient.get(`/api/candidate-pool/stocks/${stockCode}/history`, { params: { days } }),
-  triggerMonitor: () =>
-    apiClient.post('/api/candidate-pool/monitor/trigger'),
-  pushFeishu: () =>
-    apiClient.post('/api/candidate-pool/monitor/push'),
   industries: () =>
     apiClient.get<{ data: string[] }>('/api/candidate-pool/industries'),
   industryStocks: (params: { industry_name: string; sort_by?: string; min_rps?: string }) =>
     apiClient.get('/api/candidate-pool/industry-stocks', { params }),
+  listMemos: (stockCode: string) =>
+    apiClient.get<{ data: MemoItem[] }>(`/api/candidate-pool/stocks/${stockCode}/memos`),
+  addMemo: (stockCode: string, content: string) =>
+    apiClient.post<MemoItem>(`/api/candidate-pool/stocks/${stockCode}/memos`, { content }),
+  deleteMemo: (stockCode: string, memoId: number) =>
+    apiClient.delete(`/api/candidate-pool/stocks/${stockCode}/memos/${memoId}`),
 };
+
+export interface MemoItem {
+  id: number;
+  content: string;
+  created_at: string;
+}
