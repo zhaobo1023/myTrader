@@ -40,8 +40,9 @@ def _get_target_stocks() -> list:
         for r in rows:
             if r.get('stock_code'):
                 codes.add(r['stock_code'])
-    except Exception as e:
+    except Exception as primary_err:
         # 兼容 watchlist 表名变体
+        logger.debug('[STOCK_NEWS] user_watchlist query failed (%s), trying watchlist', primary_err)
         try:
             rows = execute_query(
                 "SELECT DISTINCT code as stock_code FROM watchlist", env='online'
@@ -49,19 +50,20 @@ def _get_target_stocks() -> list:
             for r in rows:
                 if r.get('stock_code'):
                     codes.add(r['stock_code'])
-        except Exception:
-            logger.warning('[STOCK_NEWS] Failed to query watchlist: %s', e)
+        except Exception as fallback_err:
+            logger.warning('[STOCK_NEWS] Failed to query watchlist: %s', fallback_err)
 
-    # 候选池（sim_pool）
+    # 候选池
     try:
         rows = execute_query(
-            "SELECT DISTINCT stock_code FROM sim_pool WHERE status='active'", env='online'
+            "SELECT DISTINCT stock_code FROM candidate_pool_stocks WHERE status != 'excluded'",
+            env='online',
         )
         for r in rows:
             if r.get('stock_code'):
                 codes.add(r['stock_code'])
     except Exception as e:
-        logger.debug('[STOCK_NEWS] sim_pool query skipped: %s', e)
+        logger.debug('[STOCK_NEWS] candidate_pool_stocks query skipped: %s', e)
 
     # 兜底: 原有 trade_tech_report 已分析股票
     if not codes:
