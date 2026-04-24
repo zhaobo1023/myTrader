@@ -497,14 +497,33 @@ function StockRow({
 // Main Content
 // ---------------------------------------------------------------------------
 
+const PREF_KEY = 'candidate_pool_prefs';
+
+function loadPrefs(): { filterStatus: string; filterSource: string } {
+  try {
+    const raw = localStorage.getItem(PREF_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  return { filterStatus: 'active', filterSource: '' };
+}
+
+function savePrefs(prefs: { filterStatus: string; filterSource: string }) {
+  try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch { /* ignore */ }
+}
+
 export default function CandidatePoolContent() {
   const addPos = useAddToPositions();
   const [stocks, setStocks] = useState<CandidateStock[]>([]);
   const [loading, setLoading] = useState(false);
-  const [filterStatus, setFilterStatus] = useState<string>('active'); // default: hide excluded
-  const [filterSource, setFilterSource] = useState<string>('');
+  const [filterStatus, setFilterStatus] = useState<string>(() => loadPrefs().filterStatus);
+  const [filterSource, setFilterSource] = useState<string>(() => loadPrefs().filterSource);
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
   const [upgradingCode, setUpgradingCode] = useState<string | null>(null);
+
+  // Persist filter preferences
+  useEffect(() => {
+    savePrefs({ filterStatus, filterSource });
+  }, [filterStatus, filterSource]);
 
   // Add stock form state
   const [selectedStock, setSelectedStock] = useState<StockSearchResult | null>(null);
