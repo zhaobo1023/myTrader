@@ -125,3 +125,39 @@ class CandidateMonitorDaily(Base):
 
     def __repr__(self):
         return f'<CandidateMonitorDaily code={self.stock_code} date={self.trade_date}>'
+
+
+class CandidateTag(Base):
+    """User-defined tags for candidate pool stocks."""
+    __tablename__ = 'candidate_tags'
+    __table_args__ = (
+        UniqueConstraint('user_id', 'name', name='uq_candidate_tag_user_name'),
+        Index('ix_candidate_tags_user', 'user_id'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False)
+    name = Column(String(30), nullable=False)
+    color = Column(String(20), nullable=False, default='#5e6ad2')
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f'<CandidateTag name={self.name} user={self.user_id}>'
+
+
+class CandidateStockTag(Base):
+    """Association table: many-to-many between stocks and tags."""
+    __tablename__ = 'candidate_stock_tags'
+    __table_args__ = (
+        UniqueConstraint('stock_id', 'tag_id', name='uq_candidate_stock_tag'),
+        Index('ix_candidate_stock_tags_stock', 'stock_id'),
+        Index('ix_candidate_stock_tags_tag', 'tag_id'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    stock_id = Column(Integer, nullable=False)
+    tag_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f'<CandidateStockTag stock={self.stock_id} tag={self.tag_id}>'

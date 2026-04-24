@@ -1,17 +1,19 @@
 """
 Sentiment Analyzer Service
 
-情感分析服务 - 基于 LLM (DashScope)
+情感分析服务 - 基于 LLM (DashScope) with local model fallback
 - 单条新闻情感分析
 - 批量新闻情感分析
 - Prompt 构建
 - 响应解析
 """
 
+import os
 import logging
 import json
 from typing import List, Dict, Any, Optional
 
+import requests
 from dashscope import Generation
 
 from data_analyst.sentiment.schemas import NewsItem, SentimentResult
@@ -20,10 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 class SentimentAnalyzer:
-    """情感分析服务"""
+    """情感分析服务 - DashScope优先，本地模型降级"""
 
     def __init__(self, model: str = "qwen3.6-plus"):
         self.model = model
+        self.local_service_url = os.getenv("LOCAL_MODEL_SERVICE_URL", "")
 
     def build_prompt(self, news: NewsItem) -> str:
         """
@@ -159,7 +162,11 @@ class SentimentAnalyzer:
             
         except Exception as e:
             logger.error(f"Failed to analyze news: {e}")
-            # 返回默认结果
+            # Try local model fallback
+            local_result = self._analyze_local(news)
+            if local_result is not None:
+                return local_result
+            # Final fallback: default result
             parsed = self._get_default_result()
             return SentimentResult(
                 news_item=news,
@@ -170,6 +177,37 @@ class SentimentAnalyzer:
                 summary=parsed['summary'],
                 market_impact=parsed.get('market_impact'),
             )
+
+    def _analyze_local(self, news: NewsItem) -> Optional[SentimentResult]:
+        """Fallback: use local sentiment model for basic classification."""
+        if not self.local_service_url:
+            return None
+        try:
+            resp = requests.post(
+                f"{self.local_service_url}/sentiment",
+                json={
+                    "title": news.title,
+                    "content": news.content or "",
+                    "stock_code": news.stock_code or "",
+                },
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            logger.info("Local sentiment fallback: sentiment=%s, confidence=%.2f",
+                        data["sentiment"], data["confidence"])
+            return SentimentResult(
+                news_item=news,
+                sentiment=data["sentiment"],
+                sentiment_strength=data["sentiment_strength"],
+                entities=[],
+                keywords=[],
+                summary=news.title[:50] + "...",
+                market_impact=None,
+            )
+        except Exception as e:
+            logger.warning("Local sentiment fallback also failed: %s", e)
+            return None
 
     def analyze_batch(self, news_list: List[NewsItem]) -> List[SentimentResult]:
         """

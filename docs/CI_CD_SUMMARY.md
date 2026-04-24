@@ -1,4 +1,4 @@
-# CI/CD 部署方案（2026-04-15 定稿）
+# CI/CD 部署方案（2026-04-24 更新）
 
 ## 架构概览
 
@@ -6,125 +6,188 @@
 本地开发
   └─ git push origin main
        └─ GitHub Actions (.github/workflows/deploy.yml)
-            ├─ test job:  lint + tsc + build
-            └─ deploy job: SSH → /root/app → git pull → restart
+            ├─ test job:  pytest + ruff + tsc + eslint + build
+            └─ deploy job: SSH -> git pull -> HUP reload API -> restart Celery -> (rebuild web if changed)
 ```
 
 ## 服务器部署结构
 
 | 项目 | 值 |
 |------|-----|
-| 服务器 | 阿里云 ECS，IP: 123.56.3.1 |
-| 代码目录 | `/root/app`（不是 /opt/myTrader，不是 /app/myTrader）|
-| 部署方式 | Docker 容器，**无 docker-compose**（直接 docker run）|
-| API 容器 | `mytrader-api`，卷挂载 `/root/app:/app`，代码实时生效 |
-| Web 容器 | `mytrader-web`，代码打进镜像，需重建才生效 |
+| 服务器 | 阿里云 ECS，IP: 123.56.3.1，2核 3.6GB RAM |
+| 代码目录 | `/root/app` |
+| 部署方式 | GitHub Actions SSH -> 服务器执行 `scripts/deploy_remote.sh` |
+| API 容器 | `mytrader-api`，Gunicorn + uvicorn worker，卷挂载 `/root/app:/app` |
+| Web 容器 | `mytrader-web`，代码打进镜像，需 rebuild 才生效 |
 | Nginx | `mytrader-nginx`，监听 80/443，反代到 api:8000 + web:3000 |
 | Redis | `mytrader-redis` |
-| Celery | `app-celery-worker-1` + `app-celery-beat` |
+| Celery | `app-celery-worker-1` + `app-celery-beat-1` |
 | 网络 | `app_mytrader-network` |
 
-## GitHub Actions 流程
+## 容器运行架构
+
+```
+Internet (mytrader.cc)
+    |
+    v
+[Nginx :80/:443] (nginx:alpine)
+    |
+    +-- /api/* ---> [Gunicorn :8000] (Python 3.11, 2 workers, volume-mounted)
+    |                  |
+    |                  +--> [MySQL host:172.17.0.1:3306]
+    |                  +--> [Redis :6379]
+    |
+    +-- /* -------> [Next.js :3000] (image-baked)
+    |
+    +-- [Celery Worker] (volume-mounted)
+    +-- [Celery Beat]   (volume-mounted)
+```
+
+## 零停机部署方案
+
+### API 部署（零停机）
+
+API 容器使用卷挂载，代码通过 `git pull` 即时更新到容器内。重启策略使用 **Gunicorn SIGHUP 优雅重载**：
+
+```
+kill -HUP 1  (发送到容器内 PID 1，即 Gunicorn master)
+  -> Gunicorn fork 新 worker（加载最新代码）
+  -> 新 worker 开始接收请求
+  -> 旧 worker 处理完当前请求后退出
+  -> 全程零请求丢失
+```
+
+nginx 层加了 `proxy_next_upstream` 作为兜底，HUP 过渡期间如果有极短暂的连接拒绝会自动重试。
+
+### Web 部署（短暂停机 + 维护页）
+
+Web 容器代码在构建时 bake 进镜像，无法做到完全零停机。策略：
+
+1. 构建新镜像（~4 分钟，期间旧容器继续服务）
+2. `docker stop` + `docker run` 切换容器（~5-10 秒停机）
+3. 停机期间 nginx 展示维护页面（`maintenance.html`），而非裸 502
+
+### Celery 部署
+
+Celery worker 使用 `docker restart`。任务在 Redis 队列中持久化，重启后自动恢复。单并发（`-c 1`）下最多影响一个执行中任务。
+
+## GitHub Actions 配置
 
 ### 触发条件
+
 - push 到 `main` 分支时自动触发
 
-### test job（约 2-3 分钟）
-1. Python lint (ruff)
-2. TypeScript type check (tsc --noEmit)
-3. Next.js build
+### test job（~3 分钟）
 
-### deploy job（test 通过后，约 20 秒，前端变更时约 4 分钟）
-1. SSH 进服务器
-2. `git pull origin main`
-3. `docker restart mytrader-api`（等待 healthy）
-4. 检测 `web/` 是否有变更：
-   - **有变更**：`docker build --no-cache` 重建镜像 + 重启容器
-   - **无变更**：跳过，节省 3 分钟
-5. `curl -sf http://localhost:8000/health` 最终验证
+1. API test: MySQL 8.0 + Redis 7 service containers，ruff lint，pytest
+2. Web test: Node 20，tsc 类型检查，eslint，Next.js build
+3. pip cache 按 `requirements.txt` hash 缓存
 
-## GitHub Secrets 配置
+### deploy job（test 通过后，~20 秒或 ~4 分钟）
 
-位置：`github.com/zhaobo1023/myTrader/settings/secrets/actions`
+1. SCP `scripts/deploy_remote.sh` 到服务器
+2. SSH 执行脚本：
+   - `git fetch/reset` 拉取最新代码
+   - `docker exec mytrader-api kill -HUP 1` 优雅重载 API
+   - `docker restart` Celery worker + beat
+   - 检测 `web/` 是否有变更，有则 rebuild
+3. 最终 `curl health` 验证
+
+### GitHub Secrets
 
 | Secret | 值 | 说明 |
 |--------|-----|------|
-| `ECS_HOST` | `123.56.3.1` | 已配置 |
-| `ECS_USER` | `root` | 已配置 |
-| `ECS_SSH_KEY` | ed25519 私钥 | 已配置 |
-| `POSTHOG_KEY` | `phc_xxx...` | PostHog Project API Key，见下方获取步骤 |
-| `POSTHOG_HOST` | `http://123.56.3.1/analytics` | PostHog 自托管地址 |
+| `ECS_HOST` | `123.56.3.1` | 服务器 IP |
+| `ECS_USER` | `root` | SSH 用户 |
+| `ECS_SSH_KEY` | ed25519 私钥 | 部署用 SSH 私钥 |
 
-对应公钥已添加到服务器 `~/.ssh/authorized_keys`。
+## 历史问题复盘
 
-## PostHog 埋点系统（一次性初始化）
+### 2026-04-16：SSH key 解析失败
 
-PostHog 是自托管的产品分析服务，需要在首次部署时手动初始化一次，之后全自动。
+**现象**：连续 4 次部署失败，deploy job 全部 error。
 
-### 第一步：启动 PostHog 容器
+**根因**：使用了 `appleboy/ssh-action`，其内部 SSH key 解析逻辑与 ed25519 格式不兼容。
+
+**修复**：替换为原生 `ssh`/`scp` 命令，手动管理 known_hosts。
+
+### 2026-04-16：Nginx 配置不生效
+
+**现象**：部署后 nginx 仍使用旧配置。
+
+**根因**：deploy 脚本只 restart API，没有 restart nginx。
+
+**修复**：deploy 脚本中加入 nginx restart/reload。
+
+### 2026-04-24：SSH key 格式 + heredoc 冲突（连续 3 次失败）
+
+**现象**：push main 后 CI test 通过，但 deploy 步骤失败，服务器代码停在旧版本。
+
+**根因**：三个问题叠加——
+1. `echo` 写入多行 SSH 私钥丢失换行符，导致 key 格式损坏
+2. 硬编码的 known_hosts 指纹过期，SSH 连接被拒绝
+3. heredoc `<<'ENDSSH'` 中的 `{{.State.Health.Status}}` 被 GHA YAML 解析器误认为 `${{ }}` 表达式
+
+**修复**：
+1. SSH key 写入改为 `printf '%s\n'`
+2. known_hosts 改用 `ssh-keyscan` 动态获取
+3. 部署脚本抽成 `scripts/deploy_remote.sh`，通过 `scp` 上传再执行，避免 heredoc
+
+### 2026-04-24：web-test 37 个 lint error
+
+**现象**：`eslint-config-next` 升级后新增严格规则，CI 不稳定。
+
+**根因**：Next.js 16 + 新版 eslint-config-next 启用了 `react-hooks/set-state-in-effect`、`@typescript-eslint/no-explicit-any`、`react/no-unescaped-entities`。
+
+**修复**：在 `web/eslint.config.mjs` 中降级为 `warn`/`off`，不影响 CI 通过。
+
+### 2026-04-24：部署后 502
+
+**现象**：手动部署后访问 `https://mytrader.cc` 返回 502。
+
+**根因**：容器重启顺序问题——nginx 先于 API 就绪，中间窗口 upstream 不可用。
+
+**修复**：改为 Gunicorn HUP 优雅重载，不再 restart API 容器。nginx 加 `proxy_next_upstream` 兜底 + 维护页面。
+
+### 2026-04-15：Docker 磁盘满
+
+**现象**：Web 镜像构建失败。
+
+**根因**：频繁 `docker build --no-cache` 积累了 22GB build cache，40GB 磁盘写满。
+
+**修复**：crontab 每 8 小时清理 `docker builder prune`，保留 2GB 缓存。
+
+### 2026-04-16：python-multipart 缺失致全站 502
+
+**现象**：所有 API 请求返回 502。
+
+**根因**：`requirements-prod.txt` 缺少 `python-multipart`（仅在 `requirements.txt` 中有），Docker 镜像构建时未安装，导致 API 启动崩溃。
+
+**修复**：在 `requirements-prod.txt` 中补上 `python-multipart>=0.0.6`。
+
+**教训**：两个依赖文件的同步问题。后续应考虑 CI 中加一致性检查，或合并为单一文件。
+
+## 手动部署
 
 ```bash
 ssh aliyun-ecs
 cd /root/app
+git fetch origin && git reset --hard origin/main
 
-# 启动 PostHog 三个容器（PostgreSQL + Redis + PostHog 主服务）
-docker compose up -d posthog-db posthog-redis posthog
+# API 优雅重载（零停机）
+docker exec mytrader-api kill -HUP 1
 
-# 等待约 30 秒后初始化数据库（只需执行一次）
-docker compose exec posthog python manage.py migrate
-```
+# Celery restart
+docker restart app-celery-worker-1 app-celery-beat-1
 
-### 第二步：获取 Project API Key
-
-1. 浏览器访问 `http://123.56.3.1/analytics`
-2. 完成注册（填邮箱 + 密码，自托管无需验证）
-3. 进入控制台后：**Settings（左下角齿轮）→ Project Settings → Project API Key**
-4. 复制 `phc_` 开头的字符串
-
-### 第三步：配置 GitHub Secrets
-
-在 `github.com/zhaobo1023/myTrader/settings/secrets/actions` 添加两个 Secret：
-
-```
-POSTHOG_KEY  =  phc_你复制的key
-POSTHOG_HOST =  http://123.56.3.1/analytics
-```
-
-**完成后 push 任意代码触发一次部署**，前端镜像会带上这两个变量重建，埋点自动生效。
-
-### 前端重建说明
-
-`NEXT_PUBLIC_*` 变量在 Next.js 构建时被内联进 JS bundle，因此：
-- **修改了 PostHog Key** → 需要触发前端重建（改动 `web/` 任意文件 push 即可）
-- **正常业务改动** → deploy.yml 自动判断 `web/` 是否有变更，有则重建（约 4 分钟），无则跳过（约 20 秒）
-
-## 手动部署（紧急时）
-
-```bash
-ssh aliyun-ecs
-cd /root/app
-git pull origin main
-
-# API 只需重启（卷挂载，代码即时生效）
-docker restart mytrader-api
-
-# 前端需要重建镜像（带上 PostHog 变量）
-POSTHOG_KEY="phc_你的key"
-POSTHOG_HOST="http://123.56.3.1/analytics"
-
-docker build --no-cache \
-  --build-arg NEXT_PUBLIC_POSTHOG_KEY="$POSTHOG_KEY" \
-  --build-arg NEXT_PUBLIC_POSTHOG_HOST="$POSTHOG_HOST" \
-  -t mytrader-web:latest ./web
-
+# 前端重建（如需要）
+docker build -t mytrader-web:latest ./web
 docker stop mytrader-web && docker rm mytrader-web
 docker run -d \
   --name mytrader-web \
   --network app_mytrader-network \
   -p 127.0.0.1:3000:3000 \
   -e NEXT_PUBLIC_API_BASE_URL=http://123.56.3.1:8000 \
-  -e NEXT_PUBLIC_POSTHOG_KEY="$POSTHOG_KEY" \
-  -e NEXT_PUBLIC_POSTHOG_HOST="$POSTHOG_HOST" \
   --restart unless-stopped \
   mytrader-web:latest
 ```
@@ -133,21 +196,25 @@ docker run -d \
 
 ```bash
 # 查看所有容器状态
-ssh aliyun-ecs "docker ps"
+ssh aliyun-ecs "docker ps --format '{{.Names}}\t{{.Status}}'"
 
 # 查看 API 日志
-ssh aliyun-ecs "docker logs -f mytrader-api"
+ssh aliyun-ecs "docker logs -f --tail 50 mytrader-api"
 
-# 查看 Actions 执行记录
-# github.com/zhaobo1023/myTrader/actions
+# 手动触发 API 优雅重载
+ssh aliyun-ecs "docker exec mytrader-api kill -HUP 1"
 
 # 验证 API 健康
-curl http://123.56.3.1/api/health
+curl -sf https://mytrader.cc/health
+
+# 查看 Actions 执行记录
+# https://github.com/zhaobo1023/myTrader/actions
 ```
 
 ## 注意事项
 
-- 服务器上没有 `.env` 文件，环境变量通过 `docker run -e` 注入（见 `/root/app/restart_v2.sh`）
-- `docker compose` 命令在服务器上会因为缺少 `.env` 报错，用 `docker` 命令直接操作
+- 服务器上没有 `.env` 文件，环境变量通过 `docker run -e` 或 `docker-compose` env 注入
+- `docker compose` 命令在服务器上可能因缺少 `.env` 报错，用 `docker` 命令直接操作
+- Gunicorn HUP 重载要求 PID 1 是 gunicorn master；如果不是（如改回 uvicorn），deploy 脚本会自动 fallback 到 `docker restart`
 - `trade_stock_basic` 的 `stock_code` 带 `.SH/.SZ` 后缀（如 `000001.SZ`）
-- `trade_stock_valuation_factor` 目前为空，市值字段均为 null
+- Web 镜像重建后记得清理旧镜像：`docker image prune -f`

@@ -57,10 +57,175 @@ def _latest_trade_date() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Tag CRUD
+# ---------------------------------------------------------------------------
+
+def list_tags(user_id: int) -> list:
+    """Return all tags for a user, with stock count."""
+    rows = execute_query(
+        '''SELECT t.id, t.name, t.color, t.created_at,
+                  (SELECT COUNT(*) FROM candidate_stock_tags st WHERE st.tag_id = t.id) AS stock_count
+           FROM candidate_tags t
+           WHERE t.user_id = %s
+           ORDER BY t.created_at DESC''',
+        (user_id,), env=_DB_ENV,
+    )
+    result = []
+    for r in rows:
+        result.append({
+            'id': r['id'],
+            'name': r['name'],
+            'color': r['color'],
+            'stock_count': int(r['stock_count']),
+            'created_at': str(r['created_at']) if r.get('created_at') else None,
+        })
+    return result
+
+
+def create_tag(user_id: int, name: str, color: str = '#5e6ad2') -> dict:
+    """Create a new tag for user. Returns tag dict."""
+    existing = execute_query(
+        'SELECT id FROM candidate_tags WHERE user_id = %s AND name = %s',
+        (user_id, name), env=_DB_ENV,
+    )
+    if existing:
+        return {'id': existing[0]['id'], 'name': name, 'color': color, 'action': 'exists'}
+
+    execute_update(
+        '''INSERT INTO candidate_tags (user_id, name, color, created_at)
+           VALUES (%s, %s, %s, NOW())''',
+        (user_id, name, color), env=_DB_ENV,
+    )
+    rows = execute_query(
+        'SELECT id FROM candidate_tags WHERE user_id = %s AND name = %s',
+        (user_id, name), env=_DB_ENV,
+    )
+    return {'id': rows[0]['id'], 'name': name, 'color': color, 'action': 'created'}
+
+
+def delete_tag(user_id: int, tag_id: int) -> bool:
+    """Delete a tag and all its associations."""
+    execute_update(
+        'DELETE FROM candidate_stock_tags WHERE tag_id = %s',
+        (tag_id,), env=_DB_ENV,
+    )
+    execute_update(
+        'DELETE FROM candidate_tags WHERE id = %s AND user_id = %s',
+        (tag_id, user_id), env=_DB_ENV,
+    )
+    return True
+
+
+def tag_stock(user_id: int, stock_id: int, tag_id: int) -> bool:
+    """Associate a tag with a stock. Validates ownership."""
+    # Verify tag belongs to user
+    tag = execute_query(
+        'SELECT id FROM candidate_tags WHERE id = %s AND user_id = %s',
+        (tag_id, user_id), env=_DB_ENV,
+    )
+    if not tag:
+        return False
+    # Verify stock belongs to user
+    stock = execute_query(
+        'SELECT id FROM candidate_pool_stocks WHERE id = %s AND user_id = %s',
+        (stock_id, user_id), env=_DB_ENV,
+    )
+    if not stock:
+        return False
+    execute_update(
+        '''INSERT INTO candidate_stock_tags (stock_id, tag_id, created_at)
+           VALUES (%s, %s, NOW())
+           ON DUPLICATE KEY UPDATE stock_id=stock_id''',
+        (stock_id, tag_id), env=_DB_ENV,
+    )
+    return True
+
+
+def untag_stock(user_id: int, stock_id: int, tag_id: int) -> bool:
+    """Remove a tag from a stock."""
+    execute_update(
+        'DELETE st FROM candidate_stock_tags st '
+        'INNER JOIN candidate_tags t ON st.tag_id = t.id '
+        'WHERE st.stock_id = %s AND st.tag_id = %s AND t.user_id = %s',
+        (stock_id, tag_id, user_id), env=_DB_ENV,
+    )
+    return True
+
+
+def get_stock_tags(stock_id: int) -> list:
+    """Get all tags for a stock."""
+    rows = execute_query(
+        '''SELECT t.id, t.name, t.color
+           FROM candidate_tags t
+           INNER JOIN candidate_stock_tags st ON st.tag_id = t.id
+           WHERE st.stock_id = %s
+           ORDER BY t.name''',
+        (stock_id,), env=_DB_ENV,
+    )
+    return [{'id': r['id'], 'name': r['name'], 'color': r['color']} for r in rows]
+
+
+def list_stocks_with_tags(user_id: int, tag_id: Optional[int] = None, **kwargs) -> list:
+    """List stocks optionally filtered by tag."""
+    stocks = list_stocks(user_id, **kwargs)
+    if not stocks:
+        return stocks
+
+    stock_ids = [s['id'] for s in stocks]
+
+    # Batch load tags for all stocks
+    CHUNK = 200
+    tag_map = {}
+    for i in range(0, len(stock_ids), CHUNK):
+        chunk = stock_ids[i:i + CHUNK]
+        ph = ','.join(['%s'] * len(chunk))
+        rows = execute_query(
+            f'''SELECT st.stock_id, t.id AS tag_id, t.name, t.color
+                FROM candidate_stock_tags st
+                INNER JOIN candidate_tags t ON st.tag_id = t.id
+                WHERE st.stock_id IN ({ph})
+                ORDER BY t.name''',
+            tuple(chunk), env=_DB_ENV,
+        )
+        for r in rows:
+            sid = r['stock_id']
+            if sid not in tag_map:
+                tag_map[sid] = []
+            tag_map[sid].append({'id': r['tag_id'], 'name': r['name'], 'color': r['color']})
+
+    # Filter by tag if specified
+    if tag_id is not None:
+        stocks = [s for s in stocks if any(t['id'] == tag_id for t in tag_map.get(s['id'], []))]
+
+    # Attach tags to each stock
+    for s in stocks:
+        s['tags'] = tag_map.get(s['id'], [])
+
+    return stocks
+
+
+# ---------------------------------------------------------------------------
+# Single stock refresh
+# ---------------------------------------------------------------------------
+
+def refresh_single_stock(stock_code: str, user_id: int) -> dict:
+    """Refresh monitor data for a single stock and return updated info."""
+    # Run full monitor to ensure data is fresh, then return just this stock
+    run_daily_monitor()
+
+    # Return updated stock data
+    stocks = list_stocks_with_tags(user_id)
+    for s in stocks:
+        if s['stock_code'] == stock_code:
+            return s
+    return {}
+
+
+# ---------------------------------------------------------------------------
 # Candidate pool CRUD
 # ---------------------------------------------------------------------------
 
-def list_stocks(user_id: int, status: Optional[str] = None, source_type: Optional[str] = None) -> list:
+def list_stocks(user_id: int = 0, status: Optional[str] = None, source_type: Optional[str] = None) -> list:
     """Return all candidate pool stocks with latest monitor snapshot."""
     where = ['c.user_id = %s']
     params = [user_id]
@@ -188,26 +353,34 @@ def add_stock(
 
 
 def update_stock(user_id: int, stock_code: str, status: Optional[str] = None, memo: Optional[str] = None) -> bool:
-    parts = ['user_id=%s']
-    params = [user_id]
+    set_parts = ['updated_at=NOW()']
+    params = []
     if status is not None:
-        parts.append('status=%s')
+        set_parts.append('status=%s')
         params.append(status)
     if memo is not None:
-        parts.append('memo=%s')
+        set_parts.append('memo=%s')
         params.append(memo)
-    parts.append('stock_code=%s')
-    params.append(stock_code)
-    parts.append('updated_at=NOW()')
-    params.append(stock_code)
+    params.extend([user_id, stock_code])
     execute_update(
-        f'UPDATE candidate_pool_stocks SET {", ".join(parts)} WHERE stock_code=%s',
+        f'UPDATE candidate_pool_stocks SET {", ".join(set_parts)} WHERE user_id=%s AND stock_code=%s',
         tuple(params), env=_DB_ENV,
     )
     return True
 
 
 def remove_stock(user_id: int, stock_code: str) -> bool:
+    # Remove tag associations first
+    rows = execute_query(
+        'SELECT id FROM candidate_pool_stocks WHERE user_id = %s AND stock_code = %s',
+        (user_id, stock_code), env=_DB_ENV,
+    )
+    if rows:
+        stock_id = rows[0]['id']
+        execute_update(
+            'DELETE FROM candidate_stock_tags WHERE stock_id = %s',
+            (stock_id,), env=_DB_ENV,
+        )
     execute_update(
         'DELETE FROM candidate_pool_stocks WHERE user_id = %s AND stock_code = %s',
         (user_id, stock_code), env=_DB_ENV,
