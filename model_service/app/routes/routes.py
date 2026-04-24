@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """API routes for model service."""
 import logging
-import psutil
 from fastapi import APIRouter, HTTPException
 
 from model_service.app.schemas import (
@@ -21,6 +20,7 @@ router = APIRouter()
 @router.get("/health", response_model=HealthResponse)
 def health():
     """Health check - reports model loading status and memory usage."""
+    import psutil
     proc = psutil.Process()
     return HealthResponse(
         status="healthy" if (embedding_service.is_loaded and sentiment_service.is_loaded) else "degraded",

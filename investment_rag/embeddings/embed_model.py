@@ -3,6 +3,7 @@
 Embedding model wrapper: Local model service (BGE-large-zh) with DashScope fallback.
 """
 import os
+import time
 import logging
 from typing import List, Optional
 
@@ -39,6 +40,7 @@ class EmbeddingClient:
         self.batch_size = cfg.embedding_batch_size
         self.local_service_url = cfg.local_model_service_url
         self._local_available: Optional[bool] = None
+        self._local_fail_time: float = 0
 
         if not cfg.embedding_api_key:
             raise ValueError("RAG_API_KEY is not set in .env")
@@ -50,11 +52,16 @@ class EmbeddingClient:
         )
 
     def _check_local_service(self) -> bool:
-        """Check if local model service is reachable."""
+        """Check if local model service is reachable.
+
+        After a failure, retries every 5 minutes to avoid permanent fallback.
+        """
         if not self.local_service_url:
             return False
         if self._local_available is False:
-            return False
+            # Retry after 5 minutes
+            if time.time() - self._local_fail_time < 300:
+                return False
         try:
             resp = requests.get(f"{self.local_service_url}/health", timeout=3)
             return resp.status_code == 200
@@ -84,6 +91,7 @@ class EmbeddingClient:
             except Exception as e:
                 logger.warning("Local embedding failed: %s, falling back to DashScope", e)
                 self._local_available = False
+                self._local_fail_time = time.time()
 
         # Fallback to DashScope
         return self._embed_dashscope(texts)
