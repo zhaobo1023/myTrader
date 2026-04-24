@@ -47,6 +47,7 @@ async def list_trade_logs(
     operation_type: Optional[str] = Query(default=None, max_length=20),
     from_date: Optional[str] = Query(default=None, description='YYYY-MM-DD'),
     to_date: Optional[str] = Query(default=None, description='YYYY-MM-DD'),
+    stock_code: Optional[str] = Query(default=None, max_length=20, description='Filter by stock code'),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
@@ -59,6 +60,8 @@ async def list_trade_logs(
 
     if operation_type:
         query = query.where(TradeOperationLog.operation_type == operation_type)
+    if stock_code:
+        query = query.where(TradeOperationLog.stock_code == stock_code)
     if from_date:
         query = query.where(TradeOperationLog.created_at >= f'{from_date} 00:00:00')
     if to_date:
@@ -106,6 +109,7 @@ async def export_trade_logs(
     operation_type: Optional[str] = Query(default=None, max_length=20),
     from_date: Optional[str] = Query(default=None, description='YYYY-MM-DD'),
     to_date: Optional[str] = Query(default=None, description='YYYY-MM-DD'),
+    stock_code: Optional[str] = Query(default=None, max_length=20),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -121,6 +125,8 @@ async def export_trade_logs(
     )
     if operation_type:
         query = query.where(TradeOperationLog.operation_type == operation_type)
+    if stock_code:
+        query = query.where(TradeOperationLog.stock_code == stock_code)
     if from_date:
         query = query.where(TradeOperationLog.created_at >= f'{from_date} 00:00:00')
     if to_date:
@@ -164,10 +170,12 @@ async def export_trade_logs(
 @router.get('/stats')
 async def trade_log_stats(
     days: int = Query(default=30, ge=1, le=365),
+    stock_code: Optional[str] = Query(default=None, max_length=20, description='Limit stats to one stock'),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """调仓日志统计"""
+    """调仓日志统计 - 整体或按个股"""
+    import json
     from datetime import datetime, timedelta
 
     since = datetime.utcnow() - timedelta(days=days)
@@ -175,12 +183,42 @@ async def trade_log_stats(
         TradeOperationLog.user_id == current_user.id,
         TradeOperationLog.created_at >= since,
     )
+    if stock_code:
+        query = query.where(TradeOperationLog.stock_code == stock_code)
     result = await db.execute(query)
     logs = result.scalars().all()
 
     type_counts = Counter(log.operation_type for log in logs)
+
+    # Per-stock summary (top 10 by activity)
+    stock_counts: dict = {}
+    for log in logs:
+        if log.stock_code:
+            key = log.stock_code
+            if key not in stock_counts:
+                stock_counts[key] = {'stock_code': key, 'stock_name': log.stock_name or key, 'total': 0, 'open': 0, 'close': 0, 'add_reduce': 0}
+            stock_counts[key]['total'] += 1
+            if log.operation_type == 'open_position':
+                stock_counts[key]['open'] += 1
+            elif log.operation_type == 'close_position':
+                stock_counts[key]['close'] += 1
+            elif log.operation_type == 'add_reduce':
+                stock_counts[key]['add_reduce'] += 1
+
+    top_stocks = sorted(stock_counts.values(), key=lambda x: x['total'], reverse=True)[:10]
+
+    # Close-position summary
+    close_logs = [log for log in logs if log.operation_type == 'close_position']
+    close_summary = {
+        'count': len(close_logs),
+        'stocks': list({log.stock_code: log.stock_name for log in close_logs if log.stock_code}.items())[:20],
+    }
+
     return {
         'period_days': days,
+        'stock_code': stock_code,
         'total': len(logs),
         'by_type': dict(type_counts),
+        'top_stocks': top_stocks,
+        'close_summary': close_summary,
     }

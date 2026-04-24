@@ -16,7 +16,7 @@ import time
 from datetime import date, timedelta
 from typing import Optional
 
-from config.db import execute_query, execute_update
+from config.db import execute_query, execute_many, execute_update
 
 logger = logging.getLogger('myTrader.announcement_fetcher')
 
@@ -31,23 +31,25 @@ FETCH_CATEGORIES = [
 ]
 
 # 公告类型关键词 -> ann_type 标准化
+# 顺序重要：更具体的关键词排在前面，避免"减持回购"被"减持"先匹配
 _TYPE_MAP = {
-    '减持': 'reduce',
-    '增持': 'increase',
-    '回购': 'buyback',
+    '解除限售': 'unlock',
+    '股权激励': 'equity_incentive',
+    '定向增发': 'placement',
+    '可转债': 'convertible',
+    '重大合同': 'major_contract',
     '业绩预告': 'earnings_guide',
     '业绩快报': 'earnings_guide',
     '利润分配': 'dividend',
-    '分红': 'dividend',
-    '重大合同': 'major_contract',
-    '收购': 'acquisition',
+    '资产重组': 'restructure',
     '重组': 'restructure',
-    '定向增发': 'placement',
-    '可转债': 'convertible',
-    '风险': 'risk_warning',
+    '收购': 'acquisition',
+    '回购': 'buyback',
+    '增持': 'increase',
+    '减持': 'reduce',
+    '分红': 'dividend',
     '退市': 'risk_warning',
-    '股权激励': 'equity_incentive',
-    '解除限售': 'unlock',
+    '风险': 'risk_warning',
 }
 
 # 高价值类型 (direction 判断用)
@@ -141,27 +143,30 @@ def fetch_announcements_for_date(target_date: date) -> dict:
         logger.info('[announcement] %s: no announcements found', date_str)
         return {'fetched': 0, 'new': 0, 'errors': 0}
 
-    # 写入 research_announcements
+    # 批量写入 research_announcements
+    params_list = [
+        (code, ann_date_val, ann_type, title[:299], direction, magnitude, url[:499])
+        for code, ann_date_val, ann_type, title, direction, magnitude, url in all_rows
+    ]
     new_count = 0
     errors = 0
-    for code, ann_date_val, ann_type, title, direction, magnitude, url in all_rows:
-        try:
-            execute_update(
-                """INSERT INTO research_announcements
-                       (code, ann_date, ann_type, title, direction, magnitude, pdf_url, created_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                   ON DUPLICATE KEY UPDATE
-                       ann_type = VALUES(ann_type),
-                       direction = VALUES(direction),
-                       magnitude = VALUES(magnitude),
-                       pdf_url = COALESCE(VALUES(pdf_url), pdf_url)""",
-                (code, ann_date_val, ann_type, title[:299], direction, magnitude, url[:499]),
-                env='online',
-            )
-            new_count += 1
-        except Exception as e:
-            logger.debug('[announcement] insert failed for %s %s: %s', code, title[:40], e)
-            errors += 1
+    try:
+        execute_many(
+            """INSERT INTO research_announcements
+                   (code, ann_date, ann_type, title, direction, magnitude, pdf_url, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+               ON DUPLICATE KEY UPDATE
+                   ann_type = VALUES(ann_type),
+                   direction = VALUES(direction),
+                   magnitude = VALUES(magnitude),
+                   pdf_url = COALESCE(VALUES(pdf_url), pdf_url)""",
+            params_list,
+            env='online',
+        )
+        new_count = len(params_list)
+    except Exception as e:
+        logger.warning('[announcement] batch insert failed: %s', e)
+        errors = len(params_list)
 
     logger.info('[announcement] %s done: fetched=%d written=%d errors=%d',
                 date_str, len(all_rows), new_count, errors)

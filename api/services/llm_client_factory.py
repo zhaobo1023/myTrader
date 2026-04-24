@@ -110,7 +110,10 @@ class LLMClientFactory:
             api_key=key,
             base_url=self.base_url,
             http_client=httpx.Client(timeout=_LLM_HTTP_TIMEOUT),
-            max_retries=0,  # disable SDK-level retries; let caller handle
+            # Disable SDK-level retries: the SDK retries on timeout by default,
+            # which multiplies wall time (90s timeout * 3 attempts = 270s+).
+            # llm_call_with_retry() handles retry logic at the application level.
+            max_retries=0,
         )
         messages = []
         if system_prompt:

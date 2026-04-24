@@ -261,6 +261,8 @@ function ManualNoteForm({ onDone }: { onDone: () => void }) {
 
 export default function TradeLogContent() {
   const [activeType, setActiveType] = useState('');
+  const [stockFilter, setStockFilter] = useState('');
+  const [stockFilterInput, setStockFilterInput] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [page, setPage] = useState(1);
   const [exporting, setExporting] = useState(false);
@@ -268,22 +270,24 @@ export default function TradeLogContent() {
   const pageSize = 50;
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['trade-logs', activeType, page],
+    queryKey: ['trade-logs', activeType, stockFilter, page],
     queryFn: () => tradeLogApi.list({
       operation_type: activeType || undefined,
+      stock_code: stockFilter || undefined,
       page,
       page_size: pageSize,
     }),
   });
 
   const { data: stats } = useQuery({
-    queryKey: ['trade-logs-stats'],
-    queryFn: () => tradeLogApi.stats(30),
+    queryKey: ['trade-logs-stats', stockFilter],
+    queryFn: () => tradeLogApi.stats({ days: 90, stock_code: stockFilter || undefined }),
   });
 
   const items = data?.data?.items || [];
   const total = data?.data?.total || 0;
   const totalPages = Math.ceil(total / pageSize);
+  const statsData = stats?.data;
 
   const filterBtnStyle = (active: boolean): React.CSSProperties => ({
     fontSize: '12px', padding: '4px 12px', borderRadius: '4px',
@@ -293,25 +297,58 @@ export default function TradeLogContent() {
     cursor: 'pointer', fontWeight: active ? 510 : 400,
   });
 
+  function applyStockFilter() {
+    setStockFilter(stockFilterInput.trim().toUpperCase());
+    setPage(1);
+  }
+
+  function clearStockFilter() {
+    setStockFilter('');
+    setStockFilterInput('');
+    setPage(1);
+  }
+
   return (
     <div>
       {/* Stats summary */}
-      {stats?.data && (
-        <div style={{
-          display: 'flex', gap: '16px', marginBottom: '16px', flexWrap: 'wrap',
-          fontSize: '12px', color: 'var(--text-muted)',
-        }}>
-          <span>近30天操作 <b style={{ color: 'var(--text-primary)' }}>{stats.data.total}</b> 次</span>
-          {Object.entries(stats.data.by_type || {}).map(([type, count]) => (
-            <span key={type}>
-              {OP_TYPE_LABELS[type] || type} <b style={{ color: 'var(--text-primary)' }}>{count}</b>
-            </span>
-          ))}
+      {statsData && (
+        <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '12px 16px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', fontSize: '12px', color: 'var(--text-muted)', marginBottom: statsData.top_stocks?.length ? '10px' : '0' }}>
+            <span>近90天操作 <b style={{ color: 'var(--text-primary)' }}>{statsData.total}</b> 次</span>
+            {Object.entries(statsData.by_type || {}).map(([type, count]) => (
+              <span key={type}>
+                {OP_TYPE_LABELS[type] || type} <b style={{ color: OP_TYPE_COLORS[type] || 'var(--text-primary)' }}>{count}</b>
+              </span>
+            ))}
+            {statsData.close_summary?.count > 0 && (
+              <span>清仓涉及 <b style={{ color: 'var(--text-primary)' }}>{statsData.close_summary.count}</b> 次 · {statsData.close_summary.stocks.length} 只</span>
+            )}
+          </div>
+          {/* Top stocks */}
+          {statsData.top_stocks && statsData.top_stocks.length > 0 && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {statsData.top_stocks.slice(0, 8).map(s => (
+                <button
+                  key={s.stock_code}
+                  onClick={() => { setStockFilterInput(s.stock_code); setStockFilter(s.stock_code); setPage(1); }}
+                  style={{
+                    fontSize: '11px', padding: '2px 8px', borderRadius: '10px',
+                    border: `1px solid ${stockFilter === s.stock_code ? 'var(--accent)' : 'var(--border-subtle)'}`,
+                    background: stockFilter === s.stock_code ? 'rgba(94,106,210,0.12)' : 'transparent',
+                    color: stockFilter === s.stock_code ? 'var(--accent)' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {s.stock_name} <span style={{ color: 'var(--text-muted)' }}>{s.total}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {/* Toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
         {FILTER_TABS.map(tab => (
           <button
             key={tab.key}
@@ -327,7 +364,7 @@ export default function TradeLogContent() {
           onClick={async () => {
             setExporting(true);
             setExportError(false);
-            try { await tradeLogApi.export({ operation_type: activeType || undefined }); }
+            try { await tradeLogApi.export({ operation_type: activeType || undefined, stock_code: stockFilter || undefined }); }
             catch { setExportError(true); }
             finally { setExporting(false); }
           }}
@@ -345,14 +382,32 @@ export default function TradeLogContent() {
         )}
         <button
           onClick={() => setShowForm(true)}
-          style={{
-            fontSize: '12px', padding: '4px 14px', borderRadius: '4px',
-            background: 'var(--accent)', color: '#fff',
-            border: 'none', cursor: 'pointer', fontWeight: 510,
-          }}
+          style={{ fontSize: '12px', padding: '4px 14px', borderRadius: '4px', background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 510 }}
         >
           + 备注记录
         </button>
+      </div>
+
+      {/* Stock filter */}
+      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '16px' }}>
+        <input
+          value={stockFilterInput}
+          onChange={e => setStockFilterInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') applyStockFilter(); }}
+          placeholder="按股票代码筛选，如 600938.SH"
+          style={{ fontSize: '12px', padding: '5px 10px', borderRadius: '5px', border: `1px solid ${stockFilter ? 'var(--accent)' : 'var(--border-subtle)'}`, background: 'var(--bg-input)', color: 'var(--text-primary)', width: '220px' }}
+        />
+        <button onClick={applyStockFilter} style={{ fontSize: '12px', padding: '5px 12px', borderRadius: '5px', background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer' }}>
+          筛选
+        </button>
+        {stockFilter && (
+          <button onClick={clearStockFilter} style={{ fontSize: '12px', padding: '5px 10px', borderRadius: '5px', background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', cursor: 'pointer' }}>
+            清除
+          </button>
+        )}
+        {stockFilter && (
+          <span style={{ fontSize: '12px', color: 'var(--accent)' }}>当前筛选：{stockFilter}</span>
+        )}
       </div>
 
       {/* Manual note form */}

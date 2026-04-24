@@ -369,6 +369,71 @@ def update_stock(user_id: int, stock_code: str, status: Optional[str] = None, me
     return True
 
 
+def list_memos_by_user(user_id: int, stock_code: str) -> list:
+    """Return all memos for a user's candidate stock, newest first."""
+    rows = execute_query(
+        '''SELECT m.id, m.content, m.created_at
+           FROM candidate_pool_memos m
+           JOIN candidate_pool_stocks s ON s.id = m.candidate_stock_id
+           WHERE s.user_id = %s AND s.stock_code = %s
+           ORDER BY m.created_at DESC''',
+        (user_id, stock_code), env=_DB_ENV,
+    )
+    return [
+        {'id': r['id'], 'content': r['content'], 'created_at': str(r['created_at'])}
+        for r in rows
+    ]
+
+
+def list_memos(candidate_stock_id: int) -> list:
+    """Return all memos for a candidate stock, newest first."""
+    rows = execute_query(
+        'SELECT id, content, created_at FROM candidate_pool_memos WHERE candidate_stock_id = %s ORDER BY created_at DESC',
+        (candidate_stock_id,), env=_DB_ENV,
+    )
+    return [
+        {'id': r['id'], 'content': r['content'], 'created_at': str(r['created_at'])}
+        for r in rows
+    ]
+
+
+def add_memo(user_id: int, stock_code: str, content: str) -> dict:
+    """Add a memo entry. Returns the new memo dict."""
+    rows = execute_query(
+        'SELECT id FROM candidate_pool_stocks WHERE user_id = %s AND stock_code = %s',
+        (user_id, stock_code), env=_DB_ENV,
+    )
+    if not rows:
+        raise ValueError(f'Stock {stock_code} not found in candidate pool for user {user_id}')
+    candidate_stock_id = rows[0]['id']
+    execute_update(
+        'INSERT INTO candidate_pool_memos (candidate_stock_id, content, created_at) VALUES (%s, %s, NOW())',
+        (candidate_stock_id, content), env=_DB_ENV,
+    )
+    new_row = execute_query(
+        'SELECT id, content, created_at FROM candidate_pool_memos WHERE candidate_stock_id = %s ORDER BY id DESC LIMIT 1',
+        (candidate_stock_id,), env=_DB_ENV,
+    )
+    r = new_row[0]
+    return {'id': r['id'], 'content': r['content'], 'created_at': str(r['created_at'])}
+
+
+def delete_memo(user_id: int, stock_code: str, memo_id: int) -> bool:
+    """Delete a memo. Verifies ownership via candidate_pool_stocks."""
+    rows = execute_query(
+        'SELECT id FROM candidate_pool_stocks WHERE user_id = %s AND stock_code = %s',
+        (user_id, stock_code), env=_DB_ENV,
+    )
+    if not rows:
+        return False
+    candidate_stock_id = rows[0]['id']
+    execute_update(
+        'DELETE FROM candidate_pool_memos WHERE id = %s AND candidate_stock_id = %s',
+        (memo_id, candidate_stock_id), env=_DB_ENV,
+    )
+    return True
+
+
 def remove_stock(user_id: int, stock_code: str) -> bool:
     # Remove tag associations first
     rows = execute_query(

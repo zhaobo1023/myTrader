@@ -231,27 +231,43 @@ def _fetch_social_article(target_date: date = None) -> Optional[dict]:
 
 def _lookup_stock_codes(names: list) -> dict:
     """
-    个股名称 -> 股票代码 模糊匹配。
+    个股名称 -> 股票代码 精确批量匹配。
     返回 {name: code} 字典，未匹配到则不包含该 key。
     """
     if not names:
         return {}
 
+    cleaned = [n.strip() for n in names if n.strip() and len(n.strip()) >= 2]
+    if not cleaned:
+        return {}
+
+    placeholders = ','.join(['%s'] * len(cleaned))
     result = {}
-    for name in names:
-        name_clean = name.strip()
-        if not name_clean or len(name_clean) < 2:
-            continue
+    try:
+        rows = execute_query(
+            'SELECT stock_code, stock_name FROM trade_stock_basic WHERE stock_name IN ({})'.format(placeholders),
+            tuple(cleaned),
+            env='online',
+        )
+        for r in rows:
+            result[r['stock_name']] = r['stock_code']
+    except Exception as e:
+        logger.warning('[v2] Batch code lookup failed: %s', e)
+
+    # 精确匹配未命中时，尝试 LIKE 兜底（一次查询）
+    unmatched = [n for n in cleaned if n not in result]
+    if unmatched:
         try:
-            rows = execute_query(
-                "SELECT stock_code, stock_name FROM trade_stock_basic WHERE stock_name LIKE %s LIMIT 1",
-                ('%{}%'.format(name_clean),),
-                env='online',
-            )
-            if rows:
-                result[name_clean] = rows[0]['stock_code']
+            for name in unmatched:
+                rows2 = execute_query(
+                    'SELECT stock_code, stock_name FROM trade_stock_basic WHERE stock_name LIKE %s LIMIT 1',
+                    ('%{}%'.format(name),),
+                    env='online',
+                )
+                if rows2:
+                    result[name] = rows2[0]['stock_code']
         except Exception as e:
-            logger.debug('[v2] Code lookup failed for %s: %s', name_clean, e)
+            logger.debug('[v2] Fallback LIKE lookup failed: %s', e)
 
     logger.info('[v2] Resolved %d/%d stock names to codes', len(result), len(names))
     return result
@@ -286,8 +302,8 @@ def _fetch_tech_data(codes: list) -> dict:
             for r in rows:
                 factor_map[r['stock_code']] = {
                     'rsi': float(r['rsi_14'] or 50),
-                    'mom20': float(r['momentum_20d'] or 0) * 100,
-                    'mom60': float(r['momentum_60d'] or 0) * 100,
+                    'mom20': float(r['momentum_20d'] or 0),
+                    'mom60': float(r['momentum_60d'] or 0),
                     'macd': float(r['macd_signal'] or 0),
                     'pos': float(r['price_position'] or 0.5) * 100,
                     'turnover': float(r['turnover_ratio'] or 0),
@@ -348,7 +364,7 @@ def _format_tech_data(name_code_map: dict, tech_data: dict) -> str:
         mom20 = td.get('mom20', 0)
         rps20 = td.get('rps20', 50)
         rps60 = td.get('rps60', 50)
-        rps120 = td.get('rps_120', td.get('rps120', 50))
+        rps120 = td.get('rps120', 50)
         macd = td.get('macd', 0)
         macd_label = '多头' if macd > 0 else '空头'
         pos = td.get('pos', 50)
