@@ -158,14 +158,24 @@ function LogCard({ item }: { item: TradeLogItem }) {
 // Manual Note Form
 // ---------------------------------------------------------------------------
 
-function ManualNoteForm({ onDone }: { onDone: () => void }) {
+const MANUAL_OP_TYPES = [
+  { key: 'open_position', label: '建仓' },
+  { key: 'add_reduce', label: '加减仓' },
+  { key: 'close_position', label: '清仓' },
+  { key: 'manual_note', label: '备注' },
+];
+
+function ManualTradeForm({ onDone }: { onDone: () => void }) {
+  const [opType, setOpType] = useState('manual_note');
   const [stockCode, setStockCode] = useState('');
   const [stockName, setStockName] = useState('');
+  const [price, setPrice] = useState('');
+  const [shares, setShares] = useState('');
   const [detail, setDetail] = useState('');
 
   const qc = useQueryClient();
   const mutation = useMutation({
-    mutationFn: (data: { stock_code?: string; stock_name?: string; detail?: string }) =>
+    mutationFn: (data: { operation_type?: string; stock_code?: string; stock_name?: string; detail?: string; before_value?: string; after_value?: string }) =>
       tradeLogApi.create(data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['trade-logs'] });
@@ -173,13 +183,30 @@ function ManualNoteForm({ onDone }: { onDone: () => void }) {
     },
   });
 
+  const isTradeOp = opType !== 'manual_note';
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!detail.trim()) return;
+    if (isTradeOp && !stockCode.trim()) return;
+    if (!isTradeOp && !detail.trim()) return;
+
+    const afterValue: Record<string, unknown> = {};
+    if (price) afterValue.price = parseFloat(price);
+    if (shares) afterValue.shares = parseInt(shares, 10);
+
+    const detailParts: string[] = [];
+    if (isTradeOp) {
+      const opLabel = MANUAL_OP_TYPES.find(t => t.key === opType)?.label || opType;
+      if (price) detailParts.push(`${opLabel} ${shares || '?'}股 @ ${price}`);
+      if (detail.trim()) detailParts.push(detail.trim());
+    }
+
     mutation.mutate({
+      operation_type: opType,
       stock_code: stockCode.trim() || undefined,
       stock_name: stockName.trim() || undefined,
-      detail: detail.trim(),
+      detail: isTradeOp ? (detailParts.join(' | ') || undefined) : detail.trim(),
+      after_value: Object.keys(afterValue).length > 0 ? JSON.stringify(afterValue) : undefined,
     });
   }
 
@@ -195,13 +222,35 @@ function ManualNoteForm({ onDone }: { onDone: () => void }) {
       borderRadius: '8px', padding: '14px 16px', marginBottom: '16px',
     }}>
       <div style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-primary)', marginBottom: '10px' }}>
-        添加复盘备注
+        手动录入调仓记录
       </div>
+
+      {/* Operation type */}
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+        {MANUAL_OP_TYPES.map(t => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setOpType(t.key)}
+            style={{
+              fontSize: '12px', padding: '4px 12px', borderRadius: '4px',
+              border: opType === t.key ? '1px solid var(--accent)' : '1px solid var(--border-subtle)',
+              background: opType === t.key ? 'rgba(94,106,210,0.12)' : 'transparent',
+              color: opType === t.key ? 'var(--accent)' : 'var(--text-muted)',
+              cursor: 'pointer', fontWeight: opType === t.key ? 510 : 400,
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Stock info */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
         <input
           value={stockCode}
           onChange={e => setStockCode(e.target.value)}
-          placeholder="股票代码 (选填)"
+          placeholder={isTradeOp ? '股票代码 (必填)' : '股票代码 (选填)'}
           style={{ ...inputStyle, width: '140px' }}
         />
         <input
@@ -210,11 +259,34 @@ function ManualNoteForm({ onDone }: { onDone: () => void }) {
           placeholder="股票名称 (选填)"
           style={{ ...inputStyle, width: '140px' }}
         />
+        {isTradeOp && (
+          <>
+            <input
+              value={price}
+              onChange={e => setPrice(e.target.value)}
+              placeholder="成交价"
+              type="number"
+              step="0.01"
+              style={{ ...inputStyle, width: '110px' }}
+            />
+            {opType !== 'close_position' && (
+              <input
+                value={shares}
+                onChange={e => setShares(e.target.value)}
+                placeholder="股数"
+                type="number"
+                min="1"
+                style={{ ...inputStyle, width: '100px' }}
+              />
+            )}
+          </>
+        )}
       </div>
+
       <textarea
         value={detail}
         onChange={e => setDetail(e.target.value)}
-        placeholder="记录调仓思路、市场观察、操作原因..."
+        placeholder={isTradeOp ? '操作原因/备注 (选填)' : '记录调仓思路、市场观察、操作原因...'}
         rows={2}
         style={{
           ...inputStyle, width: '100%', marginBottom: '10px', resize: 'vertical',
@@ -224,12 +296,13 @@ function ManualNoteForm({ onDone }: { onDone: () => void }) {
       <div style={{ display: 'flex', gap: '8px' }}>
         <button
           type="submit"
-          disabled={mutation.isPending || !detail.trim()}
+          disabled={mutation.isPending || (isTradeOp ? !stockCode.trim() : !detail.trim())}
           style={{
             fontSize: '12px', padding: '6px 18px', borderRadius: '6px',
-            background: mutation.isPending || !detail.trim() ? 'var(--bg-card-hover)' : 'var(--accent)',
-            color: mutation.isPending || !detail.trim() ? 'var(--text-muted)' : '#fff',
+            background: mutation.isPending ? 'var(--bg-card-hover)' : 'var(--accent)',
+            color: mutation.isPending ? 'var(--text-muted)' : '#fff',
             border: 'none', cursor: mutation.isPending ? 'default' : 'pointer', fontWeight: 510,
+            opacity: (isTradeOp ? !stockCode.trim() : !detail.trim()) ? 0.5 : 1,
           }}
         >
           {mutation.isPending ? '提交中...' : '提交'}
@@ -261,33 +334,37 @@ function ManualNoteForm({ onDone }: { onDone: () => void }) {
 
 export default function TradeLogContent() {
   const [activeType, setActiveType] = useState('');
-  const [stockFilter, setStockFilter] = useState('');
-  const [stockFilterInput, setStockFilterInput] = useState('');
+  const [keyword, setKeyword] = useState('');
+  const [debouncedKeyword, setDebouncedKeyword] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [page, setPage] = useState(1);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState(false);
   const pageSize = 50;
+  const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleKeywordChange(val: string) {
+    setKeyword(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setDebouncedKeyword(val.trim());
+      setPage(1);
+    }, 400);
+  }
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['trade-logs', activeType, stockFilter, page],
+    queryKey: ['trade-logs', activeType, debouncedKeyword, page],
     queryFn: () => tradeLogApi.list({
       operation_type: activeType || undefined,
-      stock_code: stockFilter || undefined,
+      keyword: debouncedKeyword || undefined,
       page,
       page_size: pageSize,
     }),
   });
 
-  const { data: stats } = useQuery({
-    queryKey: ['trade-logs-stats', stockFilter],
-    queryFn: () => tradeLogApi.stats({ days: 90, stock_code: stockFilter || undefined }),
-  });
-
   const items = data?.data?.items || [];
   const total = data?.data?.total || 0;
   const totalPages = Math.ceil(total / pageSize);
-  const statsData = stats?.data;
 
   const filterBtnStyle = (active: boolean): React.CSSProperties => ({
     fontSize: '12px', padding: '4px 12px', borderRadius: '4px',
@@ -297,57 +374,9 @@ export default function TradeLogContent() {
     cursor: 'pointer', fontWeight: active ? 510 : 400,
   });
 
-  function applyStockFilter() {
-    setStockFilter(stockFilterInput.trim().toUpperCase());
-    setPage(1);
-  }
-
-  function clearStockFilter() {
-    setStockFilter('');
-    setStockFilterInput('');
-    setPage(1);
-  }
-
   return (
     <div>
-      {/* Stats summary */}
-      {statsData && (
-        <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '12px 16px', marginBottom: '16px' }}>
-          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', fontSize: '12px', color: 'var(--text-muted)', marginBottom: statsData.top_stocks?.length ? '10px' : '0' }}>
-            <span>近90天操作 <b style={{ color: 'var(--text-primary)' }}>{statsData.total}</b> 次</span>
-            {Object.entries(statsData.by_type || {}).map(([type, count]) => (
-              <span key={type}>
-                {OP_TYPE_LABELS[type] || type} <b style={{ color: OP_TYPE_COLORS[type] || 'var(--text-primary)' }}>{count}</b>
-              </span>
-            ))}
-            {statsData.close_summary?.count > 0 && (
-              <span>清仓涉及 <b style={{ color: 'var(--text-primary)' }}>{statsData.close_summary.count}</b> 次 · {statsData.close_summary.stocks.length} 只</span>
-            )}
-          </div>
-          {/* Top stocks */}
-          {statsData.top_stocks && statsData.top_stocks.length > 0 && (
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {statsData.top_stocks.slice(0, 8).map(s => (
-                <button
-                  key={s.stock_code}
-                  onClick={() => { setStockFilterInput(s.stock_code); setStockFilter(s.stock_code); setPage(1); }}
-                  style={{
-                    fontSize: '11px', padding: '2px 8px', borderRadius: '10px',
-                    border: `1px solid ${stockFilter === s.stock_code ? 'var(--accent)' : 'var(--border-subtle)'}`,
-                    background: stockFilter === s.stock_code ? 'rgba(94,106,210,0.12)' : 'transparent',
-                    color: stockFilter === s.stock_code ? 'var(--accent)' : 'var(--text-secondary)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {s.stock_name} <span style={{ color: 'var(--text-muted)' }}>{s.total}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Toolbar */}
+      {/* Toolbar: filter tabs + search + actions */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
         {FILTER_TABS.map(tab => (
           <button
@@ -358,13 +387,41 @@ export default function TradeLogContent() {
             {tab.label}
           </button>
         ))}
+
+        {/* Keyword search */}
+        <div style={{ position: 'relative', marginLeft: '4px' }}>
+          <input
+            value={keyword}
+            onChange={e => handleKeywordChange(e.target.value)}
+            placeholder="搜索股票名称或代码"
+            style={{
+              fontSize: '12px', padding: '5px 10px', paddingRight: keyword ? '26px' : '10px',
+              borderRadius: '5px',
+              border: `1px solid ${debouncedKeyword ? 'var(--accent)' : 'var(--border-subtle)'}`,
+              background: 'var(--bg-input)', color: 'var(--text-primary)', width: '180px',
+            }}
+          />
+          {keyword && (
+            <button
+              onClick={() => { setKeyword(''); setDebouncedKeyword(''); setPage(1); }}
+              style={{
+                position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)',
+                fontSize: '11px', color: 'var(--text-muted)', background: 'none', border: 'none',
+                cursor: 'pointer', padding: '0 2px', lineHeight: 1,
+              }}
+            >
+              x
+            </button>
+          )}
+        </div>
+
         <div style={{ flex: 1 }} />
         <button
           disabled={exporting}
           onClick={async () => {
             setExporting(true);
             setExportError(false);
-            try { await tradeLogApi.export({ operation_type: activeType || undefined, stock_code: stockFilter || undefined }); }
+            try { await tradeLogApi.export({ operation_type: activeType || undefined }); }
             catch { setExportError(true); }
             finally { setExporting(false); }
           }}
@@ -384,34 +441,12 @@ export default function TradeLogContent() {
           onClick={() => setShowForm(true)}
           style={{ fontSize: '12px', padding: '4px 14px', borderRadius: '4px', background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 510 }}
         >
-          + 备注记录
+          + 录入记录
         </button>
       </div>
 
-      {/* Stock filter */}
-      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '16px' }}>
-        <input
-          value={stockFilterInput}
-          onChange={e => setStockFilterInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') applyStockFilter(); }}
-          placeholder="按股票代码筛选，如 600938.SH"
-          style={{ fontSize: '12px', padding: '5px 10px', borderRadius: '5px', border: `1px solid ${stockFilter ? 'var(--accent)' : 'var(--border-subtle)'}`, background: 'var(--bg-input)', color: 'var(--text-primary)', width: '220px' }}
-        />
-        <button onClick={applyStockFilter} style={{ fontSize: '12px', padding: '5px 12px', borderRadius: '5px', background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer' }}>
-          筛选
-        </button>
-        {stockFilter && (
-          <button onClick={clearStockFilter} style={{ fontSize: '12px', padding: '5px 10px', borderRadius: '5px', background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', cursor: 'pointer' }}>
-            清除
-          </button>
-        )}
-        {stockFilter && (
-          <span style={{ fontSize: '12px', color: 'var(--accent)' }}>当前筛选：{stockFilter}</span>
-        )}
-      </div>
-
-      {/* Manual note form */}
-      {showForm && <ManualNoteForm onDone={() => setShowForm(false)} />}
+      {/* Manual trade form */}
+      {showForm && <ManualTradeForm onDone={() => setShowForm(false)} />}
 
       {/* Log list */}
       {isLoading && (

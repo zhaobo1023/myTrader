@@ -512,7 +512,8 @@ function BatchAnalyzePanel({ result, onClose }: { result: BatchAnalyzeResult; on
   );
 }
 
-function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClose: () => void }) {
+function RiskScanV2Panel({ result, expanded = false }: { result: LayeredRiskResult; expanded?: boolean }) {
+  const [collapsed, setCollapsed] = useState(!expanded);
   const overallLevel =
     result.overall_score >= 70 ? 'CRITICAL' :
     result.overall_score >= 50 ? 'HIGH' :
@@ -529,17 +530,27 @@ function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClo
 
   return (
     <div style={{ marginBottom: '16px', borderRadius: '8px', background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', overflow: 'hidden' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+      {/* Header (clickable to toggle) */}
+      <div
+        onClick={() => setCollapsed(c => !c)}
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: collapsed ? 'none' : '1px solid var(--border-subtle)', cursor: 'pointer', userSelect: 'none' }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>风控扫描结果 (V2)</span>
+          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>风控扫描结果</span>
           <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{result.scan_time}</span>
           <ScoreChip score={result.overall_score} level={overallLevel} />
+          {collapsed && cleanSuggestions.length > 0 && (
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {cleanSuggestions[0]}
+            </span>
+          )}
         </div>
-        <button onClick={onClose} style={{ fontSize: '12px', color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px' }}>关闭</button>
+        <span style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '2px 6px' }}>
+          {collapsed ? '展开' : '收起'}
+        </span>
       </div>
 
-      <div style={{ padding: '12px 16px' }}>
+      {!collapsed && <div style={{ padding: '12px 16px' }}>
         {/* L1 宏观 */}
         <LayerCard title="L1 宏观环境" score={result.macro.score} level={result.macro.level}>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
@@ -710,7 +721,7 @@ function RiskScanV2Panel({ result, onClose }: { result: LayeredRiskResult; onClo
             </ul>
           )}
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
@@ -726,6 +737,7 @@ export default function PositionsContent() {
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<LayeredRiskResult | null>(null);
+  const [scanExpanded, setScanExpanded] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeResult, setAnalyzeResult] = useState<BatchAnalyzeResult | null>(null);
@@ -989,10 +1001,11 @@ export default function PositionsContent() {
             disabled={scanning}
             onClick={async () => {
               setScanning(true);
-              setScanResult(null);
+              setScanExpanded(false);
               try {
                 const res = await riskApi.scan();
                 setScanResult(res.data);
+                setScanExpanded(true);
               } catch { setActionMsg('风控扫描失败'); }
               finally { setScanning(false); }
             }}
@@ -1291,7 +1304,7 @@ export default function PositionsContent() {
       {overviewData && <RiskOverviewBar data={overviewData} />}
 
       {scanResult && (
-        <RiskScanV2Panel result={scanResult} onClose={() => setScanResult(null)} />
+        <RiskScanV2Panel key={scanResult.scan_time} result={scanResult} expanded={scanExpanded} />
       )}
 
       {analyzeResult && (

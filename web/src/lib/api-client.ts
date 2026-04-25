@@ -603,9 +603,9 @@ export interface TradeLogItem {
 }
 
 export const tradeLogApi = {
-  list: (params?: { operation_type?: string; from_date?: string; to_date?: string; stock_code?: string; page?: number; page_size?: number }) =>
+  list: (params?: { operation_type?: string; from_date?: string; to_date?: string; stock_code?: string; keyword?: string; page?: number; page_size?: number }) =>
     apiClient.get<{ items: TradeLogItem[]; total: number }>('/api/trade-logs', { params }),
-  create: (data: { stock_code?: string; stock_name?: string; detail?: string }) =>
+  create: (data: { operation_type?: string; stock_code?: string; stock_name?: string; detail?: string; before_value?: string; after_value?: string }) =>
     apiClient.post<TradeLogItem>('/api/trade-logs', data),
   stats: (params?: { days?: number; stock_code?: string }) =>
     apiClient.get<{

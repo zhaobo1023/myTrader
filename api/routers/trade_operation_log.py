@@ -47,7 +47,8 @@ async def list_trade_logs(
     operation_type: Optional[str] = Query(default=None, max_length=20),
     from_date: Optional[str] = Query(default=None, description='YYYY-MM-DD'),
     to_date: Optional[str] = Query(default=None, description='YYYY-MM-DD'),
-    stock_code: Optional[str] = Query(default=None, max_length=20, description='Filter by stock code'),
+    stock_code: Optional[str] = Query(default=None, max_length=20, description='Filter by stock code (exact)'),
+    keyword: Optional[str] = Query(default=None, max_length=30, description='Fuzzy search stock code or name'),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
@@ -62,6 +63,13 @@ async def list_trade_logs(
         query = query.where(TradeOperationLog.operation_type == operation_type)
     if stock_code:
         query = query.where(TradeOperationLog.stock_code == stock_code)
+    if keyword:
+        kw = f'%{keyword}%'
+        from sqlalchemy import or_
+        query = query.where(or_(
+            TradeOperationLog.stock_code.like(kw),
+            TradeOperationLog.stock_name.like(kw),
+        ))
     if from_date:
         query = query.where(TradeOperationLog.created_at >= f'{from_date} 00:00:00')
     if to_date:
@@ -89,13 +97,15 @@ async def create_trade_log(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """手动添加调仓日志 (复盘/备注)"""
+    """手动添加调仓日志 (复盘/备注/手动录入调仓)"""
     log = TradeOperationLog(
         user_id=current_user.id,
         operation_type=req.operation_type or 'manual_note',
         stock_code=req.stock_code or '',
         stock_name=req.stock_name,
         detail=req.detail,
+        before_value=req.before_value,
+        after_value=req.after_value,
         source='manual',
     )
     db.add(log)

@@ -12,6 +12,8 @@ class TradeLogCreate(BaseModel):
     stock_code: Optional[str] = Field(default='', max_length=20)
     stock_name: Optional[str] = Field(default=None, max_length=50)
     detail: Optional[str] = Field(default=None, max_length=500)
+    before_value: Optional[str] = Field(default=None, max_length=200)
+    after_value: Optional[str] = Field(default=None, max_length=200)
 
 
 class TradeLogResponse(BaseModel):
