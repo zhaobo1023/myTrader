@@ -61,3 +61,43 @@ export interface MemoItem {
   content: string;
   created_at: string;
 }
+
+export interface ScreenStock {
+  stock_code: string;
+  stock_name: string;
+  province: string | null;
+  city: string | null;
+  industry: string | null;
+  listed_date: string | null;
+  main_business_short: string | null;
+  close: number | null;
+  rps_250: number | null;
+  rps_120: number | null;
+  rps_20: number | null;
+  rps_slope: number | null;
+  in_pool: boolean;
+  trade_date: string;
+}
+
+export interface ScreenOptions {
+  provinces: string[];
+  industries: string[];
+}
+
+export interface ScreenParams {
+  province?: string;
+  industry?: string;
+  keyword?: string;
+  listed_years_min?: number;
+  listed_years_max?: number;
+  min_rps?: number;
+  sort_by?: string;
+  limit?: number;
+}
+
+export const screenApi = {
+  options: () =>
+    apiClient.get<ScreenOptions>('/api/candidate-pool/screen/options'),
+  screen: (params: ScreenParams) =>
+    apiClient.get<{ count: number; data: ScreenStock[] }>('/api/candidate-pool/screen', { params }),
+};

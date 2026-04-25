@@ -979,3 +979,156 @@ def push_feishu_daily_report(env: str = 'online') -> bool:
     except Exception as e:
         logger.error('[feishu] push failed: %s', e)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Stock screener (based on trade_stock_info)
+# ---------------------------------------------------------------------------
+
+def get_screen_options() -> dict:
+    """Return distinct provinces and industries for filter dropdowns."""
+    provinces = execute_query(
+        'SELECT DISTINCT province FROM trade_stock_info WHERE province IS NOT NULL ORDER BY province',
+        env=_DB_ENV,
+    )
+    industries = execute_query(
+        'SELECT DISTINCT industry FROM trade_stock_info WHERE industry IS NOT NULL ORDER BY industry',
+        env=_DB_ENV,
+    )
+    return {
+        'provinces': [r['province'] for r in provinces if r['province']],
+        'industries': [r['industry'] for r in industries if r['industry']],
+    }
+
+
+def screen_stocks(
+    province: Optional[str] = None,
+    industry: Optional[str] = None,
+    keyword: Optional[str] = None,
+    listed_years_min: Optional[int] = None,
+    listed_years_max: Optional[int] = None,
+    min_rps: float = 0,
+    sort_by: str = 'rps_250',
+    limit: int = 200,
+) -> list:
+    """
+    Screen stocks from trade_stock_info with multi-dimension filters.
+    Joins RPS + price data and checks candidate pool membership.
+
+    Filters:
+      - province: exact match
+      - industry: exact match (trade_stock_info.industry)
+      - keyword: LIKE search on main_business + business_scope + company_intro
+      - listed_years_min/max: years since listed_date
+      - min_rps: minimum rps_250
+    """
+    where = ['1=1']
+    params = []
+
+    if province:
+        where.append('i.province = %s')
+        params.append(province)
+
+    if industry:
+        where.append('i.industry = %s')
+        params.append(industry)
+
+    if keyword:
+        kw = f'%{keyword}%'
+        where.append('(i.main_business LIKE %s OR i.business_scope LIKE %s OR i.company_intro LIKE %s)')
+        params.extend([kw, kw, kw])
+
+    if listed_years_min is not None:
+        where.append('i.listed_date <= DATE_SUB(CURDATE(), INTERVAL %s YEAR)')
+        params.append(listed_years_min)
+
+    if listed_years_max is not None:
+        where.append('i.listed_date >= DATE_SUB(CURDATE(), INTERVAL %s YEAR)')
+        params.append(listed_years_max)
+
+    where_sql = ' AND '.join(where)
+
+    rows = execute_query(
+        f'''SELECT i.stock_code, i.stock_name, i.province, i.city,
+                   i.industry, i.listed_date,
+                   LEFT(i.main_business, 80) AS main_business_short
+            FROM trade_stock_info i
+            WHERE {where_sql}
+            ORDER BY i.stock_code
+            LIMIT 2000''',
+        tuple(params) if params else None,
+        env=_DB_ENV,
+    )
+
+    if not rows:
+        return []
+
+    codes_list = [r['stock_code'] for r in rows]
+
+    # Fetch latest RPS
+    latest_date = _latest_trade_date()
+    CHUNK = 200
+    rps_map = {}
+    for i in range(0, len(codes_list), CHUNK):
+        chunk = codes_list[i:i + CHUNK]
+        ph = ','.join(['%s'] * len(chunk))
+        rps_rows = execute_query(
+            f'SELECT stock_code, rps_20, rps_120, rps_250, rps_slope '
+            f'FROM trade_stock_rps WHERE stock_code IN ({ph}) AND trade_date = %s',
+            tuple(chunk) + (latest_date,), env=_DB_ENV,
+        )
+        for r in rps_rows:
+            rps_map[r['stock_code']] = r
+
+    # Fetch latest close price
+    price_map = {}
+    for i in range(0, len(codes_list), CHUNK):
+        chunk = codes_list[i:i + CHUNK]
+        ph = ','.join(['%s'] * len(chunk))
+        price_rows = execute_query(
+            f'SELECT stock_code, close_price FROM trade_stock_daily '
+            f'WHERE stock_code IN ({ph}) AND trade_date = %s',
+            tuple(chunk) + (latest_date,), env=_DB_ENV,
+        )
+        for r in price_rows:
+            price_map[r['stock_code']] = float(r['close_price']) if r.get('close_price') is not None else None
+
+    # Check candidate pool membership
+    pool_codes = set()
+    existing = execute_query('SELECT stock_code FROM candidate_pool_stocks', env=_DB_ENV)
+    for r in existing:
+        pool_codes.add(r['stock_code'])
+
+    # Assemble result
+    result = []
+    for r in rows:
+        code = r['stock_code']
+        rps = rps_map.get(code, {})
+        rps_250 = float(rps['rps_250']) if rps.get('rps_250') is not None else None
+
+        if min_rps > 0 and (rps_250 is None or rps_250 < min_rps):
+            continue
+
+        result.append({
+            'stock_code': code,
+            'stock_name': r['stock_name'],
+            'province': r['province'],
+            'city': r['city'],
+            'industry': r['industry'],
+            'listed_date': str(r['listed_date']) if r['listed_date'] else None,
+            'main_business_short': r['main_business_short'],
+            'close': price_map.get(code),
+            'rps_250': rps_250,
+            'rps_120': float(rps['rps_120']) if rps.get('rps_120') is not None else None,
+            'rps_20': float(rps['rps_20']) if rps.get('rps_20') is not None else None,
+            'rps_slope': float(rps['rps_slope']) if rps.get('rps_slope') is not None else None,
+            'in_pool': code in pool_codes,
+            'trade_date': latest_date,
+        })
+
+    # Sort
+    valid_sorts = {'rps_250', 'rps_120', 'rps_20', 'rps_slope'}
+    if sort_by not in valid_sorts:
+        sort_by = 'rps_250'
+    result.sort(key=lambda x: (x[sort_by] is None, -(x[sort_by] or 0)))
+    return result[:limit]

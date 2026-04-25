@@ -159,6 +159,53 @@ async def get_stock_history(
 
 
 # ---------------------------------------------------------------------------
+# Stock screener (trade_stock_info multi-dimension)
+# ---------------------------------------------------------------------------
+
+@router.get('/screen/options')
+async def get_screen_options(
+    current_user: User = Depends(get_current_user),
+):
+    """Return distinct provinces and industries for screener dropdowns."""
+    try:
+        data = svc.get_screen_options()
+        return data
+    except Exception as e:
+        logger.error('[candidate_pool] get_screen_options error: %s', e)
+        raise HTTPException(status_code=500, detail='Internal server error')
+
+
+@router.get('/screen')
+async def screen_stocks(
+    province: Optional[str] = Query(None, description='省份精确匹配'),
+    industry: Optional[str] = Query(None, description='行业精确匹配'),
+    keyword: Optional[str] = Query(None, description='主营/经营范围关键词'),
+    listed_years_min: Optional[int] = Query(None, ge=0, description='上市最少年数'),
+    listed_years_max: Optional[int] = Query(None, ge=0, description='上市最多年数'),
+    min_rps: float = Query(default=0, ge=0, le=100, description='RPS250 最小值'),
+    sort_by: str = Query(default='rps_250', description='rps_250|rps_120|rps_20|rps_slope'),
+    limit: int = Query(default=200, ge=1, le=500),
+    current_user: User = Depends(get_current_user),
+):
+    """Multi-dimension stock screener based on trade_stock_info."""
+    try:
+        data = svc.screen_stocks(
+            province=province,
+            industry=industry,
+            keyword=keyword,
+            listed_years_min=listed_years_min,
+            listed_years_max=listed_years_max,
+            min_rps=min_rps,
+            sort_by=sort_by,
+            limit=limit,
+        )
+        return {'count': len(data), 'data': data}
+    except Exception as e:
+        logger.error('[candidate_pool] screen_stocks error: %s', e)
+        raise HTTPException(status_code=500, detail='Internal server error')
+
+
+# ---------------------------------------------------------------------------
 # Industry screening
 # ---------------------------------------------------------------------------
 

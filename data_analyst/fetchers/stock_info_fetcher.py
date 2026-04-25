@@ -156,12 +156,18 @@ def fetch_single(code_raw: str, env: str) -> bool:
     website = str(row.get('官方网站', '')) or None
     if website in ('nan', 'None', ''):
         website = None
+    if website:
+        website = website[:200]
     email = str(row.get('电子邮箱', '')) or None
     if email in ('nan', 'None', ''):
         email = None
+    if email:
+        email = email[:100]
     phone = str(row.get('联系电话', '')) or None
     if phone in ('nan', 'None', ''):
         phone = None
+    if phone:
+        phone = phone[:50]
 
     main_business = str(row.get('主营业务', '')) or None
     if main_business in ('nan', 'None', ''):
