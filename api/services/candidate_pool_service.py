@@ -435,7 +435,7 @@ def delete_memo(user_id: int, stock_code: str, memo_id: int) -> bool:
 
 
 def remove_stock(user_id: int, stock_code: str) -> bool:
-    # Remove tag associations first
+    # Remove tag associations and memos first
     rows = execute_query(
         'SELECT id FROM candidate_pool_stocks WHERE user_id = %s AND stock_code = %s',
         (user_id, stock_code), env=_DB_ENV,
@@ -444,6 +444,10 @@ def remove_stock(user_id: int, stock_code: str) -> bool:
         stock_id = rows[0]['id']
         execute_update(
             'DELETE FROM candidate_stock_tags WHERE stock_id = %s',
+            (stock_id,), env=_DB_ENV,
+        )
+        execute_update(
+            'DELETE FROM candidate_pool_memos WHERE candidate_stock_id = %s',
             (stock_id,), env=_DB_ENV,
         )
     execute_update(

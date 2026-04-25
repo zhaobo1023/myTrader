@@ -391,5 +391,233 @@ class TestCandidatePoolMonitorAPI(unittest.TestCase):
         self.assertEqual(data['total'], 1)
 
 
+class TestRemoveStockCleansAssociations(unittest.TestCase):
+    """Verify remove_stock deletes tags AND memos (CRITICAL fix)."""
+
+    def setUp(self):
+        self.eq_patcher = patch('api.services.candidate_pool_service.execute_query')
+        self.eu_patcher = patch('api.services.candidate_pool_service.execute_update')
+        self.em_patcher = patch('api.services.candidate_pool_service.execute_many')
+        self.mock_eq = self.eq_patcher.start()
+        self.mock_eu = self.eu_patcher.start()
+        self.mock_em = self.em_patcher.start()
+
+    def tearDown(self):
+        self.eq_patcher.stop()
+        self.eu_patcher.stop()
+        self.em_patcher.stop()
+
+    def test_remove_stock_deletes_tags_and_memos(self):
+        """remove_stock should delete tags, memos, then the stock itself."""
+        from api.services.candidate_pool_service import remove_stock
+        self.mock_eq.return_value = [{'id': 42}]
+        result = remove_stock(user_id=1, stock_code='000001.SZ')
+        self.assertTrue(result)
+        # Should have 3 execute_update calls: tags, memos, stock
+        self.assertEqual(self.mock_eu.call_count, 3)
+        calls = [c[0][0] for c in self.mock_eu.call_args_list]
+        self.assertIn('candidate_stock_tags', calls[0])
+        self.assertIn('candidate_pool_memos', calls[1])
+        self.assertIn('candidate_pool_stocks', calls[2])
+
+    def test_remove_stock_not_found_still_deletes(self):
+        """Even if stock not in query result, remove_stock should try DELETE."""
+        from api.services.candidate_pool_service import remove_stock
+        self.mock_eq.return_value = []
+        result = remove_stock(user_id=1, stock_code='999999.SZ')
+        self.assertTrue(result)
+        # Only the final DELETE on candidate_pool_stocks
+        self.assertEqual(self.mock_eu.call_count, 1)
+
+
+class TestCandidatePoolMemoService(unittest.TestCase):
+    """Test memo CRUD in candidate_pool_service."""
+
+    def setUp(self):
+        self.eq_patcher = patch('api.services.candidate_pool_service.execute_query')
+        self.eu_patcher = patch('api.services.candidate_pool_service.execute_update')
+        self.mock_eq = self.eq_patcher.start()
+        self.mock_eu = self.eu_patcher.start()
+
+    def tearDown(self):
+        self.eq_patcher.stop()
+        self.eu_patcher.stop()
+
+    def test_add_memo_success(self):
+        from api.services.candidate_pool_service import add_memo
+        self.mock_eq.side_effect = [
+            [{'id': 10}],  # stock lookup
+            [{'id': 99, 'content': 'test memo', 'created_at': '2026-04-25 10:00:00'}],  # new memo
+        ]
+        result = add_memo(user_id=1, stock_code='000001.SZ', content='test memo')
+        self.assertEqual(result['id'], 99)
+        self.assertEqual(result['content'], 'test memo')
+        self.mock_eu.assert_called_once()
+
+    def test_add_memo_stock_not_found(self):
+        from api.services.candidate_pool_service import add_memo
+        self.mock_eq.return_value = []
+        with self.assertRaises(ValueError):
+            add_memo(user_id=1, stock_code='999999.SZ', content='memo')
+
+    def test_list_memos_by_user(self):
+        from api.services.candidate_pool_service import list_memos_by_user
+        self.mock_eq.return_value = [
+            {'id': 1, 'content': 'first', 'created_at': '2026-04-25 09:00:00'},
+            {'id': 2, 'content': 'second', 'created_at': '2026-04-25 10:00:00'},
+        ]
+        result = list_memos_by_user(user_id=1, stock_code='000001.SZ')
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]['content'], 'first')
+
+    def test_list_memos(self):
+        from api.services.candidate_pool_service import list_memos
+        self.mock_eq.return_value = [
+            {'id': 1, 'content': 'memo1', 'created_at': '2026-04-25 10:00:00'},
+        ]
+        result = list_memos(candidate_stock_id=10)
+        self.assertEqual(len(result), 1)
+
+    def test_delete_memo_success(self):
+        from api.services.candidate_pool_service import delete_memo
+        self.mock_eq.return_value = [{'id': 10}]
+        result = delete_memo(user_id=1, stock_code='000001.SZ', memo_id=5)
+        self.assertTrue(result)
+        self.mock_eu.assert_called_once()
+
+    def test_delete_memo_stock_not_found(self):
+        from api.services.candidate_pool_service import delete_memo
+        self.mock_eq.return_value = []
+        result = delete_memo(user_id=1, stock_code='999999.SZ', memo_id=5)
+        self.assertFalse(result)
+        self.mock_eu.assert_not_called()
+
+
+class TestDailyMonitorSignals(unittest.TestCase):
+    """Test signal generation logic in run_daily_monitor."""
+
+    def setUp(self):
+        self.eq_patcher = patch('api.services.candidate_pool_service.execute_query')
+        self.eu_patcher = patch('api.services.candidate_pool_service.execute_update')
+        self.em_patcher = patch('api.services.candidate_pool_service.execute_many')
+        self.mock_eq = self.eq_patcher.start()
+        self.mock_eu = self.eu_patcher.start()
+        self.mock_em = self.em_patcher.start()
+
+    def tearDown(self):
+        self.eq_patcher.stop()
+        self.eu_patcher.stop()
+        self.em_patcher.stop()
+
+    def _run_monitor_with(self, rps_250=None, rps_120=None, rps_20=None,
+                          rps_slope=None, close=None, ma_20=None, ma_60=None,
+                          ma_250=None, rsi_14=None, volume_ratio=None,
+                          macd_dif=None, macd_dea=None):
+        """Helper: run monitor with one stock and specific indicator values."""
+        from api.services.candidate_pool_service import run_daily_monitor
+
+        stock = {
+            'stock_code': '000001.SZ',
+            'stock_name': 'TestCo',
+            'add_date': '2026-04-20',
+            'entry_snapshot': json.dumps({'close': 10.0, 'rps_250': 80.0}),
+        }
+        rps_row = {
+            'stock_code': '000001.SZ',
+            'rps_250': rps_250, 'rps_120': rps_120,
+            'rps_20': rps_20, 'rps_slope': rps_slope,
+        }
+        price_row = {
+            'stock_code': '000001.SZ',
+            'close_price': close,
+        }
+        ma_row = {
+            'stock_code': '000001.SZ',
+            'ma_20': ma_20, 'ma_60': ma_60, 'ma_250': ma_250,
+            'rsi_14': rsi_14, 'volume_ratio': volume_ratio,
+            'macd_dif': macd_dif, 'macd_dea': macd_dea,
+        }
+
+        self.mock_eq.side_effect = [
+            [stock],               # candidate stocks
+            [{'d': '2026-04-24'}], # _latest_trade_date
+            [rps_row],             # RPS batch
+            [price_row],           # price batch
+            [ma_row],              # MA/factor batch
+        ]
+
+        return run_daily_monitor(env='online')
+
+    def test_rps_strong_green(self):
+        result = self._run_monitor_with(rps_250=92, close=11.0, ma_20=10.5)
+        self.assertEqual(result['monitored'], 1)
+        # Records were written via execute_many
+        self.mock_em.assert_called_once()
+        # Check the record tuple (signal, alert)
+        record = self.mock_em.call_args[0][1][0]
+        signals_json = record[16]  # signals field
+        alert = record[17]  # alert_level field
+        self.assertIn('RPS强势', json.loads(signals_json))
+        self.assertIn(alert, ('green', 'yellow'))  # could be yellow if other signals
+
+    def test_rps_weak_yellow(self):
+        result = self._run_monitor_with(rps_250=30)
+        record = self.mock_em.call_args[0][1][0]
+        signals_json = record[16]
+        self.assertIn('RPS偏弱', json.loads(signals_json))
+
+    def test_break_ma20_red(self):
+        result = self._run_monitor_with(close=9.0, ma_20=10.0)
+        record = self.mock_em.call_args[0][1][0]
+        alert = record[17]
+        signals_json = record[16]
+        self.assertEqual(alert, 'red')
+        self.assertIn('跌破20日线', json.loads(signals_json))
+
+    def test_break_ma60_red(self):
+        result = self._run_monitor_with(close=9.0, ma_20=8.5, ma_60=10.0)
+        record = self.mock_em.call_args[0][1][0]
+        alert = record[17]
+        self.assertEqual(alert, 'red')
+        signals = json.loads(record[16])
+        self.assertIn('跌破60日线', signals)
+
+    def test_macd_golden_cross(self):
+        result = self._run_monitor_with(macd_dif=0.5, macd_dea=0.3)
+        record = self.mock_em.call_args[0][1][0]
+        signals = json.loads(record[16])
+        self.assertIn('MACD金叉', signals)
+
+    def test_macd_death_cross(self):
+        result = self._run_monitor_with(macd_dif=0.2, macd_dea=0.5)
+        record = self.mock_em.call_args[0][1][0]
+        signals = json.loads(record[16])
+        self.assertIn('MACD死叉', signals)
+
+    def test_volume_spike(self):
+        result = self._run_monitor_with(volume_ratio=2.5)
+        record = self.mock_em.call_args[0][1][0]
+        signals = json.loads(record[16])
+        self.assertIn('放量异动', signals)
+
+    def test_rsi_overbought(self):
+        result = self._run_monitor_with(rsi_14=80)
+        record = self.mock_em.call_args[0][1][0]
+        signals = json.loads(record[16])
+        self.assertIn('RSI超买', signals)
+
+    def test_rsi_oversold(self):
+        result = self._run_monitor_with(rsi_14=25)
+        record = self.mock_em.call_args[0][1][0]
+        signals = json.loads(record[16])
+        self.assertIn('RSI超卖', signals)
+
+    def test_no_stocks_returns_empty(self):
+        from api.services.candidate_pool_service import run_daily_monitor
+        self.mock_eq.return_value = []
+        result = run_daily_monitor(env='online')
+        self.assertEqual(result['monitored'], 0)
+
+
 if __name__ == '__main__':
     unittest.main()
