@@ -506,6 +506,120 @@ async def add_watchlist(params: dict, ctx: AgentContext) -> dict:
 
 
 # ============================================================
+# T14: add_to_candidate_pool (action)
+# ============================================================
+
+@builtin_tool(
+    name="add_to_candidate_pool",
+    description=(
+        "批量添加股票到用户的候选池（候选股票池/自选池）。"
+        "当用户说'加入候选池'、'添加到候选池'、'放到候选池观察'、'帮我加到候选池'时使用。"
+        "支持一次添加多只股票。"
+        "参数: stocks (必填，股票列表，每项含 stock_code 和 stock_name), "
+        "source_detail (可选，来源说明如'电解铝相关'), memo (可选，备注)"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "stocks": {
+                "type": "array",
+                "description": "要添加的股票列表",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "stock_code": {
+                            "type": "string",
+                            "description": "股票代码，6位数字",
+                        },
+                        "stock_name": {
+                            "type": "string",
+                            "description": "股票名称",
+                        },
+                    },
+                    "required": ["stock_code", "stock_name"],
+                },
+            },
+            "source_detail": {
+                "type": "string",
+                "description": "来源说明，如'电解铝行业'、'AI智能搜索'",
+            },
+            "memo": {
+                "type": "string",
+                "description": "备注信息",
+            },
+        },
+        "required": ["stocks"],
+    },
+    category="action",
+    requires_tier="free",
+)
+async def add_to_candidate_pool(params: dict, ctx: AgentContext) -> dict:
+    """Add stocks to user's candidate pool."""
+    stocks = params.get("stocks", [])
+    if not stocks:
+        return {"success": False, "error": "stocks list is empty"}
+
+    source_detail = params.get("source_detail", "agent")
+    memo = params.get("memo", "")
+
+    try:
+        from api.services import candidate_pool_service as svc
+        results = []
+        added = 0
+        updated = 0
+        errors = []
+
+        for item in stocks:
+            code = item.get("stock_code", "").strip()
+            name = item.get("stock_name", "").strip()
+            if not code or not name:
+                errors.append(f"missing stock_code or stock_name: {item}")
+                continue
+            try:
+                result = await _run_sync(
+                    svc.add_stock,
+                    user_id=ctx.user.id,
+                    stock_code=code,
+                    stock_name=name,
+                    source_type="manual",
+                    source_detail=source_detail,
+                    entry_snapshot=None,
+                    memo=memo,
+                )
+                if result.get("action") == "added":
+                    added += 1
+                else:
+                    updated += 1
+                results.append({"stock_code": code, "stock_name": name, "action": result.get("action")})
+            except Exception as e:
+                logger.warning('[add_to_candidate_pool] failed for %s: %s', code, e)
+                errors.append(f"{name}({code}): {e}")
+
+        total = added + updated
+        parts = []
+        if added:
+            parts.append(f"新增 {added} 只")
+        if updated:
+            parts.append(f"更新 {updated} 只")
+        msg = f"已{'、'.join(parts)}股票到候选池" if parts else "没有股票被添加"
+        if errors:
+            msg += f"，{len(errors)} 只失败"
+
+        return {
+            "success": total > 0,
+            "added": added,
+            "updated": updated,
+            "total": total,
+            "results": results,
+            "errors": errors if errors else None,
+            "message": msg,
+        }
+    except Exception as e:
+        logger.error('[add_to_candidate_pool] failed: %s', e)
+        return {"success": False, "error": str(e)}
+
+
+# ============================================================
 # T13: add_position (action)
 # ============================================================
 
