@@ -1013,3 +1013,151 @@ async def get_trade_logs(params: dict, ctx: AgentContext) -> dict:
     except Exception as e:
         logger.error('[get_trade_logs] failed: %s', e)
         return {"logs": [], "error": str(e)}
+
+
+# ============================================================
+# T17: smart_stock_search (data) - AI智能选股
+# ============================================================
+
+@builtin_tool(
+    name="smart_stock_search",
+    description=(
+        "AI智能选股：用自然语言描述选股条件，通过AI解析意图后搜索数据库，"
+        "返回符合条件的股票列表（含股票代码、名称、行业、主营业务、RPS等）。"
+        "当用户说'帮我找/筛选/搜索XX相关的股票'、'XX行业有哪些上市公司'、"
+        "'主营XX的公司'、'XX概念股有哪些'等选股需求时使用。"
+        "返回结果后，可配合 add_to_candidate_pool 或 create_theme_pool 将股票加入候选池或创建主题。"
+        "参数: query (必填，自然语言选股条件), max_results (可选，最大返回数，默认30)"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "自然语言选股条件，如'铜矿营收占比高的公司'、'电解铝行业'、'江苏省的半导体公司'",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "最大返回股票数量，默认30",
+                "default": 30,
+            },
+        },
+        "required": ["query"],
+    },
+    category="data",
+    requires_tier="free",
+)
+async def smart_stock_search(params: dict, ctx: AgentContext) -> dict:
+    """AI-powered smart stock search using SmartSearchSkill."""
+    query = params.get("query", "").strip()
+    if not query:
+        return {"error": "query is empty", "stocks": []}
+
+    max_results = min(params.get("max_results", 30), 50)
+
+    try:
+        from api.services.theme_smart_search import SmartSearchSkill
+        skill = SmartSearchSkill()
+
+        # Collect all SSE events from the stream
+        stocks = []
+        intent = None
+        raw_total = 0
+
+        async for event in skill.stream(query, max_results):
+            etype = event.get("type")
+            if etype == "intent_parsed":
+                intent = event.get("intent")
+            elif etype == "raw_results":
+                raw_total = event.get("total", 0)
+            elif etype == "candidate_list":
+                stocks = event.get("stocks", [])
+            elif etype == "error":
+                return {"error": event.get("message", "search failed"), "stocks": []}
+
+        # Simplify stock data for LLM context
+        result_stocks = []
+        for s in stocks:
+            result_stocks.append({
+                "stock_code": s.get("stock_code", ""),
+                "stock_name": s.get("stock_name", ""),
+                "industry": s.get("industry", ""),
+                "relevance": s.get("relevance", ""),
+                "reason": s.get("reason", ""),
+                "close": s.get("close"),
+                "rps_20": s.get("rps_20"),
+                "rps_120": s.get("rps_120"),
+                "main_business_short": s.get("main_business_short", ""),
+            })
+
+        return {
+            "stocks": result_stocks,
+            "total": len(result_stocks),
+            "db_candidates": raw_total,
+            "intent": intent,
+            "message": f"AI搜索完成：数据库匹配 {raw_total} 只，AI审核后保留 {len(result_stocks)} 只",
+        }
+    except Exception as e:
+        logger.error('[smart_stock_search] failed: %s', e)
+        return {"error": str(e), "stocks": []}
+
+
+# ============================================================
+# T18: create_theme_pool (action) - 创建主题票池
+# ============================================================
+
+@builtin_tool(
+    name="create_theme_pool",
+    description=(
+        "创建一个新的主题票池，并可选地批量添加股票到该主题中。"
+        "当用户说'创建一个XX主题'、'把这些股票建成一个主题'、'新建XX概念的票池'时使用。"
+        "注意：调用此工具前，应先用 smart_stock_search 搜索到股票列表，"
+        "然后将搜索结果中用户选择的股票传入此工具。"
+        "参数: theme_name (必填), description (可选), "
+        "stocks (可选，股票列表，每项含 stock_code, stock_name, reason)"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "theme_name": {
+                "type": "string",
+                "description": "主题名称，如'电解铝产业链'、'铜矿概念'",
+            },
+            "description": {
+                "type": "string",
+                "description": "主题描述",
+            },
+            "stocks": {
+                "type": "array",
+                "description": "要添加到主题的股票列表",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "stock_code": {
+                            "type": "string",
+                            "description": "股票代码",
+                        },
+                        "stock_name": {
+                            "type": "string",
+                            "description": "股票名称",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "推荐理由",
+                        },
+                    },
+                    "required": ["stock_code", "stock_name"],
+                },
+            },
+        },
+        "required": ["theme_name"],
+    },
+    category="action",
+    requires_tier="free",
+)
+async def create_theme_pool(params: dict, ctx: AgentContext) -> dict:
+    """Create a theme pool and optionally add stocks to it."""
+    # This is an action tool - the orchestrator will send it to frontend for confirmation.
+    # The actual execution happens in the frontend ActionConfirm component.
+    # This function is defined for tool schema only.
+    return {"status": "pending_confirmation"}

@@ -3,12 +3,15 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import type { AgentAction } from '@/lib/agent-store';
-import { watchlistApi, positionsApi } from '@/lib/api-client';
+import { watchlistApi, positionsApi, themePoolApi } from '@/lib/api-client';
+import { candidatePoolApi } from '@/lib/candidate-pool-api';
 
 const ACTION_LABELS: Record<string, string> = {
   add_watchlist: '添加到关注列表',
   add_position: '添加到持仓',
   trade_position: '调仓操作',
+  add_to_candidate_pool: '添加到候选池',
+  create_theme_pool: '创建主题票池',
   navigate: '页面跳转',
   show_chart: '查看图表',
 };
@@ -45,6 +48,32 @@ export default function ActionConfirm({ action }: { action: AgentAction }) {
           });
           break;
         }
+        case 'add_to_candidate_pool': {
+          const stocks = (payload.stocks as Array<{ stock_code: string; stock_name: string }>) || [];
+          const srcDetail = (payload.source_detail as string) || 'agent';
+          const memo = (payload.memo as string) || '';
+          for (const s of stocks) {
+            await candidatePoolApi.add({
+              stock_code: s.stock_code,
+              stock_name: s.stock_name,
+              source_type: 'manual',
+              source_detail: srcDetail,
+              memo: memo || null,
+            });
+          }
+          break;
+        }
+        case 'create_theme_pool': {
+          const themeName = payload.theme_name as string;
+          const desc = (payload.description as string) || '';
+          const themeStocks = (payload.stocks as Array<{ stock_code: string; stock_name: string; reason?: string }>) || [];
+          const res = await themePoolApi.createTheme(themeName, desc);
+          const themeId = res.data.id;
+          if (themeStocks.length > 0) {
+            await themePoolApi.batchAddStocks(themeId, themeStocks);
+          }
+          break;
+        }
         case 'navigate':
           router.push(payload.path as string);
           break;
@@ -60,14 +89,29 @@ export default function ActionConfirm({ action }: { action: AgentAction }) {
     setStatus('cancelled');
   }, []);
 
-  const description =
-    action.action === 'add_watchlist'
-      ? `${payload.stock_name || ''}(${payload.stock_code || ''})`
-      : action.action === 'trade_position'
-        ? `${payload.stock_code || ''} · ${payload.action === 'add' ? '加仓' : payload.action === 'reduce' ? '减仓' : '清仓'} · @${payload.price}${payload.shares ? ` · ${payload.shares}股` : ''}`
-        : action.action === 'navigate'
-          ? `${payload.path || ''}`
-          : JSON.stringify(payload);
+  const buildDescription = () => {
+    switch (action.action) {
+      case 'add_watchlist':
+        return `${payload.stock_name || ''}(${payload.stock_code || ''})`;
+      case 'trade_position':
+        return `${payload.stock_code || ''} · ${payload.action === 'add' ? '加仓' : payload.action === 'reduce' ? '减仓' : '清仓'} · @${payload.price}${payload.shares ? ` · ${payload.shares}股` : ''}`;
+      case 'add_to_candidate_pool': {
+        const stocks = (payload.stocks as Array<{ stock_code: string; stock_name: string }>) || [];
+        const names = stocks.slice(0, 5).map(s => `${s.stock_name}(${s.stock_code})`).join(', ');
+        const more = stocks.length > 5 ? ` ...等${stocks.length}只` : '';
+        return `${names}${more}`;
+      }
+      case 'create_theme_pool': {
+        const themeStocks = (payload.stocks as Array<{ stock_code: string }>) || [];
+        return `${payload.theme_name || ''}${themeStocks.length > 0 ? ` (含 ${themeStocks.length} 只股票)` : ''}`;
+      }
+      case 'navigate':
+        return `${payload.path || ''}`;
+      default:
+        return JSON.stringify(payload);
+    }
+  };
+  const description = buildDescription();
 
   return (
     <>
