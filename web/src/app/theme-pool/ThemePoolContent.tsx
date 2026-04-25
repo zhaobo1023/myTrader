@@ -2,9 +2,9 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { themePoolApi } from '@/lib/api-client';
-import { LLMCreateDialog } from '@/components/theme-pool/LLMCreateDialog';
+import { CreateThemeDialog } from '@/components/theme-pool/CreateThemeDialog';
 
 // ---------------------------------------------------------------------------
 // Status helpers
@@ -35,91 +35,6 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Create Theme Modal
-// ---------------------------------------------------------------------------
-
-function CreateModal({ open, onClose, onCreate }: {
-  open: boolean;
-  onClose: () => void;
-  onCreate: (name: string, desc: string) => void;
-}) {
-  const [name, setName] = useState('');
-  const [desc, setDesc] = useState('');
-
-  if (!open) return null;
-
-  return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 1000,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-    }} onClick={onClose}>
-      <div style={{
-        background: 'var(--bg-panel)', borderRadius: '10px', padding: '24px',
-        width: '420px', maxWidth: '90vw',
-      }} onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ margin: '0 0 16px', fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>
-          新建主题票池
-        </h3>
-        <div style={{ marginBottom: '12px' }}>
-          <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
-            主题名称 *
-          </label>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="如: AI算力 / 消费复苏 / 高股息"
-            style={{
-              width: '100%', padding: '8px 10px', borderRadius: '6px', fontSize: '13px',
-              border: '1px solid var(--border-subtle)', background: 'var(--bg-canvas)',
-              color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box',
-            }}
-          />
-        </div>
-        <div style={{ marginBottom: '20px' }}>
-          <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
-            主题描述
-          </label>
-          <textarea
-            value={desc}
-            onChange={(e) => setDesc(e.target.value)}
-            rows={3}
-            placeholder="选股逻辑、投资主线..."
-            style={{
-              width: '100%', padding: '8px 10px', borderRadius: '6px', fontSize: '13px',
-              border: '1px solid var(--border-subtle)', background: 'var(--bg-canvas)',
-              color: 'var(--text-primary)', outline: 'none', resize: 'vertical', boxSizing: 'border-box',
-            }}
-          />
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-          <button
-            onClick={onClose}
-            style={{
-              padding: '7px 14px', borderRadius: '6px', fontSize: '12px',
-              border: '1px solid var(--border-subtle)', background: 'transparent',
-              color: 'var(--text-secondary)', cursor: 'pointer',
-            }}
-          >
-            取消
-          </button>
-          <button
-            onClick={() => { if (name.trim()) { onCreate(name.trim(), desc.trim()); setName(''); setDesc(''); } }}
-            disabled={!name.trim()}
-            style={{
-              padding: '7px 14px', borderRadius: '6px', fontSize: '12px',
-              border: 'none', background: 'var(--accent)', color: '#fff',
-              cursor: name.trim() ? 'pointer' : 'not-allowed', opacity: name.trim() ? 1 : 0.5,
-            }}
-          >
-            创建
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // ThemePoolContent
 // ---------------------------------------------------------------------------
 
@@ -127,21 +42,11 @@ export default function ThemePoolContent() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<string>('');
-  const [showCreate, setShowCreate] = useState(false);
-  const [showLLMCreate, setShowLLMCreate] = useState(false);
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['theme-pools', statusFilter],
     queryFn: () => themePoolApi.listThemes(statusFilter || undefined).then((r) => r.data),
-  });
-
-  const createMut = useMutation({
-    mutationFn: ({ name, desc }: { name: string; desc: string }) =>
-      themePoolApi.createTheme(name, desc || undefined),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['theme-pools'] });
-      setShowCreate(false);
-    },
   });
 
   const themes = data?.items || [];
@@ -158,28 +63,16 @@ export default function ThemePoolContent() {
             多人协同主题选股，量化打分增强
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button
-            data-track="theme_llm_create_open"
-            onClick={() => setShowLLMCreate(true)}
-            style={{
-              padding: '7px 16px', borderRadius: '6px', fontSize: '12px', fontWeight: 500,
-              border: '1px solid var(--accent)', background: 'transparent', color: 'var(--accent)', cursor: 'pointer',
-            }}
-          >
-            AI 创建
-          </button>
-          <button
-            data-track="theme_create_open"
-            onClick={() => setShowCreate(true)}
-            style={{
-              padding: '7px 16px', borderRadius: '6px', fontSize: '12px', fontWeight: 500,
-              border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer',
-            }}
-          >
-            + 新建主题
-          </button>
-        </div>
+        <button
+          data-track="theme_create_open"
+          onClick={() => setShowCreateDialog(true)}
+          style={{
+            padding: '7px 16px', borderRadius: '6px', fontSize: '12px', fontWeight: 500,
+            border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer',
+          }}
+        >
+          + 创建主题
+        </button>
       </div>
 
       {/* Status tabs */}
@@ -250,27 +143,22 @@ export default function ThemePoolContent() {
         </div>
       )}
 
-      {/* Create modal */}
-      <CreateModal
-        open={showCreate}
-        onClose={() => setShowCreate(false)}
-        onCreate={(name, desc) => createMut.mutate({ name, desc })}
-      />
-
-      {/* LLM AI create dialog */}
-      <LLMCreateDialog
-        open={showLLMCreate}
-        onClose={() => setShowLLMCreate(false)}
-        onCreated={async (themeName, stocks) => {
-          const res = await themePoolApi.createTheme(themeName);
+      {/* Unified create theme dialog */}
+      <CreateThemeDialog
+        open={showCreateDialog}
+        onClose={() => setShowCreateDialog(false)}
+        onCreated={async (themeName, description, stocks) => {
+          const res = await themePoolApi.createTheme(themeName, description || undefined);
           const themeId: number = res.data.id;
-          await themePoolApi.batchAddStocks(themeId, stocks.map(s => ({
-            stock_code: s.stock_code,
-            stock_name: s.stock_name,
-            reason: s.reason,
-          })));
+          if (stocks.length > 0) {
+            await themePoolApi.batchAddStocks(themeId, stocks.map(s => ({
+              stock_code: s.stock_code,
+              stock_name: s.stock_name,
+              reason: s.reason,
+            })));
+          }
           queryClient.invalidateQueries({ queryKey: ['theme-pools'] });
-          setShowLLMCreate(false);
+          setShowCreateDialog(false);
           router.push(`/theme-pool/${themeId}`);
         }}
       />

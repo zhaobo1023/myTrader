@@ -445,6 +445,67 @@ async def remove_vote(
 
 
 # ---------------------------------------------------------------------------
+# Smart search (SSE streaming) - natural language stock search
+# ---------------------------------------------------------------------------
+
+class SmartSearchRequest(BaseModel):
+    query: str
+    max_results: int = 50
+
+
+@router.post('/llm/smart-search')
+async def smart_search(req: SmartSearchRequest):
+    """
+    SSE streaming endpoint: LLM-driven smart stock search.
+
+    Event types (in order):
+      start            - processing started
+      phase            - phase transition message
+      intent_parsed    - LLM-parsed structured intent
+      raw_results      - DB query result count
+      candidate_list   - final filtered stock list (main payload)
+      done             - stream complete
+      error            - fatal error
+
+    candidate_list.stocks item:
+      stock_code   str          "000001.SZ"
+      stock_name   str
+      relevance    str          "high" | "medium"
+      reason       str          LLM-generated rationale
+      industry     str
+      close        float | null
+      rps_250      float | null
+      rps_120      float | null
+      rps_20       float | null
+      main_business_short  str
+    """
+    from api.services.theme_smart_search import SmartSearchSkill
+    from api.services.llm_usage_logger import LLMUsageLogger, LLMCallRecord
+
+    skill = SmartSearchSkill()
+    usage_logger = LLMUsageLogger(db_session_factory=None)
+
+    async def event_gen():
+        rec = LLMCallRecord(skill_id='smart-search', model=skill._llm_factory.model, latency_ms=0)
+        async with usage_logger.timed(rec):
+            async for event in skill.stream(
+                query=req.query,
+                max_results=req.max_results,
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        await usage_logger.log(rec)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # LLM-driven theme creation (SSE streaming)
 # ---------------------------------------------------------------------------
 

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAddToPositions } from '@/hooks/useStockAdd';
-import { candidatePoolApi, screenApi, TagItem, ScreenStock, ScreenOptions, ScreenParams } from '@/lib/candidate-pool-api';
+import { candidatePoolApi, TagItem } from '@/lib/candidate-pool-api';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -544,16 +544,6 @@ export default function CandidatePoolContent() {
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#5e6ad2');
 
-  // Screener state
-  const [showScreener, setShowScreener] = useState(false);
-  const [screenOptions, setScreenOptions] = useState<ScreenOptions>({ provinces: [], industries: [] });
-  const [screenParams, setScreenParams] = useState<ScreenParams>({});
-  const [screenKeyword, setScreenKeyword] = useState('');
-  const [screenResults, setScreenResults] = useState<ScreenStock[]>([]);
-  const [screenLoading, setScreenLoading] = useState(false);
-  const [screenSearched, setScreenSearched] = useState(false);
-  const [addingCodes, setAddingCodes] = useState<Set<string>>(new Set());
-
   // Persist filter preferences
   useEffect(() => {
     savePrefs({ filterStatus, filterSource });
@@ -592,70 +582,6 @@ export default function CandidatePoolContent() {
 
   useEffect(() => { loadTags(); }, [loadTags]);
   useEffect(() => { loadStocks(); }, [loadStocks]);
-
-  // Load screener options once on mount
-  useEffect(() => {
-    screenApi.options()
-      .then(r => setScreenOptions(r.data as ScreenOptions))
-      .catch(() => {});
-  }, []);
-
-  async function handleScreenSearch() {
-    setScreenLoading(true);
-    setScreenSearched(true);
-    try {
-      const params: ScreenParams = { ...screenParams, limit: 200 };
-      if (screenKeyword.trim()) params.keyword = screenKeyword.trim();
-      const res = await screenApi.screen(params);
-      setScreenResults((res.data as { data?: ScreenStock[] }).data || []);
-    } catch {
-      setScreenResults([]);
-    } finally {
-      setScreenLoading(false);
-    }
-  }
-
-  function handleScreenReset() {
-    setScreenParams({});
-    setScreenKeyword('');
-    setScreenResults([]);
-    setScreenSearched(false);
-  }
-
-  async function handleAddFromScreen(stock: ScreenStock) {
-    setAddingCodes(prev => new Set(prev).add(stock.stock_code));
-    try {
-      await candidatePoolApi.add({
-        stock_code: stock.stock_code,
-        stock_name: stock.stock_name,
-        source_type: 'manual',
-        source_detail: stock.industry || undefined,
-        entry_snapshot: {
-          rps_250: stock.rps_250,
-          close: stock.close,
-          industry_name: stock.industry,
-        },
-      });
-      // Refresh pool and mark in results
-      setScreenResults(prev => prev.map(s =>
-        s.stock_code === stock.stock_code ? { ...s, in_pool: true } : s
-      ));
-      loadStocks();
-    } catch {
-      setActionMsg('加入候选池失败');
-    } finally {
-      setAddingCodes(prev => { const s = new Set(prev); s.delete(stock.stock_code); return s; });
-    }
-  }
-
-  async function handleAddAllFromScreen() {
-    const toAdd = screenResults.filter(s => !s.in_pool);
-    if (!toAdd.length) return;
-    if (!confirm(`确认将 ${toAdd.length} 只股票全部加入候选池？`)) return;
-    for (const s of toAdd) {
-      await handleAddFromScreen(s);
-    }
-  }
 
   async function handleStatusChange(code: string, status: string) {
     try {
@@ -802,247 +728,21 @@ export default function CandidatePoolContent() {
             从行业或策略加入的候选股票，每日盘后自动监控技术面
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-          <button
-            onClick={() => setShowScreener(v => !v)}
-            style={{
-              fontSize: '12px', padding: '6px 12px', borderRadius: '6px',
-              background: showScreener ? 'var(--accent)' : 'transparent',
-              color: showScreener ? '#fff' : 'var(--text-secondary)',
-              border: '1px solid var(--border-subtle)', cursor: 'pointer', fontWeight: showScreener ? 560 : 400,
-            }}
-          >
-            选股筛选
-          </button>
-          <button
-            onClick={loadStocks}
-            style={{
-              fontSize: '12px', padding: '6px 12px', borderRadius: '6px',
-              background: 'transparent', color: 'var(--text-muted)',
-              border: '1px solid var(--border-subtle)', cursor: 'pointer',
-            }}
-          >
-            刷新
-          </button>
-        </div>
+        <button
+          onClick={loadStocks}
+          style={{
+            fontSize: '12px', padding: '6px 12px', borderRadius: '6px',
+            background: 'transparent', color: 'var(--text-muted)',
+            border: '1px solid var(--border-subtle)', cursor: 'pointer',
+          }}
+        >
+          刷新
+        </button>
       </div>
 
       {actionMsg && (
         <div style={{ marginBottom: '12px', padding: '8px 14px', borderRadius: '6px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', fontSize: '12px', color: 'var(--text-secondary)' }}>
           {actionMsg}
-        </div>
-      )}
-
-      {/* Screener panel */}
-      {showScreener && (
-        <div style={{
-          marginBottom: '20px', padding: '16px 20px', borderRadius: '10px',
-          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
-        }}>
-          <div style={{ fontSize: '13px', fontWeight: 560, color: 'var(--text-primary)', marginBottom: '14px' }}>
-            多维选股
-          </div>
-
-          {/* Filter controls */}
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px', alignItems: 'flex-end' }}>
-            {/* Province */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>省份/地区</label>
-              <select
-                value={screenParams.province || ''}
-                onChange={e => setScreenParams(p => ({ ...p, province: e.target.value || undefined }))}
-                style={selectStyle}
-              >
-                <option value=''>全部省份</option>
-                {screenOptions.provinces.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </div>
-
-            {/* Industry */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>行业分类</label>
-              <select
-                value={screenParams.industry || ''}
-                onChange={e => setScreenParams(p => ({ ...p, industry: e.target.value || undefined }))}
-                style={{ ...selectStyle, maxWidth: '200px' }}
-              >
-                <option value=''>全部行业</option>
-                {screenOptions.industries.map(ind => <option key={ind} value={ind}>{ind}</option>)}
-              </select>
-            </div>
-
-            {/* Listed years */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>上市年限</label>
-              <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                <select
-                  value={screenParams.listed_years_min ?? ''}
-                  onChange={e => setScreenParams(p => ({ ...p, listed_years_min: e.target.value ? Number(e.target.value) : undefined }))}
-                  style={selectStyle}
-                >
-                  <option value=''>不限</option>
-                  <option value='1'>1年+</option>
-                  <option value='3'>3年+</option>
-                  <option value='5'>5年+</option>
-                  <option value='10'>10年+</option>
-                </select>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>至</span>
-                <select
-                  value={screenParams.listed_years_max ?? ''}
-                  onChange={e => setScreenParams(p => ({ ...p, listed_years_max: e.target.value ? Number(e.target.value) : undefined }))}
-                  style={selectStyle}
-                >
-                  <option value=''>不限</option>
-                  <option value='1'>1年内</option>
-                  <option value='3'>3年内</option>
-                  <option value='5'>5年内</option>
-                  <option value='10'>10年内</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Min RPS */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>RPS250 最低</label>
-              <select
-                value={screenParams.min_rps ?? ''}
-                onChange={e => setScreenParams(p => ({ ...p, min_rps: e.target.value ? Number(e.target.value) : undefined }))}
-                style={selectStyle}
-              >
-                <option value=''>不限</option>
-                <option value='60'>60+</option>
-                <option value='70'>70+</option>
-                <option value='80'>80+</option>
-                <option value='90'>90+</option>
-              </select>
-            </div>
-
-            {/* Sort */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>排序</label>
-              <select
-                value={screenParams.sort_by || 'rps_250'}
-                onChange={e => setScreenParams(p => ({ ...p, sort_by: e.target.value }))}
-                style={selectStyle}
-              >
-                <option value='rps_250'>RPS250</option>
-                <option value='rps_120'>RPS120</option>
-                <option value='rps_20'>RPS20</option>
-                <option value='rps_slope'>RPS斜率</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Keyword search */}
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px' }}>
-            <input
-              value={screenKeyword}
-              onChange={e => setScreenKeyword(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') handleScreenSearch(); }}
-              placeholder='主营业务关键词，如：磷化工、尿素、铝、储能、光伏...'
-              style={{
-                flex: 1, fontSize: '12px', padding: '6px 12px', borderRadius: '6px',
-                border: '1px solid var(--border-subtle)', background: 'var(--bg-input)',
-                color: 'var(--text-primary)', maxWidth: '400px',
-              }}
-            />
-            <button
-              onClick={handleScreenSearch}
-              disabled={screenLoading}
-              style={{
-                fontSize: '12px', padding: '6px 16px', borderRadius: '6px',
-                background: 'var(--accent)', color: '#fff', border: 'none',
-                cursor: screenLoading ? 'not-allowed' : 'pointer', opacity: screenLoading ? 0.7 : 1,
-              }}
-            >
-              {screenLoading ? '搜索中...' : '搜索'}
-            </button>
-            <button
-              onClick={handleScreenReset}
-              style={{
-                fontSize: '12px', padding: '6px 12px', borderRadius: '6px',
-                background: 'transparent', color: 'var(--text-muted)',
-                border: '1px solid var(--border-subtle)', cursor: 'pointer',
-              }}
-            >
-              重置
-            </button>
-            {screenResults.length > 0 && (
-              <button
-                onClick={handleAddAllFromScreen}
-                style={{
-                  fontSize: '12px', padding: '6px 12px', borderRadius: '6px',
-                  background: 'transparent', color: 'var(--accent)',
-                  border: '1px solid var(--accent)', cursor: 'pointer',
-                }}
-              >
-                全部加入候选池 ({screenResults.filter(s => !s.in_pool).length})
-              </button>
-            )}
-          </div>
-
-          {/* Results */}
-          {screenSearched && (
-            screenLoading ? (
-              <div style={{ padding: '20px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>搜索中...</div>
-            ) : screenResults.length === 0 ? (
-              <div style={{ padding: '20px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>无匹配结果</div>
-            ) : (
-              <div style={{ borderRadius: '8px', border: '1px solid var(--border-subtle)', overflow: 'hidden' }}>
-                <div style={{ padding: '8px 12px', background: 'var(--bg-panel)', fontSize: '11px', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-subtle)' }}>
-                  共 {screenResults.length} 只，点击加入候选池
-                </div>
-                <div className="table-scroll" style={{ maxHeight: '360px', overflowY: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px', minWidth: '700px' }}>
-                    <thead>
-                      <tr style={{ background: 'var(--bg-panel)' }}>
-                        {['股票', '省份', '行业', '上市日期', '主营摘要', 'RPS250', 'RPS120', '收盘价', ''].map(h => (
-                          <th key={h} style={{ padding: '6px 10px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 400, borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap' }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {screenResults.map((s, i) => (
-                        <tr key={s.stock_code} style={{ background: i % 2 === 0 ? 'transparent' : 'var(--bg-surface)', opacity: s.in_pool ? 0.5 : 1 }}>
-                          <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>
-                            <span style={{ fontWeight: 510 }}>{s.stock_name}</span>
-                            <span style={{ color: 'var(--text-muted)', marginLeft: '4px' }}>{s.stock_code}</span>
-                          </td>
-                          <td style={{ padding: '6px 10px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{s.province || '-'}</td>
-                          <td style={{ padding: '6px 10px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.industry || '-'}</td>
-                          <td style={{ padding: '6px 10px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{s.listed_date || '-'}</td>
-                          <td style={{ padding: '6px 10px', color: 'var(--text-secondary)', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.main_business_short || ''}>{s.main_business_short || '-'}</td>
-                          <td style={{ padding: '6px 10px', color: (s.rps_250 ?? 0) >= 80 ? '#27a644' : (s.rps_250 ?? 0) >= 60 ? '#c69026' : 'var(--text-secondary)', whiteSpace: 'nowrap', fontWeight: 510 }}>
-                            {s.rps_250 != null ? s.rps_250.toFixed(1) : '-'}
-                          </td>
-                          <td style={{ padding: '6px 10px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{s.rps_120 != null ? s.rps_120.toFixed(1) : '-'}</td>
-                          <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>{s.close != null ? s.close.toFixed(2) : '-'}</td>
-                          <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>
-                            {s.in_pool ? (
-                              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>已在池</span>
-                            ) : (
-                              <button
-                                onClick={() => handleAddFromScreen(s)}
-                                disabled={addingCodes.has(s.stock_code)}
-                                style={{
-                                  fontSize: '10px', padding: '2px 8px', borderRadius: '4px',
-                                  background: 'var(--accent)', color: '#fff', border: 'none',
-                                  cursor: addingCodes.has(s.stock_code) ? 'not-allowed' : 'pointer',
-                                  opacity: addingCodes.has(s.stock_code) ? 0.6 : 1,
-                                }}
-                              >
-                                {addingCodes.has(s.stock_code) ? '加入中' : '加入'}
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )
-          )}
         </div>
       )}
 
