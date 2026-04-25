@@ -100,16 +100,16 @@ if [ "${WEB_CHANGED:-false}" = "true" ]; then
   docker build -t "mytrader-web:$NEW_SLOT" ./web
   echo "  Build complete."
 
-  # 启动新槽容器
+  # 启动新槽容器（宿主机端口用于直连健康检查）
   docker run -d \
     --name "mytrader-web-$NEW_SLOT" \
     --network "$NETWORK" \
     -p "127.0.0.1:${NEW_PORT}:3000" \
     --restart unless-stopped \
     "mytrader-web:$NEW_SLOT"
-  echo "  mytrader-web-$NEW_SLOT started on :$NEW_PORT"
+  echo "  mytrader-web-$NEW_SLOT started (host port :$NEW_PORT for health check)"
 
-  # 等待新槽健康（直连验证）
+  # 等待新槽健康（直连宿主机端口验证）
   echo "  Waiting for mytrader-web-$NEW_SLOT to be healthy..."
   HEALTHY=false
   for i in $(seq 1 20); do
@@ -132,11 +132,11 @@ if [ "${WEB_CHANGED:-false}" = "true" ]; then
   # 备份当前 upstream 文件（用于回滚）
   cp "$UPSTREAM_FILE" "${UPSTREAM_FILE}.bak"
 
-  # 切换 Nginx upstream 指向新槽
-  echo "  Switching Nginx upstream to $NEW_SLOT (:$NEW_PORT)..."
+  # 切换 Nginx upstream 指向新槽（用容器名，Nginx 容器内可解析）
+  echo "  Switching Nginx upstream to mytrader-web-$NEW_SLOT..."
   cat > "$UPSTREAM_FILE" << EOF
 upstream nextjs_frontend {
-    server 127.0.0.1:${NEW_PORT};
+    server mytrader-web-${NEW_SLOT}:3000;
     keepalive 16;
 }
 EOF
@@ -150,7 +150,7 @@ EOF
     cp "${UPSTREAM_FILE}.bak" "$UPSTREAM_FILE"
     docker exec mytrader-nginx nginx -s reload
     docker stop "mytrader-web-$NEW_SLOT" && docker rm "mytrader-web-$NEW_SLOT"
-    echo "[ROLLBACK] Restored upstream to $ACTIVE (:$OLD_PORT)"
+    echo "[ROLLBACK] Restored upstream to mytrader-web-$ACTIVE"
     exit 1
   fi
   echo "  End-to-end OK: HTTP $E2E_HTTP"

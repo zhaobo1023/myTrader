@@ -68,10 +68,10 @@ for i in $(seq 1 20); do
 done
 
 # ── 3. 生成初始 upstream_web.conf ───────────────────────────
-echo "[3/6] Writing initial nginx_upstream_web.conf (blue -> :3000)..."
+echo "[3/6] Writing initial nginx_upstream_web.conf (blue -> mytrader-web-blue:3000)..."
 cat > "$NGINX_UPSTREAM_FILE" << 'EOF'
 upstream nextjs_frontend {
-    server 127.0.0.1:3000;
+    server mytrader-web-blue:3000;
     keepalive 16;
 }
 EOF
