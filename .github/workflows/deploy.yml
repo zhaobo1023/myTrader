@@ -31,23 +31,13 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.ECS_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          # Debug: show key format (first/last line only, no secret content)
-          echo "Key file lines: $(wc -l < ~/.ssh/deploy_key)"
-          head -1 ~/.ssh/deploy_key | sed 's/././g'
-          tail -1 ~/.ssh/deploy_key | sed 's/././g'
           ssh-keyscan -H ${{ secrets.ECS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Test SSH connection
-        run: |
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=10 -vvv \
-            ${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST }} "echo SSH_OK" 2>&1 | tail -20
-
       - name: Deploy to ECS
+        # deploy_remote.sh 使用 APP_DIR=/app/myTrader（容器 volume 挂载目录）
+        # 前端蓝绿切换由脚本自动完成，无需额外参数
         env:
           WEB_CHANGED: ${{ steps.changes.outputs.web }}
-          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
-          POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
         run: |
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             scripts/deploy_remote.sh \
@@ -55,4 +45,4 @@ jobs:
 
           ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=no \
             ${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST }} \
-            "WEB_CHANGED=${WEB_CHANGED} POSTHOG_KEY='${POSTHOG_KEY}' POSTHOG_HOST='${POSTHOG_HOST}' bash /tmp/deploy_remote.sh"
+            "WEB_CHANGED=${WEB_CHANGED} bash /tmp/deploy_remote.sh"

@@ -1,145 +1,110 @@
 # Deploy Skill
 
 ## 触发条件
-- 用户说 "/deploy <fix描述>" 或 "部署到线上" / "上线"
+- 用户说 "/deploy"、"部署到线上"、"上线" 时触发
 
-## 默认服务器配置（myTrader）
+## 服务器配置
 
-- SSH 别名：`aliyun-ecs` 或 `root@123.56.3.1`，密钥 `~/.ssh/id_ed25519`
-- 应用目录：`/root/app`
-- 服务组成：FastAPI web server + Celery workers（见 docker-compose.yml）
-- 部署方式：`git pull` + `docker compose up -d --build`（无独立 docker compose 命令）
-
----
+- SSH 别名：`aliyun-ecs`
+- 代码目录：`/app/myTrader`（容器 volume 挂载目录，CI/CD 和手动部署均使用此路径）
+- Docker 网络：`mytrader_mytrader-network`（由脚本运行时自动检测，不硬编码）
 
 ## 执行规则
 
-**自主执行，不询问用户**。遇到脚本需要在远程运行时：
+**自主执行，不询问用户**。遇到需要在远程运行的脚本时：
 - **禁止** heredoc 或嵌套引号方式通过 SSH 传脚本
 - **必须** 将脚本写到本地文件，用 `scp` 传到服务器，再 SSH 执行
 
 ---
 
-## 部署流程（按顺序执行）
+## 部署架构
 
-### 步骤 1 - 本地验证
-
-```bash
-python -m pytest tests/ -x -q 2>&1 | tail -10
+```
+API  ── Gunicorn HUP reload（准零停机，worker 逐个替换）
+前端 ── 蓝绿切换（blue:3000 / green:3001，新版验证后再切 Nginx）
+任务 ── Celery docker restart
 ```
 
-测试必须全部通过才能继续。若有失败，停止并报告给用户。
+前端蓝绿流程：
+1. 构建新镜像到非活跃槽（blue/green 轮换）
+2. 启动新槽容器，直连验证健康（最多 60s）
+3. 写 `nginx_upstream_web.conf` 指向新槽，`nginx -s reload`（毫秒级，无停机）
+4. 端到端验证 `https://mytrader.cc`
+5. 成功 → 停旧槽、写 `.deploy_slot`；失败 → 恢复旧 upstream、停新槽、退出
 
-### 步骤 2 - 准备部署脚本
+---
 
-将以下内容写到本地 `/tmp/deploy_<timestamp>.sh`：
+## 部署流程
 
-```bash
-#!/bin/bash
-set -euo pipefail
-
-APP_DIR="/root/app"
-BACKUP_DIR="/root/app_backup_$(date +%Y%m%d_%H%M%S)"
-
-echo "[DEPLOY] Backing up current version to $BACKUP_DIR"
-cp -r "$APP_DIR" "$BACKUP_DIR"
-
-echo "[DEPLOY] Pulling latest code"
-cd "$APP_DIR"
-git pull origin main
-
-echo "[DEPLOY] Restarting services"
-docker compose up -d --build
-
-echo "[DEPLOY] Waiting 30s for services to stabilize..."
-sleep 30
-
-echo "[DEPLOY] Health check"
-docker compose ps
-docker compose logs --tail=20
-```
-
-传到服务器：
-```bash
-scp /tmp/deploy_<timestamp>.sh aliyun-ecs:/tmp/deploy.sh
-ssh aliyun-ecs "chmod +x /tmp/deploy.sh && bash /tmp/deploy.sh"
-```
-
-### 步骤 3 - 确认服务健康
-
-SSH 执行以下检查，**每60秒一次，共3次（3分钟）**：
+### 步骤 1 — 本地验证
 
 ```bash
-ssh aliyun-ecs "cd /root/app && docker compose ps && docker compose logs --tail=10 2>&1"
+python3 -m pytest tests/unit/ -x -q 2>&1 | tail -10
 ```
 
-判断标准：
-- [OK] 所有容器状态为 `Up`，日志无 `ERROR` / `CRITICAL` / `Exception`
-- [WARN] 有非致命警告但服务在运行
-- [FAIL] 容器 `Exit` 或日志有致命错误
+测试全部通过才继续。有失败则停止并告知用户。
 
-### 步骤 4 - 重新入队失败任务（如涉及 Celery）
+### 步骤 2 — 准备部署脚本
 
-**必须先确认新 worker 已启动**，再重新入队：
+将 `scripts/deploy_remote.sh` 传到服务器并执行：
 
 ```bash
-# 确认 worker 在线
-ssh aliyun-ecs "cd /root/app && docker compose logs celery_worker --tail=20 | grep 'ready'"
+scp scripts/deploy_remote.sh aliyun-ecs:/tmp/deploy_remote.sh
+ssh aliyun-ecs "WEB_CHANGED=true bash /tmp/deploy_remote.sh"
 ```
 
-只有看到 `ready` 输出后才能重新入队失败任务。
+`WEB_CHANGED=true` 时执行前端蓝绿切换；`false` 时跳过前端，仅做 API reload。
 
-### 步骤 5 - 自动回滚（健康检查失败时）
+### 步骤 3 — 确认部署结果
 
-如果 3 分钟监控中任意一次检查结果为 `[FAIL]`，立即执行：
+脚本末尾会输出：
 
-将以下内容写到本地 `/tmp/rollback_<timestamp>.sh`：
+```
+[SUCCESS] Deploy complete.
+  Commit     : <git hash> <message>
+  Active slot: blue|green
+  API status : ok|degraded
+  Site e2e   : HTTP 200|307
+```
+
+HTTP 200 或 307 均为正常（307 是登录跳转）。
+
+### 步骤 4 — 失败处理
+
+脚本内置自动回滚：
+- 前端新槽健康检查失败 → 自动停新槽容器，不切换 Nginx
+- 端到端验证失败 → 自动恢复旧 upstream，`nginx -s reload`，停新槽容器
+
+脚本退出码非 0 时，告知用户失败原因，不需要手动回滚。
+
+---
+
+## 首次初始化（仅执行一次）
+
+若服务器上不存在 `.deploy_slot` 和 `nginx_upstream_web.conf`，需先初始化蓝绿环境：
 
 ```bash
-#!/bin/bash
-set -euo pipefail
-
-BACKUP_DIR="$1"
-APP_DIR="/root/app"
-
-echo "[ROLLBACK] Restoring from $BACKUP_DIR"
-rm -rf "$APP_DIR"
-cp -r "$BACKUP_DIR" "$APP_DIR"
-
-cd "$APP_DIR"
-docker compose up -d
-
-echo "[ROLLBACK] Done. Current status:"
-docker compose ps
+scp scripts/init_blue_green.sh aliyun-ecs:/tmp/init_blue_green.sh
+ssh aliyun-ecs "bash /tmp/init_blue_green.sh"
 ```
-
-```bash
-scp /tmp/rollback_<timestamp>.sh aliyun-ecs:/tmp/rollback.sh
-ssh aliyun-ecs "chmod +x /tmp/rollback.sh && bash /tmp/rollback.sh <BACKUP_DIR>"
-```
-
-回滚完成后立即告知用户：服务已回滚、备份路径、失败原因。
 
 ---
 
 ## 输出格式
 
 ```
-## Deploy: <fix描述>
+## Deploy
 
 ### 本地测试
-- pytest: PASSED N / FAILED N
+- pytest: PASSED N
 
 ### 部署步骤
-- [OK] 备份完成：/root/app_backup_<timestamp>
-- [OK] git pull 完成
-- [OK] 服务重启完成
-
-### 监控结果（3次 x 60秒）
-- T+60s:  [OK/WARN/FAIL] - 容器状态 + 日志摘要
-- T+120s: [OK/WARN/FAIL] - ...
-- T+180s: [OK/WARN/FAIL] - ...
+- [OK] git pull: <commit>
+- [OK] API: HUP reload / docker restart
+- [OK] Celery: restarted
+- [OK] 前端: blue -> green (蓝绿切换) 或 跳过
+- [OK] 端到端: HTTP 307
 
 ### 最终状态
-[DEPLOYED / ROLLED_BACK] - 一句话总结
+[DEPLOYED] Active slot: green | API: ok | Site: HTTP 307
 ```
