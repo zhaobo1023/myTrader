@@ -84,6 +84,12 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=3, minute=0, day_of_week='1-5'),
     },
 
+    # 03:30 Sunday - 个股基本面增量拉取 (CNInfo: 行业/区域/简介/主营)
+    'weekly-stock-info-fetch': {
+        'task': 'scheduler.adapters.run_stock_info_incremental',
+        'schedule': crontab(hour=3, minute=30, day_of_week='0'),
+    },
+
     # ============================================================
     # 早间任务
     # ============================================================

@@ -46,6 +46,8 @@ export const candidatePoolApi = {
     apiClient.get<{ count: number; data: TagItem[] }>('/api/candidate-pool/tags'),
   createTag: (name: string, color?: string) =>
     apiClient.post('/api/candidate-pool/tags', { name, color }),
+  ensureTag: (name: string, color?: string) =>
+    apiClient.post<TagItem & { action: string }>('/api/candidate-pool/tags/ensure', { name, color }),
   deleteTag: (tagId: number) =>
     apiClient.delete(`/api/candidate-pool/tags/${tagId}`),
   tagStock: (stockId: number, tagId: number) =>

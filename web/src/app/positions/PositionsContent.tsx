@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { positionsApi, riskApi, PositionItem, PositionMarketData, MarketDataFreshness, RiskOverviewData, BatchAnalyzeResult, StockAnalysis, TradeActionResponse } from '@/lib/api-client';
+import { positionsApi, riskApi, PositionItem, PositionMarketData, MarketDataFreshness, RiskOverviewData, BatchAnalyzeResult, StockAnalysis, TradeActionResponse, TagItem } from '@/lib/api-client';
 import { useAddToCandidate } from '@/hooks/useStockAdd';
 import StockSearchInput from '@/components/stock/StockSearchInput';
 import type { StockSearchResult } from '@/lib/api-client';
@@ -747,6 +747,9 @@ export default function PositionsContent() {
   const [tradeResult, setTradeResult] = useState<TradeActionResponse | null>(null);
   const [tradeError, setTradeError] = useState<string | null>(null);
   const [tradeLoading, setTradeLoading] = useState(false);
+  // 标签弹窗状态
+  const [tagTarget, setTagTarget] = useState<PositionItem | null>(null);
+  const [tagInput, setTagInput] = useState('');
 
   const { data: overviewData, isLoading: overviewLoading, isError: overviewError } = useQuery({
     queryKey: ['risk-overview'],
@@ -769,6 +772,18 @@ export default function PositionsContent() {
     staleTime: 30 * 1000,
     refetchOnMount: true,
     refetchInterval: 5 * 60 * 1000,
+  });
+
+  const { data: allTags } = useQuery({
+    queryKey: ['position-tags'],
+    queryFn: () => positionsApi.listTags().then(r => r.data),
+    staleTime: 60 * 1000,
+  });
+
+  const { data: positionTagsMap } = useQuery({
+    queryKey: ['position-tags-batch'],
+    queryFn: () => positionsApi.batchPositionTags().then(r => r.data),
+    staleTime: 30 * 1000,
   });
 
   // -- Market data freshness check (once per session, avoids repeated calls) --
@@ -861,6 +876,24 @@ export default function PositionsContent() {
     } finally {
       setTradeLoading(false);
     }
+  };
+
+  const handleTagSubmit = async (tagName: string) => {
+    if (!tagTarget || !tagName.trim()) return;
+    try {
+      await positionsApi.tagPosition(tagTarget.id, { tag_name: tagName.trim() });
+      queryClient.invalidateQueries({ queryKey: ['position-tags'] });
+      queryClient.invalidateQueries({ queryKey: ['position-tags-batch'] });
+      setTagInput('');
+    } catch { /* silent */ }
+  };
+
+  const handleTagRemove = async (positionId: number, tagId: number) => {
+    try {
+      await positionsApi.untagPosition(positionId, tagId);
+      queryClient.invalidateQueries({ queryKey: ['position-tags'] });
+      queryClient.invalidateQueries({ queryKey: ['position-tags-batch'] });
+    } catch { /* silent */ }
   };
 
   const handleSubmit = () => {
@@ -1290,6 +1323,91 @@ export default function PositionsContent() {
         </div>
       )}
 
+      {/* 标签弹窗 */}
+      {tagTarget && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={e => { if (e.target === e.currentTarget) setTagTarget(null); }}>
+          <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '20px', width: '340px', maxWidth: '92vw' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>
+                {tagTarget.stock_name || tagTarget.stock_code}
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400, marginLeft: '6px' }}>{tagTarget.stock_code}</span>
+              </h3>
+              <button onClick={() => setTagTarget(null)} style={{ fontSize: '13px', color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}>x</button>
+            </div>
+
+            {/* 已有标签 */}
+            {(() => {
+              const currentTags = positionTagsMap?.[tagTarget.id] || [];
+              return currentTags.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '12px' }}>
+                  {currentTags.map(t => (
+                    <span key={t.id} style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '3px',
+                      fontSize: '12px', padding: '3px 8px', borderRadius: '12px',
+                      color: t.color, background: `${t.color}15`, border: `1px solid ${t.color}30`,
+                    }}>
+                      {t.name}
+                      <span
+                        onClick={() => handleTagRemove(tagTarget.id, t.id)}
+                        style={{ cursor: 'pointer', fontSize: '11px', opacity: 0.6, marginLeft: '2px' }}
+                        title="移除标签"
+                      >x</span>
+                    </span>
+                  ))}
+                </div>
+              );
+            })()}
+
+            {/* 输入框 + 搜索提示 */}
+            <div style={{ position: 'relative' }}>
+              <input
+                placeholder="输入标签名，回车添加"
+                value={tagInput}
+                onChange={e => setTagInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && tagInput.trim()) {
+                    handleTagSubmit(tagInput.trim());
+                  }
+                }}
+                style={{ width: '100%', padding: '8px 10px', fontSize: '13px', border: '1px solid var(--border-subtle)', borderRadius: '6px', boxSizing: 'border-box' }}
+                autoFocus
+              />
+              {/* 搜索提示下拉 */}
+              {tagInput.trim() && (() => {
+                const q = tagInput.trim().toLowerCase();
+                const tags = allTags?.data || [];
+                const currentTagIds = new Set((positionTagsMap?.[tagTarget.id] || []).map(t => t.id));
+                const filtered = tags.filter(t => t.name.toLowerCase().includes(q) && !currentTagIds.has(t.id));
+                return filtered.length > 0 && (
+                  <div style={{
+                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
+                    background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)',
+                    borderRadius: '0 0 6px 6px', maxHeight: '160px', overflowY: 'auto',
+                  }}>
+                    {filtered.slice(0, 8).map(t => (
+                      <div key={t.id}
+                        onClick={() => { handleTagSubmit(t.name); }}
+                        style={{ padding: '7px 10px', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', borderBottom: '1px solid var(--border-subtle)' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-canvas)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: t.color, flexShrink: 0 }} />
+                        <span style={{ color: 'var(--text-secondary)' }}>{t.name}</span>
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{t.stock_count ?? 0}只</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>
+              输入新标签名回车创建，或选择已有标签
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 常驻风险概览 */}
       {overviewLoading && (
         <div style={{ marginBottom: '12px', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', fontSize: '12px', color: 'var(--text-muted)' }}>
@@ -1375,6 +1493,21 @@ export default function PositionsContent() {
                         <a href={`/stock?code=${encodeURIComponent(p.stock_code)}`} style={{ color: 'var(--text-secondary)', textDecoration: 'none', fontSize: '13px' }}>
                           {p.stock_name || '-'}
                         </a>
+                        {(() => {
+                          const pTags = positionTagsMap?.[p.id] || [];
+                          return pTags.length > 0 && (
+                            <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap', marginTop: '2px' }}>
+                              {pTags.map(t => (
+                                <span key={t.id} style={{
+                                  fontSize: '9px', padding: '1px 5px', borderRadius: '8px',
+                                  color: t.color, background: `${t.color}18`, fontWeight: 510,
+                                }}>
+                                  {t.name}
+                                </span>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td style={{ padding: '6px 6px', textAlign: 'right', color: 'var(--text-primary)' }}>{p.shares ?? '-'}</td>
                       <td style={{ padding: '6px 6px', textAlign: 'right', color: 'var(--text-primary)' }}>{p.cost_price?.toFixed(2) ?? '-'}</td>
@@ -1398,6 +1531,10 @@ export default function PositionsContent() {
                         <button onClick={() => moveToCandidate(p)} disabled={movingId === p.id}
                           style={{ fontSize: '12px', color: '#5e6ad2', background: 'none', border: 'none', cursor: movingId === p.id ? 'default' : 'pointer', marginRight: '6px' }}>
                           {movingId === p.id ? '...' : '候选'}
+                        </button>
+                        <button onClick={() => { setTagTarget(p); setTagInput(''); }}
+                          style={{ fontSize: '12px', color: '#ca8a04', background: 'none', border: 'none', cursor: 'pointer', marginRight: '6px' }}>
+                          打标
                         </button>
                         <button onClick={() => { if (confirm('确认删除?')) deleteMut.mutate(p.id); }} style={{ fontSize: '12px', color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer' }}>删除</button>
                       </td>

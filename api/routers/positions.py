@@ -10,6 +10,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -18,6 +19,7 @@ from api.models.user import User
 from api.models.user_position import UserPosition
 from api.models.trade_operation_log import TradeOperationLog
 from api.middleware.auth import get_current_user
+from api.services import candidate_pool_service as tag_svc
 from api.schemas.positions import (
     PositionCreate,
     PositionUpdate,
@@ -27,6 +29,13 @@ from api.schemas.positions import (
     TradeActionRequest,
     TradeActionResponse,
 )
+
+
+class TagPositionRequest(BaseModel):
+    tag_id: Optional[int] = None
+    tag_name: Optional[str] = None
+    tag_color: Optional[str] = '#5e6ad2'
+
 
 logger = logging.getLogger('myTrader.api')
 router = APIRouter(prefix='/api/positions', tags=['positions'])
@@ -326,6 +335,63 @@ async def create_position(
     return _to_response(position)
 
 
+# ---------------------------------------------------------------------------
+# Position tags - static routes (must come before /{position_id} routes)
+# ---------------------------------------------------------------------------
+
+@router.get('/tags')
+async def list_position_tags(
+    current_user: User = Depends(get_current_user),
+):
+    """List all tags for the current user (shared tag pool with candidate pool)."""
+    try:
+        data = tag_svc.list_tags(current_user.id)
+        return {'count': len(data), 'data': data}
+    except Exception as e:
+        logger.error('[POSITIONS] list_position_tags error: %s', e)
+        raise HTTPException(status_code=500, detail='Internal server error')
+
+
+@router.post('/tags/ensure')
+async def ensure_position_tag(
+    body: TagPositionRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Find an existing tag by name or create a new one."""
+    name = (body.tag_name or '').strip()
+    if not name:
+        raise HTTPException(status_code=400, detail='Tag name cannot be empty')
+    try:
+        result = tag_svc.create_tag(current_user.id, name, body.tag_color or '#5e6ad2')
+        return result
+    except Exception as e:
+        logger.error('[POSITIONS] ensure_position_tag error: %s', e)
+        raise HTTPException(status_code=500, detail='Internal server error')
+
+
+@router.get('/tags/batch')
+async def batch_position_tags(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get tags for all active positions of the current user."""
+    result = await db.execute(
+        select(UserPosition.id).where(
+            UserPosition.user_id == current_user.id,
+            UserPosition.is_active == True,
+        )
+    )
+    position_ids = [r[0] for r in result.all()]
+    if not position_ids:
+        return {}
+
+    try:
+        return tag_svc.get_all_position_tags(position_ids)
+    except Exception as e:
+        logger.error('[POSITIONS] batch_position_tags error: %s', e)
+        raise HTTPException(status_code=500, detail='Internal server error')
+
+
 @router.put('/{position_id}', response_model=PositionResponse)
 async def update_position(
     position_id: int,
@@ -362,6 +428,11 @@ async def update_position(
     if shares_changed:
         old_s = old_values.get('shares') or 0
         new_s = update_data.get('shares') or 0
+        # Skip log if shares did not actually change
+        if old_s == new_s:
+            shares_changed = False
+
+    if shares_changed:
         direction = '加仓' if new_s > old_s else ('减仓' if new_s < old_s else '调整')
         db.add(TradeOperationLog(
             user_id=current_user.id,
@@ -553,6 +624,72 @@ async def trade_position(
         pnl_pct=pnl_pct,
         closed=closed,
     )
+
+
+@router.post('/{position_id}/tags')
+async def tag_position_route(
+    position_id: int,
+    body: TagPositionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add a tag to a position. Supports tag_id or tag_name (auto-create)."""
+    result = await db.execute(
+        select(UserPosition).where(
+            UserPosition.id == position_id,
+            UserPosition.user_id == current_user.id,
+        )
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail='Position not found')
+
+    try:
+        if body.tag_name and not body.tag_id:
+            tag_result = tag_svc.create_tag(
+                current_user.id, body.tag_name.strip(), body.tag_color or '#5e6ad2'
+            )
+            body.tag_id = tag_result['id']
+
+        if not body.tag_id:
+            raise HTTPException(status_code=400, detail='tag_id or tag_name required')
+
+        ok = tag_svc.tag_position(current_user.id, position_id, body.tag_id)
+        if not ok:
+            raise HTTPException(status_code=403, detail='Tag not found or not owned by user')
+
+        tags = tag_svc.get_position_tags(position_id)
+        return {'success': True, 'tags': tags}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error('[POSITIONS] tag_position error: %s', e)
+        raise HTTPException(status_code=500, detail='Internal server error')
+
+
+@router.delete('/{position_id}/tags/{tag_id}')
+async def untag_position_route(
+    position_id: int,
+    tag_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a tag from a position."""
+    result = await db.execute(
+        select(UserPosition).where(
+            UserPosition.id == position_id,
+            UserPosition.user_id == current_user.id,
+        )
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail='Position not found')
+
+    try:
+        tag_svc.untag_position(current_user.id, position_id, tag_id)
+        tags = tag_svc.get_position_tags(position_id)
+        return {'success': True, 'tags': tags}
+    except Exception as e:
+        logger.error('[POSITIONS] untag_position error: %s', e)
+        raise HTTPException(status_code=500, detail='Internal server error')
 
 
 @router.post('/risk-scan')

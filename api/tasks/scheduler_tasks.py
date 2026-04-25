@@ -61,6 +61,13 @@ def run_log_bias_strategy(self):
     return _fn()
 
 
+@celery_app.task(name='scheduler.adapters.run_stock_info_incremental', bind=True, max_retries=1)
+def run_stock_info_incremental(self):
+    from scheduler.adapters import run_stock_info_incremental as _fn
+    logger.info('[CELERY] run_stock_info_incremental start')
+    return _fn()
+
+
 @celery_app.task(name='scheduler.adapters.run_positions_daily_report', bind=True, max_retries=1)
 def run_positions_daily_report(self):
     from scheduler.adapters import run_positions_daily_report as _fn

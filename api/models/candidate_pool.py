@@ -161,3 +161,21 @@ class CandidateStockTag(Base):
 
     def __repr__(self):
         return f'<CandidateStockTag stock={self.stock_id} tag={self.tag_id}>'
+
+
+class PositionStockTag(Base):
+    """Association table: many-to-many between positions and tags."""
+    __tablename__ = 'position_stock_tags'
+    __table_args__ = (
+        UniqueConstraint('position_id', 'tag_id', name='uq_position_stock_tag'),
+        Index('ix_position_stock_tags_position', 'position_id'),
+        Index('ix_position_stock_tags_tag', 'tag_id'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    position_id = Column(Integer, nullable=False)
+    tag_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f'<PositionStockTag position={self.position_id} tag={self.tag_id}>'

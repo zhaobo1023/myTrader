@@ -248,6 +248,23 @@ async def delete_tag(
         raise HTTPException(status_code=500, detail='Internal server error')
 
 
+@router.post('/tags/ensure')
+async def ensure_tag(
+    body: CreateTagRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Find an existing tag by name or create a new one. Returns the tag."""
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail='Tag name cannot be empty')
+    try:
+        result = svc.create_tag(current_user.id, body.name.strip(), body.color or '#5e6ad2')
+        # create_tag returns {action: 'exists', tag: {...}} or {action: 'created', tag: {...}}
+        return result
+    except Exception as e:
+        logger.error('[candidate_pool] ensure_tag error: %s', e)
+        raise HTTPException(status_code=500, detail='Internal server error')
+
+
 @router.post('/stocks/{stock_id}/tags')
 async def tag_stock(
     stock_id: int,

@@ -412,6 +412,13 @@ export interface MarketDashboardData {
 // Positions API
 // ============================================================
 
+export interface TagItem {
+  id: number;
+  name: string;
+  color: string;
+  stock_count?: number;
+}
+
 export interface PositionItem {
   id: number;
   stock_code: string;
@@ -487,6 +494,17 @@ export const positionsApi = {
     apiClient.post<BatchAnalyzeResult>('/api/positions/batch-analyze'),
   trade: (id: number, data: { action: 'add' | 'reduce' | 'close'; price: number; shares?: number }) =>
     apiClient.post<TradeActionResponse>(`/api/positions/${id}/trade`, data),
+  // Tags
+  listTags: () =>
+    apiClient.get<{ count: number; data: TagItem[] }>('/api/positions/tags'),
+  ensureTag: (name: string, color?: string) =>
+    apiClient.post<TagItem & { action: string }>('/api/positions/tags/ensure', { tag_name: name, tag_color: color }),
+  tagPosition: (positionId: number, data: { tag_id?: number; tag_name?: string; tag_color?: string }) =>
+    apiClient.post<{ success: boolean; tags: TagItem[] }>(`/api/positions/${positionId}/tags`, data),
+  untagPosition: (positionId: number, tagId: number) =>
+    apiClient.delete<{ success: boolean; tags: TagItem[] }>(`/api/positions/${positionId}/tags/${tagId}`),
+  batchPositionTags: () =>
+    apiClient.get<Record<number, TagItem[]>>('/api/positions/tags/batch'),
 };
 
 export interface TradeActionResponse {
@@ -614,7 +632,8 @@ export const tradeLogApi = {
       total: number;
       by_type: Record<string, number>;
       top_stocks: { stock_code: string; stock_name: string; total: number; open: number; close: number; add_reduce: number }[];
-      close_summary: { count: number; stocks: [string, string][] };
+      close_summary: { count: number; stocks: [string, string][]; win_count: number; lose_count: number; win_rate: number | null; avg_pnl: number | null; total_pnl: number; avg_win: number | null; avg_loss: number | null; pnl_ratio: number | null };
+      active_positions: number;
     }>('/api/trade-logs/stats', { params }),
   export: (params?: { operation_type?: string; from_date?: string; to_date?: string; stock_code?: string }) =>
     downloadCsv('/api/trade-logs/export', params || {}, 'trade_logs.csv'),

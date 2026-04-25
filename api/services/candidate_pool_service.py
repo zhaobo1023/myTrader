@@ -205,6 +205,76 @@ def list_stocks_with_tags(user_id: int, tag_id: Optional[int] = None, **kwargs) 
 
 
 # ---------------------------------------------------------------------------
+# Position stock tags (reuse candidate_tags, separate association table)
+# ---------------------------------------------------------------------------
+
+def tag_position(user_id: int, position_id: int, tag_id: int) -> bool:
+    """Associate a tag with a position. Validates ownership."""
+    tag = execute_query(
+        'SELECT id FROM candidate_tags WHERE id = %s AND user_id = %s',
+        (tag_id, user_id), env=_DB_ENV,
+    )
+    if not tag:
+        return False
+    execute_update(
+        '''INSERT INTO position_stock_tags (position_id, tag_id, created_at)
+           VALUES (%s, %s, NOW())
+           ON DUPLICATE KEY UPDATE position_id=position_id''',
+        (position_id, tag_id), env=_DB_ENV,
+    )
+    return True
+
+
+def untag_position(user_id: int, position_id: int, tag_id: int) -> bool:
+    """Remove a tag from a position."""
+    execute_update(
+        'DELETE pt FROM position_stock_tags pt '
+        'INNER JOIN candidate_tags t ON pt.tag_id = t.id '
+        'WHERE pt.position_id = %s AND pt.tag_id = %s AND t.user_id = %s',
+        (position_id, tag_id, user_id), env=_DB_ENV,
+    )
+    return True
+
+
+def get_position_tags(position_id: int) -> list:
+    """Get all tags for a position."""
+    rows = execute_query(
+        '''SELECT t.id, t.name, t.color
+           FROM candidate_tags t
+           INNER JOIN position_stock_tags pt ON pt.tag_id = t.id
+           WHERE pt.position_id = %s
+           ORDER BY t.name''',
+        (position_id,), env=_DB_ENV,
+    )
+    return [{'id': r['id'], 'name': r['name'], 'color': r['color']} for r in rows]
+
+
+def get_all_position_tags(position_ids: list) -> dict:
+    """Batch load tags for multiple positions. Returns {position_id: [tag_dicts]}."""
+    if not position_ids:
+        return {}
+    tag_map = {}
+    CHUNK = 200
+    for i in range(0, len(position_ids), CHUNK):
+        chunk = position_ids[i:i + CHUNK]
+        ph = ','.join(['%s'] * len(chunk))
+        rows = execute_query(
+            f'''SELECT pt.position_id, t.id AS tag_id, t.name, t.color
+                FROM position_stock_tags pt
+                INNER JOIN candidate_tags t ON pt.tag_id = t.id
+                WHERE pt.position_id IN ({ph})
+                ORDER BY t.name''',
+            tuple(chunk), env=_DB_ENV,
+        )
+        for r in rows:
+            pid = r['position_id']
+            if pid not in tag_map:
+                tag_map[pid] = []
+            tag_map[pid].append({'id': r['tag_id'], 'name': r['name'], 'color': r['color']})
+    return tag_map
+
+
+# ---------------------------------------------------------------------------
 # Single stock refresh
 # ---------------------------------------------------------------------------
 

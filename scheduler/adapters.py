@@ -711,3 +711,14 @@ def run_positions_daily_report(dry_run: bool = False, env: str = 'online'):
     result = run(dry_run=False)
     logger.info("[OK] positions daily report done: %s", result)
     return result
+
+
+def run_stock_info_incremental(dry_run: bool = False, env: str = 'online'):
+    """Incremental fetch of stock company profiles from CNInfo (akshare)."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_stock_info_incremental: would fetch new stock profiles from CNInfo")
+        return
+
+    from data_analyst.fetchers.stock_info_fetcher import fetch_incremental
+    fetch_incremental(env=env)
+    logger.info("[OK] stock info incremental fetch done")

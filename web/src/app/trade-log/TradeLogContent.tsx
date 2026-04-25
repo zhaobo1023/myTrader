@@ -366,6 +366,13 @@ export default function TradeLogContent() {
   const total = data?.data?.total || 0;
   const totalPages = Math.ceil(total / pageSize);
 
+  // Stats query
+  const { data: statsData } = useQuery({
+    queryKey: ['trade-log-stats'],
+    queryFn: () => tradeLogApi.stats({ days: 90 }).then(r => r.data),
+    staleTime: 60 * 1000,
+  });
+
   const filterBtnStyle = (active: boolean): React.CSSProperties => ({
     fontSize: '12px', padding: '4px 12px', borderRadius: '4px',
     border: active ? '1px solid var(--accent)' : '1px solid var(--border-subtle)',
@@ -447,6 +454,61 @@ export default function TradeLogContent() {
 
       {/* Manual trade form */}
       {showForm && <ManualTradeForm onDone={() => setShowForm(false)} />}
+
+      {/* Stats summary */}
+      {statsData && (() => {
+        const s = statsData;
+        const cs = s.close_summary;
+        return (
+          <div style={{
+            display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px',
+            padding: '10px 14px', borderRadius: '8px',
+            background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)',
+          }}>
+            <div style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '4px', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>近{s.period_days}天操作</span>
+              <span style={{ color: 'var(--text-primary)', fontWeight: 510, marginLeft: '4px' }}>{s.total}次</span>
+            </div>
+            {s.active_positions > 0 && (
+              <div style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '4px', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)' }}>
+                <span style={{ color: 'var(--text-muted)' }}>当前持仓</span>
+                <span style={{ color: 'var(--text-primary)', fontWeight: 510, marginLeft: '4px' }}>{s.active_positions}只</span>
+              </div>
+            )}
+            {cs.count > 0 && (
+              <div style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '4px', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)' }}>
+                <span style={{ color: 'var(--text-muted)' }}>清仓</span>
+                <span style={{ color: '#e5534b', fontWeight: 510, marginLeft: '4px' }}>{cs.count}次</span>
+              </div>
+            )}
+            {cs.win_rate != null && (
+              <div style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '4px', background: cs.win_rate >= 50 ? 'rgba(22,163,74,0.06)' : 'rgba(229,83,75,0.06)', border: `1px solid ${cs.win_rate >= 50 ? 'rgba(22,163,74,0.2)' : 'rgba(229,83,75,0.2)'}` }}>
+                <span style={{ color: 'var(--text-muted)' }}>胜率</span>
+                <span style={{ color: cs.win_rate >= 50 ? '#16a34a' : '#e5534b', fontWeight: 510, marginLeft: '4px' }}>{cs.win_rate}%</span>
+                <span style={{ color: 'var(--text-tertiary)', marginLeft: '3px' }}>({cs.win_count}胜/{cs.lose_count}负)</span>
+              </div>
+            )}
+            {cs.avg_pnl != null && (
+              <div style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '4px', background: cs.avg_pnl >= 0 ? 'rgba(22,163,74,0.06)' : 'rgba(229,83,75,0.06)', border: `1px solid ${cs.avg_pnl >= 0 ? 'rgba(22,163,74,0.2)' : 'rgba(229,83,75,0.2)'}` }}>
+                <span style={{ color: 'var(--text-muted)' }}>平均盈亏</span>
+                <span style={{ color: cs.avg_pnl >= 0 ? '#dc2626' : '#16a34a', fontWeight: 510, marginLeft: '4px' }}>{cs.avg_pnl > 0 ? '+' : ''}{cs.avg_pnl}%</span>
+              </div>
+            )}
+            {cs.pnl_ratio != null && (
+              <div style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '4px', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)' }}>
+                <span style={{ color: 'var(--text-muted)' }}>盈亏比</span>
+                <span style={{ color: 'var(--text-primary)', fontWeight: 510, marginLeft: '4px' }}>{cs.pnl_ratio}</span>
+              </div>
+            )}
+            {cs.total_pnl !== 0 && (
+              <div style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '4px', background: cs.total_pnl >= 0 ? 'rgba(22,163,74,0.06)' : 'rgba(229,83,75,0.06)', border: `1px solid ${cs.total_pnl >= 0 ? 'rgba(22,163,74,0.2)' : 'rgba(229,83,75,0.2)'}` }}>
+                <span style={{ color: 'var(--text-muted)' }}>累计盈亏</span>
+                <span style={{ color: cs.total_pnl >= 0 ? '#dc2626' : '#16a34a', fontWeight: 510, marginLeft: '4px' }}>{cs.total_pnl > 0 ? '+' : ''}{cs.total_pnl}%</span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Log list */}
       {isLoading && (

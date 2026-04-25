@@ -217,12 +217,56 @@ async def trade_log_stats(
 
     top_stocks = sorted(stock_counts.values(), key=lambda x: x['total'], reverse=True)[:10]
 
-    # Close-position summary
+    # Close-position summary with PnL analysis
     close_logs = [log for log in logs if log.operation_type == 'close_position']
+    pnl_list: list[float] = []
+    for cl in close_logs:
+        if cl.after_value:
+            try:
+                after = json.loads(cl.after_value)
+                if 'pnl_pct' in after and after['pnl_pct'] is not None:
+                    pnl_list.append(float(after['pnl_pct']))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+
+    win_count = sum(1 for p in pnl_list if p > 0)
+    lose_count = sum(1 for p in pnl_list if p <= 0)
+    total_pnl = sum(pnl_list) if pnl_list else 0
+    avg_pnl = round(total_pnl / len(pnl_list), 2) if pnl_list else None
+    win_rate = round(win_count / len(pnl_list) * 100, 2) if pnl_list else None
+    # Avg win / avg loss ratio
+    wins = [p for p in pnl_list if p > 0]
+    losses = [p for p in pnl_list if p <= 0]
+    avg_win = round(sum(wins) / len(wins), 2) if wins else None
+    avg_loss = round(sum(losses) / len(losses), 2) if losses else None
+    pnl_ratio = round(abs(avg_win / avg_loss), 2) if avg_win and avg_loss and avg_loss != 0 else None
+
     close_summary = {
         'count': len(close_logs),
         'stocks': list({log.stock_code: log.stock_name for log in close_logs if log.stock_code}.items())[:20],
+        'win_count': win_count,
+        'lose_count': lose_count,
+        'win_rate': win_rate,
+        'avg_pnl': avg_pnl,
+        'total_pnl': round(total_pnl, 2),
+        'avg_win': avg_win,
+        'avg_loss': avg_loss,
+        'pnl_ratio': pnl_ratio,
     }
+
+    # Current active positions count
+    active_count = 0
+    try:
+        from api.models.user_position import UserPosition
+        pos_result = await db.execute(
+            select(UserPosition).where(
+                UserPosition.user_id == current_user.id,
+                UserPosition.is_active == True,
+            )
+        )
+        active_count = len(pos_result.scalars().all())
+    except Exception:
+        pass
 
     return {
         'period_days': days,
@@ -231,4 +275,5 @@ async def trade_log_stats(
         'by_type': dict(type_counts),
         'top_stocks': top_stocks,
         'close_summary': close_summary,
+        'active_positions': active_count,
     }

@@ -197,6 +197,7 @@ function StockRow({
   allTags,
   onTagStock,
   onUntagStock,
+  onEnsureTagStock,
 }: {
   stock: CandidateStock;
   expanded: boolean;
@@ -208,12 +209,14 @@ function StockRow({
   allTags: TagItem[];
   onTagStock: (stockId: number, tagId: number) => void;
   onUntagStock: (stockId: number, tagId: number) => void;
+  onEnsureTagStock: (stockId: number, tagName: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [memo, setMemo] = useState(stock.memo || '');
   const [saving, setSaving] = useState(false);
   const [showLevelPicker, setShowLevelPicker] = useState(false);
   const [showTagPicker, setShowTagPicker] = useState(false);
+  const [tagInput, setTagInput] = useState('');
 
   async function saveMemo() {
     setSaving(true);
@@ -364,8 +367,8 @@ function StockRow({
               </div>
 
               {/* Tags section */}
-              <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)', flexShrink: 0 }}>标签：</span>
+              <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: '8px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', flexShrink: 0, lineHeight: '22px' }}>标签：</span>
                 {stock.tags.map(t => (
                   <span key={t.id} style={{
                     fontSize: '11px', padding: '2px 8px', borderRadius: '10px',
@@ -382,27 +385,56 @@ function StockRow({
                   </span>
                 ))}
                 {showTagPicker ? (
-                  <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
-                    {untagged.length > 0 ? untagged.map(t => (
-                      <button
-                        key={t.id}
-                        onClick={() => { onTagStock(stock.id, t.id); setShowTagPicker(false); }}
-                        style={{
-                          fontSize: '10px', padding: '2px 6px', borderRadius: '6px',
-                          border: `1px solid ${t.color}40`, background: 'transparent',
-                          color: t.color, cursor: 'pointer',
-                        }}
-                      >
-                        + {t.name}
-                      </button>
-                    )) : (
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>所有标签已关联</span>
-                    )}
+                  <div style={{ flex: 1, minWidth: '160px', position: 'relative' }}>
+                    <input
+                      placeholder="输入标签名，回车添加"
+                      value={tagInput}
+                      onChange={e => setTagInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && tagInput.trim()) {
+                          // Check if exact match exists
+                          const match = allTags.find(t => t.name === tagInput.trim() && !taggedIds.has(t.id));
+                          if (match) {
+                            onTagStock(stock.id, match.id);
+                          } else {
+                            onEnsureTagStock(stock.id, tagInput.trim());
+                          }
+                          setTagInput('');
+                        }
+                        if (e.key === 'Escape') { setShowTagPicker(false); setTagInput(''); }
+                      }}
+                      autoFocus
+                      style={{ width: '100%', padding: '4px 8px', fontSize: '12px', border: '1px solid var(--border-subtle)', borderRadius: '6px', boxSizing: 'border-box' }}
+                    />
+                    {/* Search suggestions */}
+                    {tagInput.trim() && (() => {
+                      const q = tagInput.trim().toLowerCase();
+                      const filtered = allTags.filter(t => t.name.toLowerCase().includes(q) && !taggedIds.has(t.id));
+                      return filtered.length > 0 && (
+                        <div style={{
+                          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
+                          background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)',
+                          borderRadius: '0 0 6px 6px', maxHeight: '140px', overflowY: 'auto',
+                        }}>
+                          {filtered.slice(0, 6).map(t => (
+                            <div key={t.id}
+                              onClick={() => { onTagStock(stock.id, t.id); setTagInput(''); }}
+                              style={{ padding: '5px 8px', fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderBottom: '1px solid var(--border-subtle)' }}
+                              onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-canvas)')}
+                              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                            >
+                              <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: t.color, flexShrink: 0 }} />
+                              <span style={{ color: 'var(--text-secondary)' }}>{t.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
                     <button
-                      onClick={() => setShowTagPicker(false)}
-                      style={{ fontSize: '11px', padding: '2px 6px', borderRadius: '4px', background: 'none', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', cursor: 'pointer' }}
+                      onClick={() => { setShowTagPicker(false); setTagInput(''); }}
+                      style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '3px', background: 'none', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', cursor: 'pointer', marginTop: '3px' }}
                     >
-                      取消
+                      关闭
                     </button>
                   </div>
                 ) : (
@@ -642,6 +674,18 @@ export default function CandidatePoolContent() {
     }
   }
 
+  async function handleEnsureTagStock(stockId: number, tagName: string) {
+    try {
+      const tagRes = await candidatePoolApi.ensureTag(tagName);
+      const tagId = tagRes.data.id;
+      await candidatePoolApi.tagStock(stockId, tagId);
+      loadTags();
+      loadStocks();
+    } catch {
+      setActionMsg('关联标签失败');
+    }
+  }
+
   // Alert counts for summary bar
   const alertCounts = stocks.reduce((acc, s) => {
     if (s.monitor_date) acc[s.alert_level] = (acc[s.alert_level] || 0) + 1;
@@ -838,6 +882,7 @@ export default function CandidatePoolContent() {
                     allTags={allTags}
                     onTagStock={handleTagStock}
                     onUntagStock={handleUntagStock}
+                    onEnsureTagStock={handleEnsureTagStock}
                   />
                 ))}
               </tbody>

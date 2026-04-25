@@ -6,7 +6,7 @@
 - `/task archive` — 月末归档所有 DONE 条目
 
 ## 任务队列位置
-/Users/zhaobo/Documents/notes/Daily/task/tasks_myTrader.md
+$HOME/Documents/notes/Daily/task/tasks_myTrader.md
 
 ---
 
@@ -88,6 +88,6 @@ commit：<hash>
 ## 月末归档（/task archive）
 
 1. 读取 tasks_myTrader.md 中所有 [DONE] 条目
-2. 追加写入 `/Users/zhaobo/Documents/notes/Daily/task/tasks_archive/myTrader-YYYY-MM.md`
+2. 追加写入 `$HOME/Documents/notes/Daily/task/tasks_archive/myTrader-YYYY-MM.md`
 3. 从 tasks_myTrader.md 删除这些条目
 4. 输出：`归档 N 条 → tasks_archive/myTrader-YYYY-MM.md，队列剩余 M 条 TODO`
