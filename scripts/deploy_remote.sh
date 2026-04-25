@@ -29,36 +29,25 @@ git fetch origin
 git reset --hard origin/main
 echo "  HEAD: $(git log --oneline -1)"
 
-# ── 2. API 热重载（HUP reload，准零停机）────────────────────
-echo "[2/5] Graceful API reload via SIGHUP..."
-API_PID=$(docker inspect --format='{{.State.Pid}}' mytrader-api 2>/dev/null || echo "")
-RELOADED=false
-if [ -n "$API_PID" ] && [ "$API_PID" != "0" ] && kill -HUP "$API_PID" 2>/dev/null; then
-  for i in $(seq 1 15); do
-    sleep 2
-    if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
-      echo "  API reloaded OK (${i}x2s)"
-      RELOADED=true
-      break
-    fi
-  done
-fi
-if [ "$RELOADED" = "false" ]; then
-  echo "  HUP failed or skipped, falling back to docker restart..."
-  docker restart mytrader-api
-  for i in $(seq 1 20); do
-    sleep 2
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' mytrader-api 2>/dev/null || echo "none")
-    if [ "$STATUS" = "healthy" ]; then
-      echo "  API healthy after restart (${i}x2s)"
-      break
-    fi
-    if [ "$i" = "20" ]; then
-      echo "[ERROR] API did not become healthy in 40s"
-      docker logs --tail 30 mytrader-api
-      exit 1
-    fi
-  done
+# ── 2. API 重启 ───────────────────────────────────────────────
+# 不再使用 HUP reload。原因：Gunicorn HUP 让 master fork 新 worker，
+# 但 Python 的 .pyc 缓存和模块缓存可能导致新增文件/路由不被加载（已实际踩坑）。
+# docker restart 停机仅 3-5 秒，可靠性远高于 HUP。
+echo "[2/5] Restarting API (docker restart)..."
+docker restart mytrader-api
+HEALTHY=false
+for i in $(seq 1 20); do
+  sleep 2
+  if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+    echo "  API healthy (${i}x2s)"
+    HEALTHY=true
+    break
+  fi
+done
+if [ "$HEALTHY" = "false" ]; then
+  echo "[ERROR] API did not become healthy in 40s"
+  docker logs --tail 30 mytrader-api
+  exit 1
 fi
 
 # ── 3. Celery 重启 ───────────────────────────────────────────

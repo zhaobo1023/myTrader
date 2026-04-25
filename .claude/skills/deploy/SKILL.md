@@ -20,7 +20,7 @@
 ## 部署架构
 
 ```
-API  ── Gunicorn HUP reload（准零停机，worker 逐个替换）
+API  ── docker restart（停机 3-5s，确保新代码/新路由可靠加载）
 前端 ── 蓝绿切换（blue:3000 / green:3001，新版验证后再切 Nginx）
 任务 ── Celery docker restart
 ```
