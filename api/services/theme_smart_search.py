@@ -55,9 +55,20 @@ class SmartSearchSkill:
         intent = await self._parse_intent(query)
         yield {'type': 'intent_parsed', 'intent': intent}
 
-        # --- Phase 2: DB query ---
+        # --- Phase 2: DB query (with fallback retry) ---
         yield {'type': 'phase', 'phase': 'db_query', 'message': '正在从数据库搜索匹配股票...'}
         raw_results = await self._query_db(intent)
+
+        # Fallback: if 0 results, try with fallback keywords from query text
+        if not raw_results:
+            fallback_kws = self._fallback_keywords(query)
+            if fallback_kws != intent.get('keywords'):
+                logger.info('[SmartSearch] 0 results, retrying with fallback keywords: %s', fallback_kws)
+                fallback_intent = {**intent, 'keywords': fallback_kws}
+                raw_results = await self._query_db(fallback_intent)
+                if raw_results:
+                    intent = fallback_intent
+
         yield {
             'type': 'raw_results',
             'total': len(raw_results),
@@ -100,18 +111,56 @@ class SmartSearchSkill:
                 system_prompt=INTENT_PARSE_SYSTEM,
                 validate_json=False,
                 timeout_sec=30.0,
-                temperature=0.3,
+                temperature=0.1,
                 max_tokens=512,
             )
             intent = json.loads(self._extract_json(raw))
             # Validate structure
             if not isinstance(intent.get('keywords'), list) or not intent['keywords']:
-                # Fallback: use query as keyword
                 intent = {'keywords': [query], 'financial_hint': '', 'industry': None, 'province': None}
+            # Safety: split any keyword longer than 8 chars into shorter parts
+            intent['keywords'] = self._sanitize_keywords(intent['keywords'])
             return intent
         except Exception as e:
             logger.warning('[SmartSearch] intent parse failed: %s, using fallback', e)
-            return {'keywords': [query], 'financial_hint': '', 'industry': None, 'province': None}
+            return {'keywords': self._fallback_keywords(query), 'financial_hint': '', 'industry': None, 'province': None}
+
+    @staticmethod
+    def _sanitize_keywords(keywords: list[str]) -> list[str]:
+        """Ensure no keyword is too long; split long ones."""
+        result = []
+        for kw in keywords:
+            kw = kw.strip()
+            if not kw:
+                continue
+            if len(kw) <= 6:
+                result.append(kw)
+            else:
+                # Long keyword: keep it but also add 2-char sub-segments
+                result.append(kw)
+                # Extract meaningful sub-keywords (every 2-4 chars)
+                for i in range(0, len(kw) - 1, 2):
+                    sub = kw[i:i + 2]
+                    if sub not in result:
+                        result.append(sub)
+        return result[:10]  # cap at 10
+
+    @staticmethod
+    def _fallback_keywords(query: str) -> list[str]:
+        """Extract short keywords from query when LLM parsing fails."""
+        import jieba
+        try:
+            words = [w for w in jieba.cut(query) if len(w) >= 2]
+            return words[:8] if words else [query[:4]]
+        except Exception:
+            # If jieba not available, simple 2-gram extraction
+            keywords = []
+            clean = re.sub(r'[的了吗呢吧啊哪些有哪公司企业上市]', '', query)
+            if len(clean) >= 2:
+                keywords.append(clean[:4] if len(clean) > 4 else clean)
+                if len(clean) > 2:
+                    keywords.append(clean[:2])
+            return keywords if keywords else [query[:4]]
 
     # ------------------------------------------------------------------
     # Phase 2: DB query
@@ -165,7 +214,7 @@ class SmartSearchSkill:
                 FROM trade_stock_info i
                 WHERE {where_sql}
                 ORDER BY i.stock_code
-                LIMIT 500''',
+                LIMIT 300''',
             tuple(params) if params else None,
             env=_DB_ENV,
         )
@@ -261,10 +310,10 @@ class SmartSearchSkill:
 
     async def _review_batch(self, query: str, batch: list[dict]) -> list[dict]:
         """Review a single batch of candidates."""
-        # Build stock list text for LLM
+        # Build stock list text for LLM - give more main_business context
         stock_lines = []
         for s in batch:
-            mb = (s.get('main_business') or '')[:200]
+            mb = (s.get('main_business') or '')[:300]
             stock_lines.append(
                 f"- {s['stock_code']} {s['stock_name']} [{s.get('industry', '')}] 主营: {mb}"
             )
@@ -281,7 +330,7 @@ class SmartSearchSkill:
                 system_prompt=REVIEW_SYSTEM,
                 validate_json=False,
                 timeout_sec=60.0,
-                temperature=0.3,
+                temperature=0.1,
                 max_tokens=4096,
             )
             result = json.loads(self._extract_json(raw))
