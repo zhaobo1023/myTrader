@@ -124,33 +124,36 @@ class SmartSearchSkill:
 
     def _sync_query_db(self, intent: dict) -> list[dict]:
         """Synchronous DB query using intent keywords."""
-        keywords = intent.get('keywords', [])
+        keywords = list(intent.get('keywords', []))
         province = intent.get('province')
         industry = intent.get('industry')
 
-        if not keywords and not province and not industry:
+        # Merge industry into keywords for OR matching (DB industry names
+        # are long official names like "石油、煤炭及其他燃料加工业",
+        # so exact match rarely works -- use LIKE instead).
+        if industry and industry not in keywords:
+            keywords.append(industry)
+
+        if not keywords and not province:
             return []
 
         where = ['1=1']
         params = []
 
         if province:
-            where.append('i.province = %s')
-            params.append(province)
+            where.append('i.province LIKE %s')
+            params.append(f'%{province}%')
 
-        if industry:
-            where.append('i.industry = %s')
-            params.append(industry)
-
-        # Multi-keyword OR match on text fields
+        # Multi-keyword OR match on text fields + industry column
         if keywords:
             kw_clauses = []
             for kw in keywords:
                 like_val = f'%{kw}%'
                 kw_clauses.append(
-                    '(i.main_business LIKE %s OR i.business_scope LIKE %s OR i.company_intro LIKE %s)'
+                    '(i.main_business LIKE %s OR i.business_scope LIKE %s'
+                    ' OR i.company_intro LIKE %s OR i.industry LIKE %s)'
                 )
-                params.extend([like_val, like_val, like_val])
+                params.extend([like_val, like_val, like_val, like_val])
             where.append(f'({" OR ".join(kw_clauses)})')
 
         where_sql = ' AND '.join(where)
