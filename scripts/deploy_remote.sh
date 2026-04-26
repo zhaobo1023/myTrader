@@ -40,13 +40,14 @@ docker exec mytrader-api find /app -name '*.pyc' -delete 2>/dev/null || true
 echo "  .pyc cache cleared"
 
 # 获取 gunicorn master pid（取最小 pid，即最老的 master）
-GUNICORN_PID=$(docker exec mytrader-api pgrep -f "gunicorn" 2>/dev/null | sort -n | head -1)
+# 容器为 slim 镜像，无 pgrep/kill，用宿主机 kill 发信号到容器进程
+GUNICORN_PID=$(docker top mytrader-api 2>/dev/null | awk 'NR>1 && /gunicorn/ {print $2}' | sort -n | head -1)
 if [ -z "$GUNICORN_PID" ]; then
   echo "  [WARN] gunicorn master not found, falling back to docker restart"
   docker restart mytrader-api
 else
-  echo "  Sending USR2 to gunicorn master (pid=$GUNICORN_PID)..."
-  docker exec mytrader-api kill -USR2 "$GUNICORN_PID"
+  echo "  Sending USR2 to gunicorn master (host-pid=$GUNICORN_PID)..."
+  kill -USR2 "$GUNICORN_PID"
 fi
 
 # 健康检查（最多 40s）
