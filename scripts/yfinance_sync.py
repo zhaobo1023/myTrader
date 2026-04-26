@@ -65,6 +65,7 @@ GLOBAL_ASSETS = {
     'ovx':       '^OVX',
     'dxy':       'DX-Y.NYB',
     'usdcny':    'CNY=X',
+    'spgsci':    '^SPGSCI',
 }
 
 # A 股指数 (yfinance .SS 后缀 = 上交所)

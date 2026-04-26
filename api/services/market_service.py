@@ -287,6 +287,7 @@ GLOBAL_ASSET_CONFIG = [
     ('commodity', 'gold',       '黄金',           'USD', 2),
     ('commodity', 'wti_oil',    'WTI原油',        'USD', 2),
     ('commodity', 'brent_oil',  '布伦特原油',     'USD', 2),
+    ('commodity', 'spgsci',     'S&P商品指数',    '',    2),
     ('rate',      'us_2y_bond', '美债2Y',         '%',   3),
     ('rate',      'us_10y_bond','美债10Y',         '%',   3),
     ('rate',      'us_30y_bond','美债30Y',         '%',   3),

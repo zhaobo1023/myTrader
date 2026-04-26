@@ -133,7 +133,7 @@ MORNING_INDICATORS = [
     'spy', 'qqq', 'dia', 'vix', 'gvz',
     'us_2y_bond', 'us_10y_bond', 'us_30y_bond', 'us_10y_2y_spread',
     'gold', 'wti_oil', 'btc',
-    'dxy', 'usdcny',
+    'dxy', 'usdcny', 'spgsci',
 ]
 
 # Evening session adds A-share data
@@ -149,6 +149,7 @@ INDICATOR_NAMES = {
     'us_2y_bond': '美债2Y(%)', 'us_10y_bond': '美债10Y(%)',
     'us_30y_bond': '美债30Y(%)', 'us_10y_2y_spread': '10Y-2Y利差(%)',
     'gold': '黄金(USD)', 'wti_oil': 'WTI原油(USD)', 'brent_oil': '布伦特原油(USD)',
+    'spgsci': 'S&P商品指数(GSCI)',
     'btc': '比特币(USD)', 'dxy': '美元指数', 'usdcny': 'USD/CNY',
     'idx_csi300': '沪深300', 'idx_csi500': '中证500', 'idx_csi1000': '中证1000',
     'idx_all_a': '中证全A', 'idx_dividend': '中证红利',
