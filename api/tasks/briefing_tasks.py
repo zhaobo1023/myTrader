@@ -33,7 +33,7 @@ def generate_briefing_async(self, task_id: str, session: str):
 
 @celery_app.task(bind=True, name='publish_morning_briefing')
 def publish_morning_briefing(self):
-    """Generate and publish morning briefing to Feishu."""
+    """Generate and publish morning briefing to Feishu + owner inbox."""
     import asyncio
     from api.services.feishu_doc_publisher import publish_latest_briefing
 
@@ -41,6 +41,12 @@ def publish_morning_briefing(self):
     try:
         result = asyncio.run(publish_latest_briefing('morning', force=True))
         logger.info('[BRIEFING] Morning briefing published: %s', result.get('url'))
+        # Push to owner inbox
+        _push_to_owner_inbox(
+            session='morning',
+            date_str=result.get('date', ''),
+            doc_url=result.get('url', ''),
+        )
         return {'status': 'ok', 'url': result.get('url'), 'date': result.get('date')}
     except Exception as e:
         logger.exception('[BRIEFING] Morning briefing failed: %s', e)
@@ -87,7 +93,7 @@ def publish_morning_briefing_v2(self):
 
 @celery_app.task(bind=True, name='publish_evening_briefing')
 def publish_evening_briefing(self):
-    """Generate and publish evening briefing to Feishu."""
+    """Generate and publish evening briefing to Feishu + owner inbox."""
     import asyncio
     from api.services.feishu_doc_publisher import publish_latest_briefing
 
@@ -95,6 +101,12 @@ def publish_evening_briefing(self):
     try:
         result = asyncio.run(publish_latest_briefing('evening', force=True))
         logger.info('[BRIEFING] Evening briefing published: %s', result.get('url'))
+        # Push to owner inbox
+        _push_to_owner_inbox(
+            session='evening',
+            date_str=result.get('date', ''),
+            doc_url=result.get('url', ''),
+        )
         return {'status': 'ok', 'url': result.get('url'), 'date': result.get('date')}
     except Exception as e:
         logger.exception('[BRIEFING] Evening briefing failed: %s', e)
@@ -210,6 +222,54 @@ def push_daily_health_report(self):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_SESSION_LABELS = {'morning': '盘前速递', 'evening': '盘后复盘'}
+
+
+def _push_to_owner_inbox(session: str, date_str: str, doc_url: str):
+    """Push briefing to admin users' inbox (not broadcast to all)."""
+    from config.db import execute_query
+    from api.services.inbox_service import create_message
+
+    try:
+        label = _SESSION_LABELS.get(session, session)
+        title = '{} {}'.format(label, date_str)
+
+        # Fetch briefing content from DB
+        content = ''
+        if date_str:
+            rows = execute_query(
+                "SELECT content FROM trade_briefing WHERE session=%s AND briefing_date=%s "
+                "ORDER BY id DESC LIMIT 1",
+                (session, date_str), env='online',
+            )
+            if rows:
+                content = rows[0].get('content', '')
+
+        if not content:
+            content = '(内容见飞书文档)'
+
+        if doc_url:
+            content += '\n\n---\n飞书原文: {}'.format(doc_url)
+
+        # Send to admin users only
+        admins = execute_query(
+            "SELECT id FROM users WHERE role='admin' AND is_active=1",
+            env='online',
+        )
+        for admin in (admins or []):
+            create_message(
+                user_id=admin['id'],
+                message_type='daily_report',
+                title=title,
+                content=content,
+                metadata={'session': session, 'date': date_str, 'doc_url': doc_url},
+                env='online',
+            )
+        logger.info('[BRIEFING] Pushed %s to inbox for %d admin(s)', session, len(admins or []))
+    except Exception as e:
+        logger.warning('[BRIEFING] Failed to push to inbox: %s', e)
+
 
 def _notify_error(title: str, error: str):
     """Send error notification via Feishu bot."""
