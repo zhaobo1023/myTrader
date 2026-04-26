@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import apiClient from '@/lib/api-client';
 import AppShell from '@/components/layout/AppShell';
 import { ProtectedRoute } from '@/components/layout/ProtectedRoute';
+import WechatSubscriptionsPanel from '@/components/wechat-subscriptions-panel';
 
 // ============================================================
 // Types
@@ -732,12 +733,13 @@ function SchedulerTab() {
 // ============================================================
 
 export default function DataHealthPage() {
-  const [tab, setTab] = useState<'completeness' | 'task-runs' | 'scheduler'>('completeness');
+  const [tab, setTab] = useState<'completeness' | 'task-runs' | 'scheduler' | 'wechat'>('completeness');
 
   const tabItems: { key: typeof tab; label: string }[] = [
     { key: 'completeness', label: '数据完备度' },
     { key: 'task-runs',    label: '任务运行状态' },
     { key: 'scheduler',   label: '调度计划' },
+    { key: 'wechat',      label: '公众号订阅' },
   ];
 
   return (
@@ -770,6 +772,7 @@ export default function DataHealthPage() {
         {tab === 'completeness' && <DataCompletenessTab />}
         {tab === 'task-runs' && <TaskRunStatusTab />}
         {tab === 'scheduler' && <SchedulerTab />}
+        {tab === 'wechat' && <WechatSubscriptionsPanel />}
       </div>
       </AppShell>
     </ProtectedRoute>
