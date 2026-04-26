@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Add position_stock_tags table
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: a1b2c4d5e6f7
 Revises: z1a2b3c4d5e6
 Create Date: 2026-04-25
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = 'a1b2c3d4e5f6'
+revision: str = 'a1b2c4d5e6f7'
 down_revision: Union[str, Sequence[str], None] = 'z1a2b3c4d5e6'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

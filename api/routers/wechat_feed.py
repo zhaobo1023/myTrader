@@ -8,7 +8,8 @@ import logging
 import os
 import sqlite3
 from typing import Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime
+from datetime import timedelta
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
