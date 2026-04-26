@@ -288,6 +288,19 @@ GLOBAL_ASSET_CONFIG = [
     ('commodity', 'wti_oil',    'WTI原油',        'USD', 2),
     ('commodity', 'brent_oil',  '布伦特原油',     'USD', 2),
     ('commodity', 'spgsci',     'S&P商品指数',    '',    2),
+    # GSCI 子指数
+    ('commodity_idx', 'spgsci_energy',    'GSCI能源',    '',  2),
+    ('commodity_idx', 'spgsci_pm',        'GSCI贵金属',  '',  2),
+    ('commodity_idx', 'spgsci_ag',        'GSCI农产品',  '',  2),
+    ('commodity_idx', 'spgsci_livestock', 'GSCI畜牧',    '',  2),
+    ('commodity_idx', 'spgsci_softs',     'GSCI软商品',  '',  2),
+    # 单品种期货
+    ('futures', 'nat_gas',  '天然气',  'USD', 3),
+    ('futures', 'copper',   '铜',      'USD', 3),
+    ('futures', 'silver',   '白银',    'USD', 2),
+    ('futures', 'wheat',    '小麦',    'USc', 2),
+    ('futures', 'corn',     '玉米',    'USc', 2),
+    ('futures', 'soybean',  '大豆',    'USc', 2),
     ('rate',      'us_2y_bond', '美债2Y',         '%',   3),
     ('rate',      'us_10y_bond','美债10Y',         '%',   3),
     ('rate',      'us_30y_bond','美债30Y',         '%',   3),
@@ -377,6 +390,7 @@ async def get_global_assets(days: int = 30) -> dict:
     GROUP_NAMES = {
         'commodity': '商品', 'rate': '利率', 'fx': '汇率',
         'volatility': '波动率', 'crypto': '加密货币', 'us_equity': '美股ETF',
+        'commodity_idx': '商品子指数', 'futures': '大宗期货',
     }
     for a in assets:
         g = a['group']

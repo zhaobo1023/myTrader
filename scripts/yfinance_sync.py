@@ -66,6 +66,19 @@ GLOBAL_ASSETS = {
     'dxy':       'DX-Y.NYB',
     'usdcny':    'CNY=X',
     'spgsci':    '^SPGSCI',
+    # GSCI 子指数
+    'spgsci_energy':    '^SPGSENTR',
+    'spgsci_pm':        '^SPGSPM',
+    'spgsci_ag':        '^SPGSAG',
+    'spgsci_livestock': '^SPGSLV',
+    'spgsci_softs':     '^SPGSSO',
+    # 单品种期货（补充品种，黄金/原油已有）
+    'nat_gas':  'NG=F',
+    'copper':   'HG=F',
+    'silver':   'SI=F',
+    'wheat':    'ZW=F',
+    'corn':     'ZC=F',
+    'soybean':  'ZS=F',
 }
 
 # A 股指数 (yfinance .SS 后缀 = 上交所)
