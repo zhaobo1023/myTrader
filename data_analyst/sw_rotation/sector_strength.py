@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # ══════════════════════════════════════════════════════════════
 
-LOOKBACK_DAYS = 90      # calendar days to fetch (covers ~60 trading days)
+LOOKBACK_DAYS = 120     # calendar days to fetch (covers ~80 trading days)
 MOM_WINDOW = 21         # 21-day momentum
 RS_WINDOW = 60          # 60-day relative-strength cross-section
 VOL_SHORT = 10          # short vol window (days)
