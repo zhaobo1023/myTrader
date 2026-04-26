@@ -239,7 +239,7 @@ def _push_to_owner_inbox(session: str, date_str: str, doc_url: str):
         content = ''
         if date_str:
             rows = execute_query(
-                "SELECT content FROM trade_briefing WHERE session=%s AND briefing_date=%s "
+                "SELECT content FROM trade_briefing WHERE session=%s AND brief_date=%s "
                 "ORDER BY id DESC LIMIT 1",
                 (session, date_str), env='online',
             )
