@@ -171,88 +171,81 @@ def detect_inflection(phase_today: str, phase_yesterday: Optional[str]) -> tuple
 
 
 # ══════════════════════════════════════════════════════════════
-# Data fetching (AKShare)
+# Data fetching — from DB (aggregate stock-level data by sector)
 # ══════════════════════════════════════════════════════════════
 
-def fetch_level2_price_data(start_date: str, end_date: str) -> dict[str, pd.DataFrame]:
+def fetch_level2_price_data(start_date: str, end_date: str,
+                            env: str = 'online') -> dict[str, pd.DataFrame]:
     """
-    Fetch SW level-2 industry daily price data via AKShare.
+    Build SW level-2 industry daily "index" from individual stock data in DB.
 
-    Returns dict: sector_code -> DataFrame with columns [trade_date, close, amount]
+    For each sector, we compute a daily equal-weight average close price and
+    sum of amount across constituent stocks.  This avoids depending on external
+    AKShare/Eastmoney APIs that are frequently broken or blocked.
+
+    Returns dict: sector_name -> DataFrame with columns [trade_date, close, amount]
                   sorted ascending by trade_date.
+                  attrs: sector_name, parent_name
     """
-    try:
-        import akshare as ak
-    except ImportError:
-        raise ImportError("akshare is required. Install with: pip install akshare")
+    logger.info("Fetching sector price data from DB (aggregated from stock-level)...")
 
-    logger.info("Fetching SW level-2 industry list...")
-    sw2_df = ak.sw_index_second_info()
+    # 1. Get sector classification: sw_level2 -> sw_level1 mapping
+    cls_rows = execute_query(
+        """SELECT sw_level1, sw_level2, COUNT(*) AS cnt
+           FROM trade_stock_basic
+           WHERE sw_level2 IS NOT NULL AND sw_level2 != ''
+             AND (is_st IS NULL OR is_st = 0)
+           GROUP BY sw_level1, sw_level2
+           HAVING cnt >= 3""",
+        env=env,
+    )
+    if not cls_rows:
+        logger.warning("No SW classification data in trade_stock_basic")
+        return {}
+
+    sector_parent: dict[str, str] = {}
+    for r in cls_rows:
+        sector_parent[r['sw_level2']] = r['sw_level1'] or ''
+
+    sector_names = list(sector_parent.keys())
+    logger.info("Found %d level-2 sectors with >= 3 stocks", len(sector_names))
+
+    # 2. Fetch daily aggregated data: equal-weight avg close + sum amount
+    placeholders = ','.join(['%s'] * len(sector_names))
+    agg_rows = execute_query(
+        f"""SELECT b.sw_level2 AS sector_name,
+                   d.trade_date,
+                   AVG(d.close_price) AS close,
+                   SUM(d.amount)      AS amount
+            FROM trade_stock_daily d
+            JOIN trade_stock_basic b ON d.stock_code = b.stock_code
+            WHERE d.trade_date BETWEEN %s AND %s
+              AND b.sw_level2 IN ({placeholders})
+              AND (b.is_st IS NULL OR b.is_st = 0)
+            GROUP BY b.sw_level2, d.trade_date
+            ORDER BY b.sw_level2, d.trade_date ASC""",
+        (start_date, end_date) + tuple(sector_names),
+        env=env,
+    )
+
+    if not agg_rows:
+        logger.warning("No aggregated data returned from DB")
+        return {}
+
+    # 3. Build per-sector DataFrames
+    agg_df = pd.DataFrame(agg_rows)
+    agg_df['close'] = pd.to_numeric(agg_df['close'], errors='coerce')
+    agg_df['amount'] = pd.to_numeric(agg_df['amount'], errors='coerce')
 
     result: dict[str, pd.DataFrame] = {}
+    for sector_name, grp in agg_df.groupby('sector_name'):
+        sub = grp[['trade_date', 'close', 'amount']].copy().sort_values('trade_date')
+        sub.attrs['sector_name'] = sector_name
+        sub.attrs['parent_name'] = sector_parent.get(sector_name, '')
+        # Use sector_name as key (we no longer have sector_code from AKShare)
+        result[sector_name] = sub
 
-    start_compact = start_date.replace('-', '')
-    end_compact = end_date.replace('-', '')
-
-    for _, row in sw2_df.iterrows():
-        code = str(row.get('行业代码', row.get('index_code', '')))
-        name = str(row.get('行业名称', row.get('index_name', '')))
-        parent = str(row.get('一级行业', ''))
-
-        if not code:
-            continue
-
-        try:
-            df = ak.index_hist_sw(symbol=code, period='day')
-            if df is None or len(df) == 0:
-                logger.debug("No data for %s (%s)", name, code)
-                continue
-
-            # Normalize column names
-            df.columns = [c.lower().strip() for c in df.columns]
-
-            # Date column
-            date_col = next((c for c in df.columns if 'date' in c or '日期' in c), None)
-            if date_col is None:
-                continue
-            df['trade_date'] = pd.to_datetime(df[date_col]).dt.date
-
-            # Close column
-            close_col = next((c for c in df.columns if c == 'close' or c == '收盘'), None)
-            if close_col is None:
-                # try first numeric column
-                num_cols = df.select_dtypes(include='number').columns.tolist()
-                close_col = num_cols[0] if num_cols else None
-            if close_col is None:
-                continue
-            df['close'] = pd.to_numeric(df[close_col], errors='coerce')
-
-            # Amount column (成交额 preferred, fallback to volume)
-            amount_col = next((c for c in df.columns
-                               if '额' in c or 'amount' in c or 'turnover' in c), None)
-            if amount_col is None:
-                amount_col = next((c for c in df.columns
-                                   if 'vol' in c or '量' in c), None)
-            df['amount'] = pd.to_numeric(df[amount_col], errors='coerce') if amount_col else np.nan
-
-            # Filter date range
-            df = df[
-                (df['trade_date'] >= datetime.strptime(start_compact, '%Y%m%d').date()) &
-                (df['trade_date'] <= datetime.strptime(end_compact, '%Y%m%d').date())
-            ].sort_values('trade_date')
-
-            if len(df) == 0:
-                continue
-
-            sub = df[['trade_date', 'close', 'amount']].copy()
-            sub.attrs['sector_name'] = name
-            sub.attrs['parent_name'] = parent
-            result[code] = sub
-
-        except Exception as e:
-            logger.warning("Failed to fetch %s (%s): %s", name, code, e)
-
-    logger.info("Fetched data for %d level-2 sectors", len(result))
+    logger.info("Built aggregated data for %d level-2 sectors", len(result))
     return result
 
 
@@ -266,9 +259,11 @@ def _get_yesterday_data(trade_date: date, env: str = 'online') -> tuple[dict[str
 
     Uses a subquery to pin the exact previous date, avoiding LIMIT-based
     fragility when there are >500 total rows across multiple dates.
+
+    Returns dicts keyed by sector_name (not sector_code).
     """
     rows = execute_query(
-        """SELECT sector_code, phase, mom_21
+        """SELECT sector_name, phase, mom_21
            FROM trade_sector_strength_daily
            WHERE trade_date = (
                SELECT MAX(trade_date)
@@ -281,10 +276,10 @@ def _get_yesterday_data(trade_date: date, env: str = 'online') -> tuple[dict[str
     phases: dict[str, str] = {}
     mom21s: dict[str, float] = {}
     for r in (rows or []):
-        code = r['sector_code']
-        phases[code] = r['phase'] or 'neutral'
+        name = r['sector_name']
+        phases[name] = r['phase'] or 'neutral'
         if r['mom_21'] is not None:
-            mom21s[code] = float(r['mom_21'])
+            mom21s[name] = float(r['mom_21'])
     return phases, mom21s
 
 
@@ -306,8 +301,8 @@ def run_daily(trade_date: Optional[date] = None, env: str = 'online') -> int:
 
     logger.info("[sector_strength] Computing for %s (lookback from %s)", end_date, start_date)
 
-    # Fetch price data
-    price_data = fetch_level2_price_data(start_date, end_date)
+    # Fetch price data (aggregated from stock-level in DB)
+    price_data = fetch_level2_price_data(start_date, end_date, env=env)
     if not price_data:
         logger.warning("[sector_strength] No price data fetched, aborting")
         return 0
@@ -323,7 +318,7 @@ def run_daily(trade_date: Optional[date] = None, env: str = 'online') -> int:
     # Also need 60-day return for RS cross-section
     ret_60_map: dict[str, Optional[float]] = {}
 
-    for code, df in price_data.items():
+    for key, df in price_data.items():
         df_sorted = df.sort_values('trade_date')
         close = df_sorted['close'].dropna()
         amount = df_sorted['amount']
@@ -331,15 +326,15 @@ def run_daily(trade_date: Optional[date] = None, env: str = 'online') -> int:
         mom = calc_mom_21(close)
         vr = calc_vol_ratio(amount)
 
-        mom_21_map[code] = mom
-        vol_ratio_map[code] = vr
+        mom_21_map[key] = mom
+        vol_ratio_map[key] = vr
 
         # 60-day return for RS cross-section
         arr = close.values
         if len(arr) >= 61:
-            ret_60_map[code] = float((arr[-1] / arr[-61] - 1) * 100)
+            ret_60_map[key] = float((arr[-1] / arr[-61] - 1) * 100)
         else:
-            ret_60_map[code] = None
+            ret_60_map[key] = None
 
     # Cross-section RS_60
     ret_60_series = pd.Series(ret_60_map)
@@ -356,28 +351,28 @@ def run_daily(trade_date: Optional[date] = None, env: str = 'online') -> int:
     # Build rows for DB write
     trade_date_str = trade_date.strftime('%Y-%m-%d')
 
-    for code, df in price_data.items():
-        sector_name = df.attrs.get('sector_name', code)
+    for key, df in price_data.items():
+        sector_name = df.attrs.get('sector_name', key)
         parent_name = df.attrs.get('parent_name', None) or None
 
-        mom21 = mom_21_map.get(code)
-        vr = vol_ratio_map.get(code)
-        rs60 = rs_60_series.get(code) if not pd.isna(rs_60_series.get(code, np.nan)) else None
-        comp = composite_series.get(code) if not pd.isna(composite_series.get(code, np.nan)) else None
-        rank = int(rank_series.get(code)) if not pd.isna(rank_series.get(code, np.nan)) else None
+        mom21 = mom_21_map.get(key)
+        vr = vol_ratio_map.get(key)
+        rs60 = rs_60_series.get(key) if not pd.isna(rs_60_series.get(key, np.nan)) else None
+        comp = composite_series.get(key) if not pd.isna(composite_series.get(key, np.nan)) else None
+        rank = int(rank_series.get(key)) if not pd.isna(rank_series.get(key, np.nan)) else None
 
-        # Phase
-        prev_mom = yesterday_mom21.get(code)
+        # Phase (keyed by sector_name now)
+        prev_mom = yesterday_mom21.get(sector_name)
         phase = calc_phase(mom21, prev_mom)
 
         # Inflection
-        prev_phase = yesterday_phases.get(code)
+        prev_phase = yesterday_phases.get(sector_name)
         is_infl, infl_type = detect_inflection(phase, prev_phase)
 
         records.append({
             'trade_date': trade_date_str,
             'sw_level': 2,
-            'sector_code': code,
+            'sector_code': sector_name,  # use name as code (no AKShare codes)
             'sector_name': sector_name,
             'parent_name': parent_name,
             'mom_21': round(mom21, 4) if mom21 is not None else None,
