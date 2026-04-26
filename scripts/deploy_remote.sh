@@ -6,7 +6,7 @@
 #   WEB_CHANGED=true|false   是否有前端文件变更
 #
 # 前端使用蓝绿部署：新槽验证通过后才切换 Nginx，无停机
-# API 使用 Gunicorn HUP reload：准零停机
+# API 使用 Gunicorn USR2 优雅热重载：真正零停机
 set -euo pipefail
 
 APP_DIR="/app/myTrader"
@@ -29,25 +29,52 @@ git fetch origin
 git reset --hard origin/main
 echo "  HEAD: $(git log --oneline -1)"
 
-# ── 2. API 重启 ───────────────────────────────────────────────
-# 不再使用 HUP reload。原因：Gunicorn HUP 让 master fork 新 worker，
-# 但 Python 的 .pyc 缓存和模块缓存可能导致新增文件/路由不被加载（已实际踩坑）。
-# docker restart 停机仅 3-5 秒，可靠性远高于 HUP。
-echo "[2/5] Restarting API (docker restart)..."
-docker restart mytrader-api
+# ── 2. API 热重载（USR2 无停机）─────────────────────────────
+# USR2 流程：master fork 新 master -> 新 master 启动新 worker（加载新代码）
+#            -> 旧 worker 处理完当前请求后退出 -> 全程 socket 持续监听，无请求丢失
+# 热重载前先清 .pyc 缓存，防止新路由/新文件加载失败（历史踩坑：HUP 后新路由 404）
+echo "[2/5] API hot reload (USR2, zero-downtime)..."
+
+# 清 .pyc 缓存
+docker exec mytrader-api find /app -name '*.pyc' -delete 2>/dev/null || true
+echo "  .pyc cache cleared"
+
+# 获取 gunicorn master pid（取最小 pid，即最老的 master）
+GUNICORN_PID=$(docker exec mytrader-api pgrep -f "gunicorn" 2>/dev/null | sort -n | head -1)
+if [ -z "$GUNICORN_PID" ]; then
+  echo "  [WARN] gunicorn master not found, falling back to docker restart"
+  docker restart mytrader-api
+else
+  echo "  Sending USR2 to gunicorn master (pid=$GUNICORN_PID)..."
+  docker exec mytrader-api kill -USR2 "$GUNICORN_PID"
+fi
+
+# 健康检查（最多 40s）
 HEALTHY=false
 for i in $(seq 1 20); do
   sleep 2
   if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
-    echo "  API healthy (${i}x2s)"
+    echo "  API healthy after USR2 (${i}x2s)"
     HEALTHY=true
     break
   fi
 done
 if [ "$HEALTHY" = "false" ]; then
-  echo "[ERROR] API did not become healthy in 40s"
-  docker logs --tail 30 mytrader-api
-  exit 1
+  echo "[WARN] API did not recover after USR2 in 40s, attempting docker restart fallback..."
+  docker restart mytrader-api
+  for i in $(seq 1 10); do
+    sleep 2
+    if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+      echo "  API healthy after fallback restart (${i}x2s)"
+      HEALTHY=true
+      break
+    fi
+  done
+  if [ "$HEALTHY" = "false" ]; then
+    echo "[ERROR] API did not become healthy after fallback restart"
+    docker logs --tail 30 mytrader-api
+    exit 1
+  fi
 fi
 
 # ── 3. Celery 重启 ───────────────────────────────────────────

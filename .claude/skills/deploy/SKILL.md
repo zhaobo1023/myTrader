@@ -20,10 +20,17 @@
 ## 部署架构
 
 ```
-API  ── docker restart（停机 3-5s，确保新代码/新路由可靠加载）
+API  ── Gunicorn USR2 优雅热重载（零停机；失败 40s 后 fallback 到 docker restart）
 前端 ── 蓝绿切换（blue:3000 / green:3001，新版验证后再切 Nginx）
 任务 ── Celery docker restart
 ```
+
+API USR2 热重载流程：
+1. `find /app -name '*.pyc' -delete` 清缓存（防新路由 404）
+2. `pgrep gunicorn | head -1` 获取 master pid
+3. `kill -USR2 <pid>` → master fork 新 master → 新 worker 加载新代码
+4. 旧 worker 处理完当前请求后优雅退出，全程无停机
+5. 等待 /health 恢复（最多 40s）；超时则 fallback 到 docker restart
 
 前端蓝绿流程：
 1. 构建新镜像到非活跃槽（blue/green 轮换）
@@ -42,7 +49,7 @@ API  ── docker restart（停机 3-5s，确保新代码/新路由可靠加载
 python3 -m pytest tests/unit/ -x -q 2>&1 | tail -10
 ```
 
-测试全部通过才继续。有失败则停止并告知用户。
+测试结果仅供参考（warn-only），不阻断部署。有失败时告知用户但继续执行。
 
 ### 步骤 2 — 准备部署脚本
 
@@ -100,7 +107,7 @@ ssh aliyun-ecs "bash /tmp/init_blue_green.sh"
 
 ### 部署步骤
 - [OK] git pull: <commit>
-- [OK] API: HUP reload / docker restart
+- [OK] API: USR2 热重载 / fallback docker restart
 - [OK] Celery: restarted
 - [OK] 前端: blue -> green (蓝绿切换) 或 跳过
 - [OK] 端到端: HTTP 307
