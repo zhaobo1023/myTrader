@@ -30,6 +30,7 @@ AI_KEYWORDS = [
     '机器学习', '深度学习', 'transformer', 'RAG', '向量',
     '神经网络', '自然语言', 'NLP', '语言模型', '生成式',
     'AIGC', 'ChatGPT', 'Llama', '多模态', 'MCP',
+    '数智', '数字化', '智能化', '昆仑', '算力', '数字孪生',
 ]
 
 
@@ -96,7 +97,7 @@ def sync_ai_wechat_articles(days_back: int = 3) -> dict:
     inserted = skipped_dup = skipped_no_kw = 0
 
     for row in rows:
-        title = row['o_id'] and row['title'] or ''
+        title = row['title'] or ''
         content_html = row['content'] or ''
         content_text = _html_to_text(content_html)
         feed_id = row['feed_id']
