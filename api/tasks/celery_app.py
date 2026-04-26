@@ -277,5 +277,11 @@ celery_app.conf.beat_schedule = {
         'task': 'run_nightly_digest',
         'schedule': crontab(hour=22, minute=0),
     },
+
+    # 每小时 :30 - AI公众号文章同步 (wechat2rss -> ai_wechat_articles)
+    'hourly-ai-wechat-sync': {
+        'task': 'sync_ai_wechat_articles',
+        'schedule': crontab(minute=30),
+    },
 }
 celery_app.conf.timezone = 'Asia/Shanghai'
