@@ -20,6 +20,7 @@ services:
     volumes:
       - .:/app
       - ./output:/app/output
+      - /root/wechat2rss/data:/root/wechat2rss/data:ro
     env_file:
       - .env
     environment:

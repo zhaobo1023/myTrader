@@ -47,7 +47,7 @@ class WechatFeedResponse(BaseModel):
 
 class AddFeedRequest(BaseModel):
     feed_id: str
-    name: str
+    name: Optional[str] = None
     description: Optional[str] = None
     url: Optional[str] = None
 
@@ -120,19 +120,20 @@ async def add_feed(
         if result.fetchone():
             raise HTTPException(status_code=400, detail='Feed already exists')
 
-        # Validate feed exists in wechat2rss
+        # Validate feed exists in wechat2rss and fetch name if not provided
         rows = await _query_rss_db_async(
-            'SELECT 1 FROM rsses WHERE feed_id = ?', (request.feed_id,)
+            'SELECT name FROM rsses WHERE feed_id = ?', (request.feed_id,)
         )
         if not rows:
             raise HTTPException(
                 status_code=400, detail='Feed not found in wechat2rss'
             )
+        resolved_name = request.name or rows[0][0]
 
         # Save to local database
         feed = WechatFeed(
             feed_id=request.feed_id,
-            name=request.name,
+            name=resolved_name,
             description=request.description,
             url=request.url,
             is_active=1,
