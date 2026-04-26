@@ -74,8 +74,8 @@ export default function WechatSubscriptionsPanel() {
 
   // Delete feed mutation
   const deleteMutation = useMutation({
-    mutationFn: async (feedId: string) => {
-      const res = await apiClient.delete(`/api/wechat-feed/${feedId}`);
+    mutationFn: async (targetFeedId: string) => {
+      const res = await apiClient.delete(`/api/wechat-feed/${encodeURIComponent(targetFeedId)}`);
       return res.data;
     },
     onSuccess: () => {

@@ -3,11 +3,12 @@
 WeChat Feed (公众号订阅) router
 Integration with wechat2rss service
 """
+import asyncio
 import logging
 import os
 import sqlite3
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
@@ -15,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_db
-from api.middleware.auth import get_current_user
+from api.middleware.auth import require_admin
 from api.models.user import User
 from api.models.wechat_feed import WechatFeed
 
@@ -40,8 +41,7 @@ class WechatFeedResponse(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = {'from_attributes': True}
 
 
 class AddFeedRequest(BaseModel):
@@ -55,28 +55,28 @@ class AddFeedRequest(BaseModel):
 # Helpers
 # ============================================================
 
-def get_wechat_rss_connection():
-    """Get connection to wechat2rss SQLite database."""
+def _query_rss_db(sql: str, params: tuple = ()) -> list:
+    """Execute a query against wechat2rss SQLite database (synchronous).
+
+    Always closes the connection, even on error.
+    """
     if not os.path.exists(WECHAT_RSS_DB):
-        raise HTTPException(status_code=500, detail=f'wechat2rss database not found at {WECHAT_RSS_DB}')
-    return sqlite3.connect(WECHAT_RSS_DB)
-
-
-def sync_feeds_from_rss():
-    """Sync feeds from wechat2rss to local database."""
+        raise HTTPException(
+            status_code=500,
+            detail='wechat2rss database not available',
+        )
+    conn = sqlite3.connect(WECHAT_RSS_DB)
     try:
-        conn = get_wechat_rss_connection()
         cursor = conn.cursor()
-
-        # Get all rsses from wechat2rss
-        cursor.execute('SELECT feed_id, name FROM rsses WHERE enabled = 1')
-        feeds = cursor.fetchall()
+        cursor.execute(sql, params)
+        return cursor.fetchall()
+    finally:
         conn.close()
 
-        return feeds
-    except Exception as e:
-        logger.error('[WECHAT] Error syncing feeds from RSS: %s', e)
-        raise HTTPException(status_code=500, detail=f'Failed to sync feeds: {str(e)}')
+
+async def _query_rss_db_async(sql: str, params: tuple = ()) -> list:
+    """Run a synchronous SQLite query in a thread to avoid blocking the event loop."""
+    return await asyncio.to_thread(_query_rss_db, sql, params)
 
 
 # ============================================================
@@ -85,31 +85,17 @@ def sync_feeds_from_rss():
 
 @router.get('/list', response_model=List[WechatFeedResponse])
 async def list_feeds(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
 ):
-    """List all subscribed WeChat feeds (public feeds)."""
+    """List all subscribed WeChat feeds from wechat2rss."""
     try:
-        # For now, only admin can see feeds
-        if current_user.tier != 'admin':
-            raise HTTPException(status_code=403, detail='Only admin can access')
-
-        # Read from wechat2rss database directly
-        conn = get_wechat_rss_connection()
-        cursor = conn.cursor()
-
-        cursor.execute('SELECT feed_id, name FROM rsses WHERE enabled = 1 ORDER BY name')
-        rss_feeds = cursor.fetchall()
-        conn.close()
-
-        result = []
-        for feed_id, name in rss_feeds:
-            result.append(WechatFeedResponse(
-                feed_id=feed_id,
-                name=name,
-            ))
-
-        return result
+        rows = await _query_rss_db_async(
+            'SELECT feed_id, name FROM rsses ORDER BY name'
+        )
+        return [
+            WechatFeedResponse(feed_id=fid, name=name)
+            for fid, name in rows
+        ]
     except HTTPException:
         raise
     except Exception as e:
@@ -120,34 +106,27 @@ async def list_feeds(
 @router.post('/add', response_model=WechatFeedResponse)
 async def add_feed(
     request: AddFeedRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Add a new WeChat feed subscription."""
+    """Add a new WeChat feed subscription to local tracking."""
     try:
-        # Only admin can add feeds
-        if current_user.tier != 'admin':
-            raise HTTPException(status_code=403, detail='Only admin can add feeds')
-
         # Check if feed already exists in local DB
         result = await db.execute(
             text('SELECT id FROM wechat_feeds WHERE feed_id = :feed_id'),
-            {'feed_id': request.feed_id}
+            {'feed_id': request.feed_id},
         )
-        existing = result.fetchone()
-
-        if existing:
+        if result.fetchone():
             raise HTTPException(status_code=400, detail='Feed already exists')
 
         # Validate feed exists in wechat2rss
-        conn = get_wechat_rss_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT 1 FROM rsses WHERE feed_id = ?', (request.feed_id,))
-        rss_exists = cursor.fetchone()
-        conn.close()
-
-        if not rss_exists:
-            raise HTTPException(status_code=400, detail='Feed not found in wechat2rss')
+        rows = await _query_rss_db_async(
+            'SELECT 1 FROM rsses WHERE feed_id = ?', (request.feed_id,)
+        )
+        if not rows:
+            raise HTTPException(
+                status_code=400, detail='Feed not found in wechat2rss'
+            )
 
         # Save to local database
         feed = WechatFeed(
@@ -162,8 +141,7 @@ async def add_feed(
         await db.refresh(feed)
 
         logger.info('[WECHAT] Feed added: %s (%s)', feed.feed_id, feed.name)
-
-        return WechatFeedResponse.from_orm(feed)
+        return WechatFeedResponse.model_validate(feed)
     except HTTPException:
         raise
     except Exception as e:
@@ -174,34 +152,26 @@ async def add_feed(
 @router.delete('/{feed_id}')
 async def delete_feed(
     feed_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a WeChat feed subscription from local tracking."""
+    """Delete a WeChat feed subscription from local tracking (soft-delete)."""
     try:
-        # Only admin can delete feeds
-        if current_user.tier != 'admin':
-            raise HTTPException(status_code=403, detail='Only admin can delete feeds')
-
         result = await db.execute(
             text('SELECT id FROM wechat_feeds WHERE feed_id = :feed_id'),
-            {'feed_id': feed_id}
+            {'feed_id': feed_id},
         )
-        feed = result.fetchone()
-
-        if not feed:
+        if not result.fetchone():
             raise HTTPException(status_code=404, detail='Feed not found')
 
-        # Mark as inactive instead of delete
         await db.execute(
             text('UPDATE wechat_feeds SET is_active = 0 WHERE feed_id = :feed_id'),
-            {'feed_id': feed_id}
+            {'feed_id': feed_id},
         )
         await db.commit()
 
-        logger.info('[WECHAT] Feed deleted: %s', feed_id)
-
-        return {'message': 'Feed deleted successfully', 'feed_id': feed_id}
+        logger.info('[WECHAT] Feed deactivated: %s', feed_id)
+        return {'message': 'Feed deactivated', 'feed_id': feed_id}
     except HTTPException:
         raise
     except Exception as e:
@@ -211,37 +181,26 @@ async def delete_feed(
 
 @router.post('/sync')
 async def sync_feeds(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Sync feeds from wechat2rss to local database."""
     try:
-        # Only admin can sync
-        if current_user.tier != 'admin':
-            raise HTTPException(status_code=403, detail='Only admin can sync')
-
-        feeds = sync_feeds_from_rss()
+        feeds = await _query_rss_db_async(
+            'SELECT feed_id, name FROM rsses'
+        )
 
         synced_count = 0
         for feed_id, name in feeds:
-            # Check if already exists
             result = await db.execute(
                 text('SELECT id FROM wechat_feeds WHERE feed_id = :feed_id'),
-                {'feed_id': feed_id}
+                {'feed_id': feed_id},
             )
-            existing = result.fetchone()
-
-            if not existing:
-                feed = WechatFeed(
-                    feed_id=feed_id,
-                    name=name,
-                    is_active=1,
-                )
-                db.add(feed)
+            if not result.fetchone():
+                db.add(WechatFeed(feed_id=feed_id, name=name, is_active=1))
                 synced_count += 1
 
         await db.commit()
-
         logger.info('[WECHAT] Synced %d new feeds', synced_count)
 
         return {
@@ -258,49 +217,43 @@ async def sync_feeds(
 
 @router.get('/articles-export')
 async def get_articles_export(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     days: int = Query(1, ge=1, le=30),
 ):
-    """Get exported articles from wechat2rss (past N days)."""
+    """Get article statistics per feed from wechat2rss (past N days)."""
     try:
-        # Only admin can access
-        if current_user.tier != 'admin':
-            raise HTTPException(status_code=403, detail='Only admin can access')
-
-        conn = get_wechat_rss_connection()
-        cursor = conn.cursor()
-
         # Get feeds mapping
-        cursor.execute('SELECT feed_id, name FROM rsses WHERE enabled = 1')
-        feeds = {row[0]: row[1] for row in cursor.fetchall()}
+        feed_rows = await _query_rss_db_async(
+            'SELECT feed_id, name FROM rsses'
+        )
+        feeds_map = {row[0]: row[1] for row in feed_rows}
 
-        # Get articles from past N days
-        from datetime import datetime, timedelta
-        cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+        cutoff = (datetime.now() - timedelta(days=days)).strftime(
+            '%Y-%m-%d %H:%M:%S'
+        )
 
-        cursor.execute('''
+        article_rows = await _query_rss_db_async(
+            '''
             SELECT feed_id, COUNT(*) as count, MAX(created) as latest
             FROM articles
             WHERE created >= ?
             GROUP BY feed_id
             ORDER BY latest DESC
-        ''', (cutoff,))
+            ''',
+            (cutoff,),
+        )
 
-        result = []
-        for feed_id, count, latest in cursor.fetchall():
-            result.append({
-                'feed_id': feed_id,
-                'name': feeds.get(feed_id, 'Unknown'),
+        result = [
+            {
+                'feed_id': fid,
+                'name': feeds_map.get(fid, 'Unknown'),
                 'article_count': count,
                 'latest_article': latest,
-            })
+            }
+            for fid, count, latest in article_rows
+        ]
 
-        conn.close()
-
-        return {
-            'period_days': days,
-            'feeds': result,
-        }
+        return {'period_days': days, 'feeds': result}
     except HTTPException:
         raise
     except Exception as e:
