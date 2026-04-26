@@ -1161,3 +1161,130 @@ async def create_theme_pool(params: dict, ctx: AgentContext) -> dict:
     # The actual execution happens in the frontend ActionConfirm component.
     # This function is defined for tool schema only.
     return {"status": "pending_confirmation"}
+
+
+# ============================================================
+# T19: query_sector_strength (data/free) - 申万板块强度查询
+# ============================================================
+
+@builtin_tool(
+    name="query_sector_strength",
+    description=(
+        "查询申万行业板块强度排名，返回综合强度分、动量、量比、相位等指标。"
+        "当用户问'哪些板块最强'、'板块轮动情况'、'拐点预警'、"
+        "'今天哪个行业最活跃'、'强势行业有哪些'时使用。"
+        "参数: sw_level(1或2，默认2), top_n(返回条数，默认10), "
+        "trade_date(YYYY-MM-DD，默认最新), phase_filter(可选：accel_up/decel_up/accel_down/decel_down)"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "sw_level": {
+                "type": "integer",
+                "description": "申万级别：1=一级行业, 2=二级行业（默认）",
+            },
+            "top_n": {
+                "type": "integer",
+                "description": "返回强度排名前N个板块（默认10）",
+            },
+            "trade_date": {
+                "type": "string",
+                "description": "交易日期 YYYY-MM-DD（默认最新可用日期）",
+            },
+            "phase_filter": {
+                "type": "string",
+                "description": "相位过滤：accel_up/decel_up/accel_down/decel_down/neutral",
+            },
+        },
+        "required": [],
+    },
+    category="data",
+    requires_tier="free",
+)
+async def query_sector_strength(params: dict, ctx: AgentContext) -> dict:
+    """Query sector strength rankings from trade_sector_strength_daily."""
+    try:
+        from api.services.sector_strength_service import get_latest_strength
+
+        sw_level = int(params.get('sw_level', 2))
+        top_n = int(params.get('top_n', 10))
+        trade_date = params.get('trade_date') or None
+        phase_filter = params.get('phase_filter') or None
+
+        data = await _run_sync(
+            get_latest_strength,
+            sw_level=sw_level,
+            top_n=top_n,
+            trade_date=trade_date,
+            phase_filter=phase_filter,
+        )
+        return {
+            'success': True,
+            'trade_date': data.get('trade_date'),
+            'sectors': data.get('sectors', []),
+            'inflections': data.get('inflections', []),
+            'count': len(data.get('sectors', [])),
+        }
+    except Exception as e:
+        logger.error('[query_sector_strength] failed: %s', e)
+        return {'success': False, 'error': str(e), 'sectors': []}
+
+
+# ============================================================
+# T20: query_morning_picks (data/free) - 多因子盘前推荐
+# ============================================================
+
+@builtin_tool(
+    name="query_morning_picks",
+    description=(
+        "查询今日多因子选股盘前推荐结果，基于强势板块成分股筛选。"
+        "当用户问'盘前推荐'、'今天看哪些股'、'AI推荐什么股票'、"
+        "'今天有什么机会'、'推荐选股'时使用。"
+        "参数: top_n(返回条数，默认15), pick_date(YYYY-MM-DD，默认最新), "
+        "sector_filter(可选：按申万二级行业名称过滤)"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "top_n": {
+                "type": "integer",
+                "description": "返回推荐股票数量（默认15）",
+            },
+            "pick_date": {
+                "type": "string",
+                "description": "选股日期 YYYY-MM-DD（默认最新可用日期）",
+            },
+            "sector_filter": {
+                "type": "string",
+                "description": "按申万二级行业名称过滤，如'半导体'、'白酒'",
+            },
+        },
+        "required": [],
+    },
+    category="data",
+    requires_tier="free",
+)
+async def query_morning_picks(params: dict, ctx: AgentContext) -> dict:
+    """Query morning stock picks from trade_morning_picks."""
+    try:
+        from api.services.sector_strength_service import get_latest_picks
+
+        top_n = int(params.get('top_n', 15))
+        pick_date = params.get('pick_date') or None
+        sector_filter = params.get('sector_filter') or None
+
+        data = await _run_sync(
+            get_latest_picks,
+            top_n=top_n,
+            pick_date=pick_date,
+            sector_filter=sector_filter,
+        )
+        return {
+            'success': True,
+            'pick_date': data.get('pick_date'),
+            'picks': data.get('picks', []),
+            'count': len(data.get('picks', [])),
+        }
+    except Exception as e:
+        logger.error('[query_morning_picks] failed: %s', e)
+        return {'success': False, 'error': str(e), 'picks': []}

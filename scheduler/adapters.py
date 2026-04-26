@@ -722,3 +722,41 @@ def run_stock_info_incremental(dry_run: bool = False, env: str = 'online'):
     from data_analyst.fetchers.stock_info_fetcher import fetch_incremental
     fetch_incremental(env=env)
     logger.info("[OK] stock info incremental fetch done")
+
+
+# ---------------------------------------------------------------------------
+# SW level-2 sector strength adapter
+# ---------------------------------------------------------------------------
+
+def run_sector_strength_daily(dry_run: bool = False, env: str = 'online'):
+    """Compute SW level-2 sector strength indicators and write to trade_sector_strength_daily."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_sector_strength_daily: would compute sector strength (env=%s)", env)
+        return
+
+    from scheduler.task_logger import TaskLogger
+    from data_analyst.sw_rotation.sector_strength import run_daily
+
+    with TaskLogger('calc_sector_strength_daily', 'factor', env=env):
+        n = run_daily(env=env)
+        logger.info("[OK] sector strength done: %d records written", n)
+        return n
+
+
+# ---------------------------------------------------------------------------
+# Multi-factor morning picks adapter
+# ---------------------------------------------------------------------------
+
+def run_morning_picks_daily(dry_run: bool = False, env: str = 'online'):
+    """Compute multi-factor morning picks and write to trade_morning_picks."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_morning_picks_daily: would compute morning picks (env=%s)", env)
+        return
+
+    from scheduler.task_logger import TaskLogger
+    from data_analyst.sw_rotation.multi_factor_picker import run_daily
+
+    with TaskLogger('calc_morning_picks_daily', 'factor', env=env):
+        n = run_daily(env=env)
+        logger.info("[OK] morning picks done: %d records written", n)
+        return n

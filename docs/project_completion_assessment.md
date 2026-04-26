@@ -1,6 +1,6 @@
 # myTrader 项目代码完成度评估
 
-> 评估日期: 2026-04-20
+> 评估日期: 2026-04-20（4-26 追加更新）
 
 ---
 
@@ -157,3 +157,95 @@ tests/                  [######### ] 90%
 3. **P1 - 补齐 executor**: 对接 QMT API，实现订单提交/撤单/持仓查询
 4. **P2 - 接入行业轮动**: 将 sw_rotation 数据接入 doctor_tao 策略选股
 5. **P2 - 前端增强**: 集成 ECharts/Lightweight Charts 替代表格展示 K 线
+
+---
+
+## 七、2026-04-20 之后新增功能（截至 2026-04-26）
+
+### 7.1 本地模型服务（model-service）[新模块]
+
+**完成度：95%**
+
+新增独立 Docker 服务容器 `mytrader-model-service`（端口 8500），部署两个本地推理模型，
+将原本需要调用付费 LLM API 的嵌入和情感分析任务本地化：
+
+| 模型 | 来源 | 用途 | 替换目标 |
+|------|------|------|---------|
+| BGE-large-zh-v1.5 | BAAI/bge-large-zh-v1.5 | 中文文本嵌入（1024维） | DashScope text-embedding-v4 |
+| XLM-RoBERTa Sentiment | cardiffnlp/twitter-xlm-roberta-base-sentiment-multilingual | 多语言情感分类 | qwen3.6-plus LLM |
+
+**降级策略**：本地服务不可用时（5 分钟冷却重试），自动回退到 DashScope API，业务不中断。
+
+**新增文件**：
+- `model_service/app/main.py` — FastAPI 应用 + 生命周期管理
+- `model_service/app/services/embedding_service.py` — BGE 嵌入实现
+- `model_service/app/services/sentiment_service.py` — RoBERTa 情感分类
+- `model_service/Dockerfile` — CPU-only 推理容器
+- `scripts/download_models.py` — 模型下载工具
+
+### 7.2 微信公众号订阅管理 [新功能]
+
+**完成度：95%**
+
+集成 wechat2rss（本地 SQLite）与 myTrader MySQL，实现公众号内容的订阅管理与 AI 文章筛选同步。
+
+**架构**：
+- 后端：`api/routers/wechat_feed.py`（5 个管理端点：列表/添加/删除/同步/导出）
+- 同步任务：`api/tasks/ai_wechat_sync.py`（按 34 个 AI 关键词过滤，写入 `ai_wechat_articles` 表）
+- 前端：`/data-health` 页面新增"公众号订阅"标签页
+
+**新增 DB 表**：`wechat_feeds`（订阅源）、`ai_wechat_articles`（AI 文章库）
+
+### 7.3 S&P GSCI 商品指数接入 [数据扩充]
+
+通过 yfinance（本机抓取写入线上 DB）新增 S&P GSCI 系列指标：
+
+| 指标 | Ticker | 说明 |
+|------|--------|------|
+| spgsci | ^SPGSCI | 总指数 |
+| spgsci_energy | ^SPGSENTR | 能源（原油/天然气） |
+| spgsci_pm | ^SPGSPM | 贵金属（黄金/白银） |
+| spgsci_ag | ^SPGSAG | 农产品（小麦/玉米/豆类） |
+| spgsci_livestock | ^SPGSLV | 牲畜（活牛/猪肉） |
+| spgsci_softs | ^SPGSSO | 软商品（咖啡/糖/棉花） |
+
+另补充单品种期货：天然气(NG=F) / 铜(HG=F) / 白银(SI=F) / 小麦(ZW=F) / 玉米(ZC=F) / 大豆(ZS=F)
+
+### 7.4 AI 晨报 V2（盘前早咖）[流水线升级]
+
+将原有简单晨报升级为三阶段 LLM 管道：
+
+1. **阶段 A**：从公众号原文提取结构化条目（type/direction/tickers）
+2. **阶段 B**：批量查询技术因子（RSI/动量/RPS/MACD）+ 近 7 日公告
+3. **阶段 C**：LLM 综合生成完整晨报（市场研判/个股信号/板块方向/操作提示/风险提示）
+
+持久化到 `trade_briefing` 表（session=`morning_v2`），同日不重复生成。
+
+### 7.5 零停机部署方案 [基础设施]
+
+- **API**：Gunicorn USR2 信号热重载（替代 docker restart）
+- **前端**：蓝绿双容器（nextjs-blue / nextjs-green）+ nginx upstream 热切换
+- **容器内无 kill**：使用宿主机 PID 发送信号（slim 镜像无 kill 命令）
+
+### 7.6 前端页面扩充
+
+较 2026-04-20 评估新增/重构页面：
+
+| 路由 | 新增内容 |
+|------|---------|
+| /data-health | 新增"公众号订阅"标签页（WechatSubscriptionsPanel 组件） |
+| /market | 新增 GSCI 商品子指数展示 |
+| /candidate-pool | 新增标签系统 + 多维筛选器 + 用户 filter 偏好持久化 |
+
+### 7.7 更新后模块完成度
+
+```
+model-service/          [######### ] 95%   新增
+data_analyst/fetchers   [#########  ] 88%  (GSCI 指标新增)
+data_analyst/sentiment  [######### ] 95%   (本地模型接入)
+investment_rag/         [######### ] 97%   (本地 BGE 嵌入接入)
+web/                    [######### ] 93%   (20+ 页面，含公众号管理)
+api/                    [######### ] 96%   (微信订阅/晨报V2 路由完整)
+risk_manager/           [#         ] 10%   -- 仍为骨架，未动
+executor/               [          ] 5%    -- 仍为骨架，未动
+```

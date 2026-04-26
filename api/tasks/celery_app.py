@@ -250,6 +250,18 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=20, minute=20, day_of_week='1-5'),
     },
 
+    # 20:30 - 申万二级行业强度计算
+    'daily-sector-strength': {
+        'task': 'calc_sector_strength_daily',
+        'schedule': crontab(hour=20, minute=30, day_of_week='1-5'),
+    },
+
+    # 20:35 - 多因子盘前选股
+    'daily-morning-picks': {
+        'task': 'calc_morning_picks_daily',
+        'schedule': crontab(hour=20, minute=35, day_of_week='1-5'),
+    },
+
     # 20:40 - 主题池评分
     'daily-theme-pool-score': {
         'task': 'scheduler.adapters.run_theme_pool_score',

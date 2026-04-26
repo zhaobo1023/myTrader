@@ -55,12 +55,13 @@ _SYSTEM_BASE = """你是一位专业的A股投资顾问，为个人投资者提�
 10. 绝不可给出具体仓位建议（如"建议X成仓位"），这属于投资顾问持牌业务范畴"""
 
 _MORNING_LAYERS = """### 行业冷热（侧重: 今日机会预判）
-基于ETF偏离度，找出今天值得关注的方向：哪些板块处于突破临界点可布局？哪些隔夜有催化值得低吸？
-同时标注过热板块的追高风险。用2-3句话概括，不要逐个ETF复述。
+基于ETF偏离度和申万板块强度（数据区6），找出今天值得关注的方向：哪些板块处于突破临界点可布局？
+哪些隔夜有催化值得低吸？同时标注过热板块的追高风险。用2-3句话概括，不要逐个ETF复述。
 
 ### 异动与事件（侧重: 盘前看点）
 基于前一日涨跌停明细和隔夜消息，提炼2-3条今日值得重点跟踪的方向。
 关注连板股的溢价机会、行业聚集效应是否延续、隔夜外盘映射哪些A股板块。
+若数据区6有拐点预警（turn_up），可结合该板块的盘前推荐股票一并关注。
 
 ### 风险提示（侧重: 今日操作注意事项）
 列出1-2条今天操作最需警惕的事项：高位板块是否有分歧风险？外盘利空是否会传导？
@@ -99,6 +100,9 @@ MORNING_PROMPT = """## 盘前速递（{date}）
 
 ### 数据区5: 恐贪指数
 {fear_greed_snapshot}
+
+### 数据区6: 板块轮动速览 & 盘前推荐
+{sector_strength_snapshot}
 {article_hints}
 请按5层结构输出盘前解读，侧重今日机会与风险预判。"""
 
@@ -567,6 +571,90 @@ def _collect_fear_greed_snapshot() -> tuple:
 
 
 # ---------------------------------------------------------------------------
+# Data collection — sector strength + morning picks (数据区6)
+# ---------------------------------------------------------------------------
+
+def _collect_sector_strength_snapshot() -> tuple:
+    """
+    Collect latest sector strength and morning picks data.
+
+    Returns:
+        (formatted_text, trade_date_str | None)
+    """
+    try:
+        from api.services.sector_strength_service import (
+            get_latest_strength,
+            get_latest_picks,
+        )
+        strength_data = get_latest_strength(sw_level=2, top_n=8)
+        picks_data = get_latest_picks(top_n=8)
+    except Exception as e:
+        logger.warning('Failed to get sector strength data: %s', e)
+        return '(板块强度数据不可用)', None
+
+    trade_date = strength_data.get('trade_date')
+    sectors = strength_data.get('sectors', [])
+    inflections = strength_data.get('inflections', [])
+    picks = picks_data.get('picks', [])
+
+    if not sectors and not picks:
+        return '(板块强度数据不可用)', None
+
+    lines = []
+
+    if trade_date:
+        lines.append('数据日期: {}'.format(trade_date))
+
+    # Top sectors table
+    if sectors:
+        lines.append('**Top 强势板块（申万二级，综合强度排名）**')
+        lines.append('| 排名 | 板块 | 上级 | MOM_21(%) | RS_60 | 量比 | 综合分 | 相位 | 拐点 |')
+        lines.append('|------|------|------|-----------|-------|------|--------|------|------|')
+        for s in sectors:
+            rank = s.get('score_rank', '-')
+            name = s.get('sector_name', '-')
+            parent = s.get('parent_name') or '-'
+            mom = '{:+.1f}'.format(s['mom_21']) if s.get('mom_21') is not None else '--'
+            rs60 = '{:.0f}'.format(s['rs_60']) if s.get('rs_60') is not None else '--'
+            vr = '{:.2f}'.format(s['vol_ratio']) if s.get('vol_ratio') is not None else '--'
+            comp = '{:.1f}'.format(s['composite_score']) if s.get('composite_score') is not None else '--'
+            phase = s.get('phase', '-')
+            infl = s.get('inflection_type') or ''
+            lines.append('| {} | {} | {} | {} | {} | {} | {} | {} | {} |'.format(
+                rank, name, parent, mom, rs60, vr, comp, phase, infl))
+
+    # Inflection warnings
+    if inflections:
+        turn_up = [s['sector_name'] for s in inflections if s.get('inflection_type') == 'turn_up']
+        turn_down = [s['sector_name'] for s in inflections if s.get('inflection_type') == 'turn_down']
+        if turn_up:
+            lines.append('[拐点预警-转强]: {}'.format(', '.join(turn_up)))
+        if turn_down:
+            lines.append('[拐点预警-转弱]: {}'.format(', '.join(turn_down)))
+
+    # Morning picks table
+    if picks:
+        lines.append('')
+        lines.append('**盘前推荐 Top-8（多因子综合选股）**')
+        lines.append('| 排名 | 股票 | 二级行业 | MOM_1M(%) | RSI_14 | BIAS_20(%) | 综合分 |')
+        lines.append('|------|------|----------|-----------|--------|------------|--------|')
+        for p in picks:
+            rank = p.get('pick_rank', '-')
+            code = p.get('stock_code', '-')
+            name = p.get('stock_name') or code
+            sw2 = p.get('sw_level2') or '-'
+            mom1m = '{:+.1f}'.format(p['mom_1m']) if p.get('mom_1m') is not None else '--'
+            rsi = '{:.1f}'.format(p['rsi_14']) if p.get('rsi_14') is not None else '--'
+            bias = '{:+.1f}'.format(p['bias_20']) if p.get('bias_20') is not None else '--'
+            score = '{:.1f}'.format(p['pick_score']) if p.get('pick_score') is not None else '--'
+            lines.append('| {} | {}({}) | {} | {} | {} | {} | {} |'.format(
+                rank, name, code, sw2, mom1m, rsi, bias, score))
+
+    text = '\n'.join(lines) if lines else '(板块强度数据不可用)'
+    return text, trade_date
+
+
+# ---------------------------------------------------------------------------
 # Data collection — external article hints (optional enrichment)
 # ---------------------------------------------------------------------------
 
@@ -714,10 +802,16 @@ async def generate_briefing(session: str = 'morning') -> dict:
     # --- 5. Collect fear & greed ---
     fear_greed_snapshot, fear_date = _collect_fear_greed_snapshot()
 
-    # --- 6. Collect article hints (optional, non-blocking) ---
+    # --- 6. Collect sector strength snapshot (morning only; non-blocking) ---
+    if session == 'morning':
+        sector_strength_snapshot, _sector_date = _collect_sector_strength_snapshot()
+    else:
+        sector_strength_snapshot = '(仅晨报提供板块轮动速览)'
+
+    # --- 7. Collect article hints (optional, non-blocking) ---
     article_hints = _collect_article_hints(session)
 
-    # --- 7. Data provenance: check each section's freshness ---
+    # --- 8. Data provenance: check each section's freshness ---
     data_sources = {
         'dashboard': {'label': '大盘信号', 'date': dashboard_date, 'current': False},
         'global': {'label': '全球资产', 'date': today_str, 'current': True},  # per-row tags handle this
@@ -764,6 +858,7 @@ async def generate_briefing(session: str = 'morning') -> dict:
         'etf_log_bias_text': etf_log_bias_snapshot,
         'limit_stock_text': limit_stock_snapshot,
         'fear_greed_text': fear_greed_snapshot,
+        'sector_strength_text': sector_strength_snapshot,
     }
 
     # Abort if data quality is too poor
@@ -779,7 +874,7 @@ async def generate_briefing(session: str = 'morning') -> dict:
 
     template = MORNING_PROMPT if session == 'morning' else EVENING_PROMPT
     system_prompt = SYSTEM_PROMPT_MORNING if session == 'morning' else SYSTEM_PROMPT_EVENING
-    prompt = template.format(
+    fmt_kwargs = dict(
         date=today_str,
         data_snapshot=snapshot,
         dashboard_snapshot=dashboard_snapshot,
@@ -788,6 +883,9 @@ async def generate_briefing(session: str = 'morning') -> dict:
         fear_greed_snapshot=fear_greed_snapshot,
         article_hints=article_hints,
     )
+    if session == 'morning':
+        fmt_kwargs['sector_strength_snapshot'] = sector_strength_snapshot
+    prompt = template.format(**fmt_kwargs)
 
     # Append data integrity declaration if any section is stale
     if stale_sections:
