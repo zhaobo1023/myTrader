@@ -431,6 +431,7 @@ export interface PositionItem {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  sw_level1: string | null;
 }
 
 export interface PositionMarketData {

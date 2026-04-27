@@ -37,6 +37,7 @@ class PositionResponse(BaseModel):
     is_active: bool
     created_at: str
     updated_at: str
+    sw_level1: Optional[str] = None
 
     class Config:
         from_attributes = True

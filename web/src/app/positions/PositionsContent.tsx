@@ -750,6 +750,9 @@ export default function PositionsContent() {
   // 标签弹窗状态
   const [tagTarget, setTagTarget] = useState<PositionItem | null>(null);
   const [tagInput, setTagInput] = useState('');
+  // 筛选状态
+  const [filterTag, setFilterTag] = useState<number | null>(null);
+  const [filterIndustry, setFilterIndustry] = useState<string | null>(null);
 
   const { data: overviewData, isLoading: overviewLoading, isError: overviewError } = useQuery({
     queryKey: ['risk-overview'],
@@ -1001,9 +1004,22 @@ export default function PositionsContent() {
   }
 
   const items = data?.items || [];
+
+  // Apply tag and industry filters
+  const filteredItems = items.filter(p => {
+    if (filterTag !== null) {
+      const pTags = positionTagsMap?.[p.id] || [];
+      if (!pTags.some(t => t.id === filterTag)) return false;
+    }
+    if (filterIndustry !== null) {
+      if ((p.sw_level1 || '') !== filterIndustry) return false;
+    }
+    return true;
+  });
+
   const grouped = LEVELS.map(lv => ({
     level: lv,
-    items: items.filter(p => p.level === lv),
+    items: filteredItems.filter(p => p.level === lv),
   }));
 
   const cardStyle: React.CSSProperties = {
@@ -1431,6 +1447,51 @@ export default function PositionsContent() {
 
       {isLoading && <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>加载中...</div>}
 
+      {/* Tag + Industry filter bar */}
+      {items.length > 0 && (
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>筛选:</span>
+          {/* Tag filter */}
+          <select
+            value={filterTag ?? ''}
+            onChange={e => setFilterTag(e.target.value ? Number(e.target.value) : null)}
+            style={{ padding: '4px 8px', fontSize: '12px', border: '1px solid var(--border-subtle)', borderRadius: '5px', background: 'var(--bg-panel)', color: 'var(--text-secondary)' }}
+          >
+            <option value="">全部标签</option>
+            {(allTags?.data || []).map(t => (
+              <option key={t.id} value={t.id}>{t.name} ({t.stock_count ?? 0})</option>
+            ))}
+          </select>
+          {/* Industry filter */}
+          <select
+            value={filterIndustry ?? ''}
+            onChange={e => setFilterIndustry(e.target.value || null)}
+            style={{ padding: '4px 8px', fontSize: '12px', border: '1px solid var(--border-subtle)', borderRadius: '5px', background: 'var(--bg-panel)', color: 'var(--text-secondary)' }}
+          >
+            <option value="">全部行业</option>
+            {(() => {
+              const industries = new Set<string>();
+              items.forEach(p => { if (p.sw_level1) industries.add(p.sw_level1); });
+              return Array.from(industries).sort().map(ind => (
+                <option key={ind} value={ind}>{ind}</option>
+              ));
+            })()}
+          </select>
+          {/* Active filter indicator + clear */}
+          {(filterTag !== null || filterIndustry !== null) && (
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              显示 {filteredItems.length}/{items.length} 只
+              <button
+                onClick={() => { setFilterTag(null); setFilterIndustry(null); }}
+                style={{ marginLeft: '6px', fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                清除
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Grouped by level */}
       {grouped.map(g => g.items.length > 0 && (
         <div key={g.level} style={{ marginBottom: '24px' }}>
@@ -1495,8 +1556,18 @@ export default function PositionsContent() {
                         </a>
                         {(() => {
                           const pTags = positionTagsMap?.[p.id] || [];
-                          return pTags.length > 0 && (
+                          const hasTags = pTags.length > 0;
+                          const hasIndustry = !!p.sw_level1;
+                          return (hasTags || hasIndustry) && (
                             <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap', marginTop: '2px' }}>
+                              {hasIndustry && (
+                                <span style={{
+                                  fontSize: '9px', padding: '1px 5px', borderRadius: '8px',
+                                  color: 'var(--text-muted)', background: 'var(--bg-canvas)', fontWeight: 400,
+                                }}>
+                                  {p.sw_level1}
+                                </span>
+                              )}
                               {pTags.map(t => (
                                 <span key={t.id} style={{
                                   fontSize: '9px', padding: '1px 5px', borderRadius: '8px',

@@ -750,15 +750,17 @@ def run_daily_monitor(env: str = 'online') -> dict:
         for r in rows:
             price_map[r['stock_code']] = float(r['close_price']) if r.get('close_price') is not None else None
 
-    # Fetch MA indicators (from trade_stock_factor or trade_stock_basic_factor)
+    # Fetch MA/RSI/MACD indicators from trade_technical_indicator
     ma_map = {}
     for i in range(0, len(codes), CHUNK):
         chunk = codes[i:i + CHUNK]
         ph = ','.join(['%s'] * len(chunk))
         rows = execute_query(
-            f'''SELECT stock_code, ma_20, ma_60, ma_250, rsi_14, volume_ratio,
+            f'''SELECT stock_code,
+                       ma20 AS ma_20, ma60 AS ma_60, ma250 AS ma_250,
+                       rsi_12 AS rsi_14, volume_ratio,
                        macd_dif, macd_dea
-                FROM trade_stock_factor
+                FROM trade_technical_indicator
                 WHERE stock_code IN ({ph}) AND trade_date=%s''',
             tuple(chunk) + (latest_date,), env=env,
         )

@@ -83,9 +83,29 @@ async def list_positions(
 
     result = await db.execute(query)
     items = result.scalars().all()
+
+    # Batch-fetch SW L1 industry for all stock codes
+    industry_map: dict = {}
+    if items:
+        codes = [p.stock_code for p in items]
+        from config.db import execute_query
+        ph = ','.join(['%s'] * len(codes))
+        rows = execute_query(
+            f'SELECT stock_code, sw_level1 FROM trade_stock_info WHERE stock_code IN ({ph})',
+            tuple(codes), env='online',
+        )
+        if rows:
+            industry_map = {r['stock_code']: r['sw_level1'] for r in rows if r.get('sw_level1')}
+
+    resp_items = []
+    for p in items:
+        r = _to_response(p)
+        r.sw_level1 = industry_map.get(p.stock_code)
+        resp_items.append(r)
+
     return PositionListResponse(
-        items=[_to_response(p) for p in items],
-        total=len(items),
+        items=resp_items,
+        total=len(resp_items),
     )
 
 

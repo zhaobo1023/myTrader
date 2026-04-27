@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAddToPositions } from '@/hooks/useStockAdd';
 import { candidatePoolApi, TagItem } from '@/lib/candidate-pool-api';
 
@@ -184,6 +184,115 @@ function HistoryPanel({ stockCode, stockName }: { stockCode: string; stockName: 
 }
 
 // ---------------------------------------------------------------------------
+// Quick tag button (inline, in each row)
+// ---------------------------------------------------------------------------
+function QuickTagButton({
+  stock,
+  allTags,
+  onTagStock,
+  onEnsureTagStock,
+}: {
+  stock: CandidateStock;
+  allTags: TagItem[];
+  onTagStock: (stockId: number, tagId: number) => void;
+  onEnsureTagStock: (stockId: number, tagName: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [input, setInput] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+        setInput('');
+      }
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [open]);
+
+  const taggedIds = new Set(stock.tags.map(t => t.id));
+  const q = input.trim().toLowerCase();
+  const suggestions = allTags.filter(t => !taggedIds.has(t.id) && (!q || t.name.toLowerCase().includes(q)));
+
+  return (
+    <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(v => !v); }}
+        title="快速打标签"
+        style={{
+          fontSize: '11px', padding: '2px 6px', borderRadius: '4px',
+          background: 'transparent', border: '1px solid var(--border-subtle)',
+          color: 'var(--text-muted)', cursor: 'pointer',
+        }}
+      >
+        标签
+      </button>
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute', top: '100%', right: 0, zIndex: 20,
+            background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)',
+            borderRadius: '6px', boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+            width: '180px', marginTop: '4px',
+          }}
+        >
+          <input
+            placeholder="输入标签名"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && input.trim()) {
+                const match = allTags.find(t => t.name === input.trim() && !taggedIds.has(t.id));
+                if (match) onTagStock(stock.id, match.id);
+                else onEnsureTagStock(stock.id, input.trim());
+                setInput('');
+                setOpen(false);
+              }
+              if (e.key === 'Escape') { setOpen(false); setInput(''); }
+            }}
+            autoFocus
+            style={{
+              width: '100%', padding: '6px 8px', fontSize: '12px',
+              border: 'none', borderBottom: '1px solid var(--border-subtle)',
+              borderRadius: '6px 6px 0 0', boxSizing: 'border-box',
+              background: 'transparent', color: 'var(--text-primary)',
+              outline: 'none',
+            }}
+          />
+          <div style={{ maxHeight: '140px', overflowY: 'auto' }}>
+            {suggestions.slice(0, 8).map(t => (
+              <div
+                key={t.id}
+                onClick={() => { onTagStock(stock.id, t.id); setOpen(false); setInput(''); }}
+                style={{
+                  padding: '5px 8px', fontSize: '12px', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: '5px',
+                  borderBottom: '1px solid var(--border-subtle)',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-canvas)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: t.color, flexShrink: 0 }} />
+                <span style={{ color: 'var(--text-secondary)' }}>{t.name}</span>
+              </div>
+            ))}
+            {suggestions.length === 0 && input.trim() && (
+              <div style={{ padding: '5px 8px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                回车创建 "{input.trim()}"
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Stock row
 // ---------------------------------------------------------------------------
 function StockRow({
@@ -296,8 +405,16 @@ function StockRow({
         <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
           <AlertBadge level={stock.alert_level} signals={stock.signals} />
         </td>
-        <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)', textAlign: 'right' }}>
-          <span style={{ fontSize: '11px', color: 'var(--accent)' }}>{expanded ? '收起' : '详情'}</span>
+        <td style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)', textAlign: 'right', whiteSpace: 'nowrap' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', position: 'relative' }}>
+            <QuickTagButton
+              stock={stock}
+              allTags={allTags}
+              onTagStock={onTagStock}
+              onEnsureTagStock={onEnsureTagStock}
+            />
+            <span style={{ fontSize: '11px', color: 'var(--accent)' }}>{expanded ? '收起' : '详情'}</span>
+          </div>
         </td>
       </tr>
 
