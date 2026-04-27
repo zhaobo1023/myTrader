@@ -271,12 +271,26 @@ def trigger_strategy_run(strategy_key: str, force: bool = False, run_date: str =
     )
     run_id = id_rows[0]['id'] if id_rows else None
 
-    # Submit to Celery task queue
-    from api.tasks.preset_strategies import run_preset_strategy
-    task = run_preset_strategy.apply_async(args=[run_id, strategy_key, 'online'])
-    logger.info('[PRESET] Submitted Celery task: run_id=%d task_id=%s strategy=%s trade_date=%s',
-                run_id, task.id, strategy_key, trade_date_str)
+    # Try Celery async first; fall back to thread if Redis unreachable
+    # (API container may not share a Docker network with the Redis instance)
+    task_id = None
+    try:
+        from api.tasks.preset_strategies import run_preset_strategy
+        task = run_preset_strategy.apply_async(args=[run_id, strategy_key, 'online'])
+        task_id = task.id
+        logger.info('[PRESET] Submitted Celery task: run_id=%d task_id=%s strategy=%s trade_date=%s',
+                    run_id, task_id, strategy_key, trade_date_str)
+    except Exception as celery_exc:
+        logger.warning('[PRESET] Celery apply_async failed (%s), falling back to thread', celery_exc)
+        import threading
+        from api.tasks.preset_strategies import run_preset_strategy as _run_task
+        threading.Thread(
+            target=_run_task,
+            args=(run_id, strategy_key, 'online'),
+            daemon=True,
+        ).start()
+        task_id = 'thread-fallback'
 
-    return {'run_id': run_id, 'status': 'pending', 'task_id': task.id, 'run_date': trade_date_str}
+    return {'run_id': run_id, 'status': 'pending', 'task_id': task_id, 'run_date': trade_date_str}
 
 
