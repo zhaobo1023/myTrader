@@ -280,12 +280,16 @@ def _fmt_row(r: dict) -> dict:
             return v.isoformat()
         return str(v)
 
-    # 从 triggered_at 提取周信息
+    # 从 run_date 提取周信息（run_date 代表该数据所属的周五）
     week_info = None
-    if r.get('triggered_at'):
+    if r.get('run_date'):
         try:
-            triggered_date = datetime.fromisoformat(str(r['triggered_at'])).date()
-            week_info = _get_week_info(triggered_date)
+            rd = r['run_date']
+            if isinstance(rd, str):
+                rd = date.fromisoformat(rd)
+            elif isinstance(rd, datetime):
+                rd = rd.date()
+            week_info = _get_week_info(rd)
         except Exception:
             pass
 
