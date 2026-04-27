@@ -78,7 +78,9 @@ services:
   # ============================================================
   celery-worker:
     build: .
-    command: celery -A api.tasks.celery_app worker -l info -c 1 -Q celery,default
+    command: >
+      sh -c "pip install --no-cache-dir jinja2 2>/dev/null;
+      celery -A api.tasks.celery_app worker -l info -c 1 -Q celery,default"
     env_file: .env
     deploy:
       resources:
