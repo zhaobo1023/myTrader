@@ -9,7 +9,7 @@ import KLineChart from '@/components/chart/KLineChart';
 // Types
 // ---------------------------------------------------------------------------
 
-type StockTab = 'kline' | 'one-pager' | 'comprehensive' | 'technical' | 'fundamental' | 'news' | 'risk';
+type StockTab = 'overview' | 'kline-tech' | 'reports' | 'news-risk';
 
 interface StockOption {
   stock_code: string;
@@ -61,25 +61,11 @@ interface ReportTask {
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
 const TAB_CONFIG: { key: StockTab; label: string }[] = [
-  { key: 'kline',         label: 'K线图' },
-  { key: 'one-pager',     label: '一页纸研究' },
-  { key: 'comprehensive', label: '综合分析' },
-  { key: 'technical',     label: '技术面分析' },
-  { key: 'fundamental',   label: '基本面分析' },
-  { key: 'news',          label: '个股动态' },
-  { key: 'risk',          label: '风控情况' },
+  { key: 'overview',    label: '概览' },
+  { key: 'kline-tech',  label: 'K线与技术面' },
+  { key: 'reports',     label: '深度研报' },
+  { key: 'news-risk',   label: '动态与风控' },
 ];
-
-// Map tab -> report_type used by the unified API
-const TAB_REPORT_TYPE: Record<StockTab, string> = {
-  'kline':         '',
-  'one-pager':     'one_pager',
-  'comprehensive': 'five_section',
-  'technical':     'technical_report',
-  'fundamental':   'fundamental',
-  'news':          '',
-  'risk':          '',
-};
 
 type CapFilter = 'all' | 'large' | 'mid' | 'small';
 type StyleFilter = 'all' | 'value' | 'growth' | 'balanced';
@@ -1596,7 +1582,8 @@ function isEarningsSeason(): boolean {
   return (m >= 1 && m <= 4) || (m >= 7 && m <= 9);
 }
 
-function RiskTab({ stock, onTabChange }: { stock: StockOption; onTabChange: (t: StockTab) => void }) {
+function RiskTabContent({ stock }: { stock: StockOption }) {
+  const onTabChange = (_t: StockTab) => {}; // no-op, risk shortcuts are handled at parent level
   const [data, setData] = useState<StockRiskData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1680,14 +1667,14 @@ function RiskTab({ stock, onTabChange }: { stock: StockOption; onTabChange: (t: 
         <div style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-primary)', marginBottom: '10px' }}>风控关联分析</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
           <button
-            onClick={() => onTabChange('news')}
+            onClick={() => { /* news is now inline in news-risk tab, scroll up */ window.scrollTo({ top: 0, behavior: 'smooth' }); }}
             style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', fontSize: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)', color: 'var(--text-secondary)', cursor: 'pointer' }}
           >
             个股动态
             {statusDot(newsStatus)}
           </button>
           <button
-            onClick={() => onTabChange('technical')}
+            onClick={() => onTabChange('kline-tech')}
             style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', fontSize: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)', color: 'var(--text-secondary)', cursor: 'pointer' }}
           >
             技术面分析
@@ -1695,7 +1682,7 @@ function RiskTab({ stock, onTabChange }: { stock: StockOption; onTabChange: (t: 
           </button>
           {inEarnings && (
             <button
-              onClick={() => onTabChange('fundamental')}
+              onClick={() => onTabChange('reports')}
               style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', fontSize: '12px', border: '1px solid rgba(94,106,210,0.4)', background: 'rgba(94,106,210,0.06)', color: '#5e6ad2', cursor: 'pointer' }}
             >
               财报季 · 基本面
@@ -1795,6 +1782,344 @@ function RiskTab({ stock, onTabChange }: { stock: StockOption; onTabChange: (t: 
 }
 
 // ---------------------------------------------------------------------------
+// Composite Tab: Overview (概览)
+// ---------------------------------------------------------------------------
+
+function OverviewTab({ stock, onTabChange }: { stock: StockOption; onTabChange: (t: StockTab) => void }) {
+  const [riskData, setRiskData] = useState<StockRiskData | null>(null);
+  const [techReports, setTechReports] = useState<TechReport[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    const token = localStorage.getItem('access_token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    Promise.all([
+      fetch(`${API_BASE}/api/risk/stock/${encodeURIComponent(stock.stock_code)}`, { headers })
+        .then((r) => r.ok ? r.json() : null)
+        .catch(() => null),
+      fetch(`${API_BASE}/api/analysis/reports/by-stock?code=${stock.stock_code}&days=3`)
+        .then((r) => r.json())
+        .catch(() => []),
+    ]).then(([risk, reports]) => {
+      setRiskData(risk);
+      setTechReports(Array.isArray(reports) ? reports : []);
+    }).finally(() => setLoading(false));
+  }, [stock.stock_code]);
+
+  if (loading) {
+    return <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>加载概览数据...</div>;
+  }
+
+  const tech = riskData?.common?.technical;
+  const val = riskData?.common?.valuation;
+  const latestReport = techReports[0];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {/* 价格区 + 技术摘要 + 估值摘要 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+        {/* 技术摘要 */}
+        <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '16px 20px' }}>
+          <div style={{ fontSize: '14px', fontWeight: 590, color: 'var(--text-primary)', marginBottom: '12px' }}>技术摘要</div>
+          {!tech ? (
+            <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>暂无技术指标数据</div>
+          ) : (
+            <>
+              {tech.trade_date && (
+                <RiskInfoRow label="数据日期" value={tech.trade_date} />
+              )}
+              {tech.close != null && (
+                <RiskInfoRow label="最新收盘价" value={`${tech.close.toFixed(2)}`} />
+              )}
+              {tech.ma_status.length > 0 && (
+                <RiskInfoRow label="均线位置" value={tech.ma_status.join(' / ')} />
+              )}
+              {tech.macd_signal && (
+                <RiskInfoRow label="MACD 信号" value={tech.macd_signal} />
+              )}
+              {tech.rsi_14 != null && (
+                <RiskInfoRow
+                  label="RSI(14)"
+                  value={tech.rsi_14.toFixed(1)}
+                  color={tech.rsi_14 > 70 ? '#e5534b' : tech.rsi_14 < 30 ? '#27a644' : 'var(--text-primary)'}
+                />
+              )}
+              {tech.boll_position && (
+                <RiskInfoRow label="布林带位置" value={tech.boll_position} />
+              )}
+            </>
+          )}
+        </div>
+
+        {/* 估值摘要 */}
+        <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '16px 20px' }}>
+          <div style={{ fontSize: '14px', fontWeight: 590, color: 'var(--text-primary)', marginBottom: '12px' }}>当前估值</div>
+          {!val ? (
+            <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>暂无估值数据</div>
+          ) : (
+            <>
+              {val.trade_date && <RiskInfoRow label="数据日期" value={val.trade_date} />}
+              {val.pe_ttm != null && (
+                <RiskInfoRow
+                  label="PE(TTM)"
+                  value={
+                    val.pe_ttm <= 0 ? <span style={{ color: 'var(--text-muted)' }}>亏损/负PE</span> : (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ color: val.pe_percentile != null && val.pe_percentile > 80 ? '#e5534b' : val.pe_percentile != null && val.pe_percentile < 30 ? '#27a644' : 'var(--text-primary)' }}>
+                          {val.pe_ttm.toFixed(1)}
+                        </span>
+                        {val.pe_percentile != null && <ValuationBadge percentile={val.pe_percentile} />}
+                      </span>
+                    )
+                  }
+                />
+              )}
+              {val.pb != null && val.pb > 0 && (
+                <RiskInfoRow
+                  label="PB"
+                  value={
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ color: val.pb_percentile != null && val.pb_percentile > 80 ? '#e5534b' : val.pb_percentile != null && val.pb_percentile < 30 ? '#27a644' : 'var(--text-primary)' }}>
+                        {val.pb.toFixed(2)}
+                      </span>
+                      {val.pb_percentile != null && <ValuationBadge percentile={val.pb_percentile} />}
+                    </span>
+                  }
+                />
+              )}
+              {val.total_mv != null && (
+                <RiskInfoRow label="总市值" value={`${val.total_mv >= 1 ? val.total_mv.toFixed(1) : val.total_mv.toFixed(2)} 亿`} />
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* 最近技术信号 */}
+      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '16px 20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <div style={{ fontSize: '14px', fontWeight: 590, color: 'var(--text-primary)' }}>最近信号</div>
+          <button
+            onClick={() => onTabChange('kline-tech')}
+            style={{ fontSize: '12px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer' }}
+          >
+            查看全部 &rarr;
+          </button>
+        </div>
+        {techReports.length === 0 ? (
+          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>近3天暂无技术面扫描报告</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {techReports.slice(0, 3).map((rep) => (
+              <div key={rep.id} style={{
+                display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px',
+                background: 'var(--bg-elevated)', borderRadius: '6px',
+                borderLeft: `3px solid ${severityColor(rep.max_severity)}`,
+              }}>
+                <span style={{ fontSize: '13px', fontWeight: 510, color: 'var(--text-primary)', minWidth: '80px' }}>
+                  {rep.trade_date}
+                </span>
+                <ScoreBadge score={rep.score} label={rep.score_label} />
+                {rep.ma_pattern && (
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', background: 'var(--bg-card)', padding: '1px 6px', borderRadius: '4px' }}>
+                    {rep.ma_pattern}
+                  </span>
+                )}
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {rep.summary}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 持仓风控摘要 */}
+      {riskData?.personalized && (
+        <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '16px 20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <div style={{ fontSize: '14px', fontWeight: 590, color: 'var(--text-primary)' }}>持仓风控</div>
+            <button
+              onClick={() => onTabChange('news-risk')}
+              style={{ fontSize: '12px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer' }}
+            >
+              详情 &rarr;
+            </button>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '80px' }}>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>持仓成本</span>
+              <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>{riskData.personalized.cost_price.toFixed(2)}</span>
+            </div>
+            {riskData.personalized.pnl_ratio != null && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '80px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>浮动盈亏</span>
+                <span style={{ fontSize: '14px', fontWeight: 700, color: pnlColor(riskData.personalized.pnl_ratio) }}>
+                  {riskData.personalized.pnl_ratio > 0 ? '+' : ''}{riskData.personalized.pnl_ratio.toFixed(2)}%
+                </span>
+              </div>
+            )}
+            {riskData.personalized.position_weight_pct != null && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '80px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>仓位占比</span>
+                <span style={{ fontSize: '14px', fontWeight: 600, color: riskData.personalized.position_weight_pct > 6 ? '#dc2626' : 'var(--text-primary)' }}>
+                  {riskData.personalized.position_weight_pct.toFixed(1)}%
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 快捷入口 */}
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        <button
+          onClick={() => onTabChange('kline-tech')}
+          style={{
+            padding: '8px 16px', borderRadius: '6px', fontSize: '13px',
+            border: '1px solid var(--border-subtle)', background: 'var(--bg-card)',
+            color: 'var(--text-secondary)', cursor: 'pointer',
+          }}
+        >
+          K线与技术面
+        </button>
+        <button
+          onClick={() => onTabChange('reports')}
+          style={{
+            padding: '8px 16px', borderRadius: '6px', fontSize: '13px',
+            border: '1px solid var(--border-subtle)', background: 'var(--bg-card)',
+            color: 'var(--text-secondary)', cursor: 'pointer',
+          }}
+        >
+          深度研报
+        </button>
+        <button
+          onClick={() => onTabChange('news-risk')}
+          style={{
+            padding: '8px 16px', borderRadius: '6px', fontSize: '13px',
+            border: '1px solid var(--border-subtle)', background: 'var(--bg-card)',
+            color: 'var(--text-secondary)', cursor: 'pointer',
+          }}
+        >
+          动态与风控
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Composite Tab: K线与技术面 (KLineChart + TechReportList)
+// ---------------------------------------------------------------------------
+
+function KlineTechTab({ stock }: { stock: StockOption }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      <KLineChart stockCode={stock.stock_code} stockName={stock.stock_name || undefined} />
+      <div>
+        <div style={{ fontSize: '14px', fontWeight: 590, color: 'var(--text-primary)', marginBottom: '12px' }}>技术面扫描报告</div>
+        <TechnicalTab stock={stock} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Composite Tab: 深度研报 (one-pager + five_section + fundamental)
+// ---------------------------------------------------------------------------
+
+type ReportSubType = 'one_pager' | 'five_section' | 'fundamental';
+
+const REPORT_SUB_CONFIG: { key: ReportSubType; label: string }[] = [
+  { key: 'one_pager',    label: '一页纸研究' },
+  { key: 'five_section', label: '综合五步法' },
+  { key: 'fundamental',  label: '基本面分析' },
+];
+
+function ReportsTab({ stock }: { stock: StockOption }) {
+  const [subType, setSubType] = useState<ReportSubType>('one_pager');
+
+  return (
+    <div>
+      {/* Sub-type selector */}
+      <div style={{
+        display: 'flex', gap: '0', background: 'var(--bg-card)',
+        border: '1px solid var(--border-subtle)', borderRadius: '8px',
+        padding: '4px', marginBottom: '16px',
+      }}>
+        {REPORT_SUB_CONFIG.map((cfg) => (
+          <button
+            key={cfg.key}
+            onClick={() => setSubType(cfg.key)}
+            style={{
+              padding: '6px 14px', fontSize: '13px', borderRadius: '6px', border: 'none',
+              fontWeight: subType === cfg.key ? 510 : 400,
+              color: subType === cfg.key ? 'var(--text-primary)' : 'var(--text-tertiary)',
+              background: subType === cfg.key ? 'var(--bg-nav-active)' : 'none',
+              cursor: 'pointer', transition: 'all 0.12s', whiteSpace: 'nowrap',
+            }}
+          >
+            {cfg.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Report content based on sub-type */}
+      {subType === 'one_pager' && (
+        <MarkdownReportTab
+          stock={stock}
+          reportType="one_pager"
+          submitLabel="生成一页纸研究"
+          resubmitLabel="重新生成"
+          placeholder="点击生成一页纸研究开始深度分析"
+          showHistory
+        />
+      )}
+      {subType === 'five_section' && (
+        <HtmlReportTab
+          stock={stock}
+          reportType="five_section"
+          submitLabel="生成五截面分析报告"
+          resubmitLabel="重新生成"
+          placeholder="今日尚未生成五截面分析报告，点击上方按钮开始"
+          iframeTitle="五截面分析报告"
+        />
+      )}
+      {subType === 'fundamental' && (
+        <MarkdownReportTab
+          stock={stock}
+          reportType="fundamental"
+          submitLabel="生成基本面研报"
+          resubmitLabel="重新生成"
+          placeholder="今日尚未生成基本面研报，点击上方按钮开始分析"
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Composite Tab: 动态与风控 (News + Risk)
+// ---------------------------------------------------------------------------
+
+function NewsRiskTab({ stock }: { stock: StockOption }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      <NewsTab stock={stock} />
+      <div>
+        <div style={{ fontSize: '14px', fontWeight: 590, color: 'var(--text-primary)', marginBottom: '12px', paddingTop: '4px', borderTop: '1px solid var(--border-subtle)' }}>
+          风控情况
+        </div>
+        <RiskTabContent stock={stock} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Stock detail view
 // ---------------------------------------------------------------------------
 
@@ -1855,41 +2180,10 @@ function StockDetail({
       </div>
 
       <div key={stock.stock_code}>
-        {activeTab === 'kline' && (
-          <KLineChart stockCode={stock.stock_code} stockName={stock.stock_name || undefined} />
-        )}
-        {activeTab === 'one-pager' && (
-          <MarkdownReportTab
-            stock={stock}
-            reportType="one_pager"
-            submitLabel="生成一页纸研究"
-            resubmitLabel="重新生成"
-            placeholder="点击生成一页纸研究开始深度分析"
-            showHistory
-          />
-        )}
-        {activeTab === 'comprehensive' && (
-          <HtmlReportTab
-            stock={stock}
-            reportType="five_section"
-            submitLabel="生成五截面分析报告"
-            resubmitLabel="重新生成"
-            placeholder="今日尚未生成五截面分析报告，点击上方按钮开始"
-            iframeTitle="五截面分析报告"
-          />
-        )}
-        {activeTab === 'technical' && <TechnicalTab stock={stock} />}
-        {activeTab === 'fundamental' && (
-          <MarkdownReportTab
-            stock={stock}
-            reportType="fundamental"
-            submitLabel="生成基本面研报"
-            resubmitLabel="重新生成"
-            placeholder="今日尚未生成基本面研报，点击上方按钮开始分析"
-          />
-        )}
-        {activeTab === 'news' && <NewsTab stock={stock} />}
-        {activeTab === 'risk' && <RiskTab stock={stock} onTabChange={onTabChange} />}
+        {activeTab === 'overview' && <OverviewTab stock={stock} onTabChange={onTabChange} />}
+        {activeTab === 'kline-tech' && <KlineTechTab stock={stock} />}
+        {activeTab === 'reports' && <ReportsTab stock={stock} />}
+        {activeTab === 'news-risk' && <NewsRiskTab stock={stock} />}
       </div>
     </div>
   );
@@ -1984,12 +2278,17 @@ function useTriggerAnnualReportIngest(stock: StockOption | null) {
   }, [stock?.stock_code]);
 }
 
+const VALID_TABS = new Set<StockTab>(['overview', 'kline-tech', 'reports', 'news-risk']);
+
 function StockPageInner() {
   const searchParams = useSearchParams();
   const codeParam = searchParams.get('code');
+  const tabParam = searchParams.get('tab');
+
+  const initialTab: StockTab = tabParam && VALID_TABS.has(tabParam as StockTab) ? (tabParam as StockTab) : 'overview';
 
   const [selectedStock, setSelectedStock] = useState<StockOption | null>(null);
-  const [activeTab, setActiveTab] = useState<StockTab>('kline');
+  const [activeTab, setActiveTab] = useState<StockTab>(initialTab);
   const [watchlistVersion, setWatchlistVersion] = useState(0);
 
   // If navigated with ?code=xxx, auto-select that stock
@@ -2015,7 +2314,7 @@ function StockPageInner() {
 
   const handleSelect = useCallback((s: StockOption) => {
     setSelectedStock(s);
-    setActiveTab('kline');
+    setActiveTab('overview');
     setWatchlistVersion((v) => v + 1);
   }, []);
 
