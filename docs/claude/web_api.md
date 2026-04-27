@@ -1,6 +1,6 @@
 # Web 平台 & API 服务
 
-新增于 2026-04-05，持续迭代中。最后更新：2026-04-26。
+新增于 2026-04-05，持续迭代中。最后更新：2026-04-27。
 
 ## 技术栈
 
@@ -67,6 +67,88 @@
 
 **报告缓存**
 - `trade_briefing` - AI 晨报/复盘 (session/brief_date/content/structured_data)
+
+**行业轮动**
+- `trade_sector_strength_daily` - 申万二级行业强度 (trade_date/sector_name/composite_score/phase/mom_21/rs_60/vol_ratio)
+- `trade_morning_picks` - 多因子盘前选股 (pick_date/stock_code/stock_name/sw_level2/pick_score/pick_rank)
+
+## Celery Beat 定时任务
+
+所有定时任务配置在 `api/tasks/celery_app.py` 的 `beat_schedule` 中，时区 Asia/Shanghai，仅工作日（周一至周五）执行（除特别标注外）。
+
+### 凌晨维护
+
+| 时间 | 任务名 | 说明 |
+|------|--------|------|
+| 00:05 | `expire_subscriptions` | 订阅过期检查（每日） |
+| 01:00 | `run_data_integrity_check` | 数据完整性检查 |
+| 02:00 | `run_tech_scan` | 技术面持仓扫描 |
+| 03:00 | `run_log_bias_strategy` | 行业ETF对数乖离率 |
+| 03:30 (周日) | `run_stock_info_incremental` | 个股基本面增量拉取 (CNInfo) |
+
+### 早间 (盘前)
+
+| 时间 | 任务名 | 说明 | 推送渠道 |
+|------|--------|------|----------|
+| 08:00 | `fetch_fear_index` | 恐慌指数(盘前) | - |
+| 08:30 | `publish_morning_briefing` | V1晨报生成 | 飞书文档 + 机器人卡片 + admin信箱 |
+| 08:35 | `publish_morning_briefing_v2` | V2晨报(盘前早咖) | 飞书文档 + 机器人卡片 |
+| 09:35 | `tasks.fill_entry_prices` | SimPool T+1 买入价填充 | - |
+
+### 盘中
+
+| 时间 | 任务名 | 说明 |
+|------|--------|------|
+| 每小时 :15 | `fetch_macro_data_hourly` | 宏观数据 + 全球资产增量拉取（每日） |
+| 每小时 :30 | `sync_ai_wechat_articles` | AI公众号文章同步（每日） |
+| 12:00 | `fetch_fear_index` | 恐慌指数(午间) |
+
+### 收盘后 -- 独立任务
+
+| 时间 | 任务名 | 说明 | 推送渠道 |
+|------|--------|------|----------|
+| 16:15 | `fetch_stock_daily_incremental` | A股日线行情拉取 (~5000只) | - |
+| 16:18 | `fetch_daily_basic_incremental` | 估值数据拉取 (PE/PB/MV) | - |
+| 16:20 | `fetch_dashboard_data` | Dashboard 数据 (涨跌家数/成交额/涨跌停/两融/新高低) | - |
+| 16:25 | `precheck_evening_data` | 复盘数据预检 | 飞书卡片(仅异常) |
+| 16:30 | `watchlist_scan.scan_all_users` | 自选股监控 | - |
+| 16:35 | `tasks.daily_sim_pool_update` | SimPool 每日更新 (价格/止盈止损/NAV/报告) | - |
+| 16:40 | `fetch_moneyflow_daily` | 资金流向拉取 | - |
+| 16:45 | `fetch_margin_daily` | 融资融券拉取 | - |
+| 16:50 | `fetch_north_holding_daily` | 北向持仓拉取 | - |
+| 17:00 | `publish_evening_briefing` | 复盘生成 | 飞书文档 + 机器人卡片 + admin信箱 |
+| 17:10 | `fetch_announcements_daily` | 全市场重大公告 (增减持/回购/业绩预告) | - |
+| 17:30 | `fetch_stock_news_daily` | 个股新闻拉取 (持仓+关注) | - |
+
+### 收盘后 -- 数据处理链
+
+依赖链: 日线数据(16:15) -> 因子(18:30) -> 指标(19:30) -> 策略(20:10) -> 行业强度(20:30) -> 选股(20:35)
+
+| 时间 | 任务名 | 说明 | 推送渠道 |
+|------|--------|------|----------|
+| 18:00 | `run_data_gate` | 数据就绪 Gate (轮询等日线写入完成) | - |
+| 18:30 | `run_factor_calculation` | 因子计算 (basic+extended+valuation+quality) | - |
+| 18:30 | `fetch_fear_index` | 恐慌指数(盘后) | - |
+| 19:30 | `run_indicator_calculation` | 技术指标 & RPS | - |
+| 20:10 | `run_preset_strategies_daily` | 预设策略执行 | - |
+| 20:20 | `monitor_candidate_pool` | 候选池每日监控 (RPS/价格/信号) | - |
+| 20:30 | `calc_sector_strength_daily` | 申万二级行业强度计算 (124个行业) | - |
+| 20:35 | `calc_morning_picks_daily` | 多因子盘前选股 (Top30) | - |
+| 20:40 | `run_theme_pool_score` | 主题池评分 | - |
+| 20:50 | `run_positions_daily_report` | 持仓个股日报 | 信箱(按用户) |
+
+### 晚间收尾
+
+| 时间 | 任务名 | 说明 | 推送渠道 |
+|------|--------|------|----------|
+| 21:30 | `push_daily_health_report` | 数据健康日报 | 飞书卡片 |
+| 22:00 | `run_nightly_digest` | 公众号文章摘要 | 飞书文档 + 信箱(全员) |
+
+### 补充说明
+
+- 行业强度和选股结果会在次日 08:30 晨报中被引用（数据区域 6: 行业强度 + 选股表）
+- yfinance 相关数据（全球资产/A股指数 fallback）由本机 macOS crontab 每日 07:30 同步，不在 Celery Beat 内
+- 数据处理链通过时间间隔保证顺序，避免单 worker OOM
 
 ## 快速启动
 

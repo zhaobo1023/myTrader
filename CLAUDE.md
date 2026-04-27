@@ -151,7 +151,7 @@ DB_ENV=online python scripts/yfinance_sync.py --days 30
 
 | 文档 | 内容 |
 |------|------|
-| [docs/claude/web_api.md](docs/claude/web_api.md) | Web 平台 & API 服务：40 路由、11 前端页、6 数据库表、环境变量、CI/CD |
+| [docs/claude/web_api.md](docs/claude/web_api.md) | Web 平台 & API 服务：路由、前端页、数据库表、Celery Beat 定时任务全览、环境变量、CI/CD |
 | [docs/claude/xgboost_strategy.md](docs/claude/xgboost_strategy.md) | XGBoost 截面预测策略：52 维因子、滚动训练、IC 评估 |
 | [docs/claude/svd_monitor.md](docs/claude/svd_monitor.md) | SVD 市场状态监控：多尺度窗口、突变检测、行业中性化 |
 | [docs/claude/tech_scan.md](docs/claude/tech_scan.md) | 持仓技术面扫描：每日盘后扫描、分级预警、Backlog |
