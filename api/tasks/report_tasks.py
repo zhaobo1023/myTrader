@@ -220,22 +220,64 @@ def _generate_five_section(stock_code: str, stock_name: str) -> str:
 
 
 def _generate_technical_report(stock_code: str, stock_name: str) -> str:
-    import asyncio
-
-    from api.services.analysis_service import get_or_generate_tech_report
-
-    # Celery worker threads may not have an event loop; create one if needed
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            raise RuntimeError('closed')
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    result = loop.run_until_complete(
-        get_or_generate_tech_report(stock_code=stock_code, stock_name=stock_name)
-    )
-    # get_or_generate_tech_report returns a dict; we serialize the key fields as text
+    """Generate tech report synchronously (no asyncio needed in Celery worker)."""
     import json
-    return json.dumps(result, ensure_ascii=False, default=str)
+    from api.services.analysis_service import (
+        _normalize_stock_code,
+        _get_target_trade_date,
+        _generate_tech_report,
+        _row_to_detail,
+        _build_detail_from_data,
+        QUOTA_LIMIT,
+    )
+    from config.db import execute_query, execute_update
+    from datetime import datetime
+
+    code = _normalize_stock_code(stock_code)
+    trade_date = _get_target_trade_date(code)
+    today_str = datetime.now().strftime('%Y-%m-%d')
+
+    # 1. Check cache
+    cache_sql = """
+        SELECT id, stock_code, stock_name, trade_date, score, score_label,
+               ma_pattern, max_severity, summary, signals, indicators, html_content, created_at
+        FROM trade_tech_report
+        WHERE stock_code = %s AND trade_date = %s
+    """
+    rows = list(execute_query(cache_sql, (code, trade_date)))
+    if rows:
+        report = _row_to_detail(rows[0])
+        return json.dumps({'generated': False, 'report': report}, ensure_ascii=False, default=str)
+
+    # 2. Generate
+    name = stock_name or ''
+    data = _generate_tech_report(code, trade_date, stock_name=name)
+    name = name or ''
+
+    insert_sql = """
+        INSERT INTO trade_tech_report
+            (stock_code, stock_name, trade_date, score, score_label, ma_pattern, max_severity,
+             summary, signals, indicators, html_content)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            stock_name   = VALUES(stock_name),
+            score        = VALUES(score),
+            score_label  = VALUES(score_label),
+            ma_pattern   = VALUES(ma_pattern),
+            max_severity = VALUES(max_severity),
+            summary      = VALUES(summary),
+            signals      = VALUES(signals),
+            indicators   = VALUES(indicators),
+            html_content = VALUES(html_content)
+    """
+    execute_update(insert_sql, (
+        code, name, data['trade_date'],
+        data['score'], data['score_label'], data.get('ma_pattern', ''),
+        data['max_severity'],
+        data['summary'], data['signals'], data['indicators'],
+        data.get('html_content', ''),
+    ))
+
+    rows = list(execute_query(cache_sql, (code, data['trade_date'])))
+    report = _row_to_detail(rows[0]) if rows else _build_detail_from_data(data, name)
+    return json.dumps({'generated': True, 'report': report}, ensure_ascii=False, default=str)
