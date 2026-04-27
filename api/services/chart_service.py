@@ -197,54 +197,66 @@ _DAILY_SQL = """
 """
 
 _WEEKLY_SQL = """
-    SELECT
-        stock_code,
-        YEARWEEK(trade_date, 1) as week_key,
-        MIN(trade_date) as trade_date,
-        MAX(trade_date) as last_trade_date,
-        (SELECT open_price FROM trade_stock_daily t2
-         WHERE t2.stock_code = t1.stock_code
-           AND YEARWEEK(t2.trade_date, 1) = YEARWEEK(t1.trade_date, 1)
-         ORDER BY t2.trade_date ASC LIMIT 1) as `open`,
-        MAX(high_price) as high,
-        MIN(low_price) as low,
-        (SELECT close_price FROM trade_stock_daily t2
-         WHERE t2.stock_code = t1.stock_code
-           AND YEARWEEK(t2.trade_date, 1) = YEARWEEK(t1.trade_date, 1)
-         ORDER BY t2.trade_date DESC LIMIT 1) as `close`,
-        SUM(volume) as volume,
-        SUM(amount) as amount,
-        AVG(turnover_rate) as turnover_rate
-    FROM trade_stock_daily t1
-    WHERE stock_code = %s
-    GROUP BY stock_code, YEARWEEK(trade_date, 1)
-    ORDER BY week_key DESC
+    SELECT w.stock_code,
+           w.week_key,
+           w.trade_date,
+           w.last_trade_date,
+           o.open_price  as `open`,
+           w.high,
+           w.low,
+           c.close_price as `close`,
+           w.volume,
+           w.amount,
+           w.turnover_rate
+    FROM (
+        SELECT stock_code,
+               YEARWEEK(trade_date, 1) as week_key,
+               MIN(trade_date) as trade_date,
+               MAX(trade_date) as last_trade_date,
+               MAX(high_price) as high,
+               MIN(low_price) as low,
+               SUM(volume) as volume,
+               SUM(amount) as amount,
+               AVG(turnover_rate) as turnover_rate
+        FROM trade_stock_daily
+        WHERE stock_code = %s
+        GROUP BY stock_code, YEARWEEK(trade_date, 1)
+    ) w
+    JOIN trade_stock_daily o ON o.stock_code = w.stock_code AND o.trade_date = w.trade_date
+    JOIN trade_stock_daily c ON c.stock_code = w.stock_code AND c.trade_date = w.last_trade_date
+    ORDER BY w.week_key DESC
     LIMIT %s
 """
 
 _MONTHLY_SQL = """
-    SELECT
-        stock_code,
-        DATE_FORMAT(trade_date, '%%Y-%%m') as month_key,
-        MIN(trade_date) as trade_date,
-        MAX(trade_date) as last_trade_date,
-        (SELECT open_price FROM trade_stock_daily t2
-         WHERE t2.stock_code = t1.stock_code
-           AND DATE_FORMAT(t2.trade_date, '%%Y-%%m') = DATE_FORMAT(t1.trade_date, '%%Y-%%m')
-         ORDER BY t2.trade_date ASC LIMIT 1) as `open`,
-        MAX(high_price) as high,
-        MIN(low_price) as low,
-        (SELECT close_price FROM trade_stock_daily t2
-         WHERE t2.stock_code = t1.stock_code
-           AND DATE_FORMAT(t2.trade_date, '%%Y-%%m') = DATE_FORMAT(t1.trade_date, '%%Y-%%m')
-         ORDER BY t2.trade_date DESC LIMIT 1) as `close`,
-        SUM(volume) as volume,
-        SUM(amount) as amount,
-        AVG(turnover_rate) as turnover_rate
-    FROM trade_stock_daily t1
-    WHERE stock_code = %s
-    GROUP BY stock_code, DATE_FORMAT(trade_date, '%%Y-%%m')
-    ORDER BY month_key DESC
+    SELECT m.stock_code,
+           m.month_key,
+           m.trade_date,
+           m.last_trade_date,
+           o.open_price  as `open`,
+           m.high,
+           m.low,
+           c.close_price as `close`,
+           m.volume,
+           m.amount,
+           m.turnover_rate
+    FROM (
+        SELECT stock_code,
+               DATE_FORMAT(trade_date, '%%Y-%%m') as month_key,
+               MIN(trade_date) as trade_date,
+               MAX(trade_date) as last_trade_date,
+               MAX(high_price) as high,
+               MIN(low_price) as low,
+               SUM(volume) as volume,
+               SUM(amount) as amount,
+               AVG(turnover_rate) as turnover_rate
+        FROM trade_stock_daily
+        WHERE stock_code = %s
+        GROUP BY stock_code, DATE_FORMAT(trade_date, '%%Y-%%m')
+    ) m
+    JOIN trade_stock_daily o ON o.stock_code = m.stock_code AND o.trade_date = m.trade_date
+    JOIN trade_stock_daily c ON c.stock_code = m.stock_code AND c.trade_date = m.last_trade_date
+    ORDER BY m.month_key DESC
     LIMIT %s
 """
 
