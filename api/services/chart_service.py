@@ -110,20 +110,25 @@ def get_kline_with_indicators(
     """
     Return merged K-line + technical indicator data for frontend chart.
     This is the primary endpoint for the K-line chart component.
+
+    For weekly/monthly periods, each K-line bar carries the indicator values
+    of its **last** trading day (the day whose close price equals the bar's
+    close).  This ensures the indicators reflect the period-end state.
     """
     kline = get_kline_data(stock_code, period, limit)
     if kline['count'] == 0:
         return kline
 
-    # Use the resolved stock_code from kline to avoid redundant suffix lookup
-    indicators = get_technical_indicators(kline['stock_code'], limit)
+    # For weekly/monthly we need more daily indicator rows than the
+    # number of aggregated bars (1 week ~ 5 daily rows).
+    ind_limit = limit if period == 'daily' else limit * 6
+    indicators = get_technical_indicators(kline['stock_code'], ind_limit)
 
     # Build date -> indicator lookup
     ind_map = {}
     for item in indicators.get('data', []):
         ind_map[item['date']] = item
 
-    # Merge
     _merge_fields = (
         'ma5', 'ma10', 'ma20', 'ma60', 'ma120', 'ma250',
         'macd_dif', 'macd_dea', 'macd_histogram',
@@ -138,12 +143,28 @@ def get_kline_with_indicators(
         'bollinger_lower': 'boll_lower',
     }
 
-    for k in kline['data']:
-        ind = ind_map.get(k['date'])
-        if not ind:
-            continue
-        for f in _merge_fields:
-            k[_rename.get(f, f)] = ind.get(f)
+    if period == 'daily':
+        # Direct date match
+        for k in kline['data']:
+            ind = ind_map.get(k['date'])
+            if not ind:
+                continue
+            for f in _merge_fields:
+                k[_rename.get(f, f)] = ind.get(f)
+    else:
+        # For weekly/monthly bars, match indicators by the bar's
+        # last_trade_date (period-end date) instead of the bar's date
+        # (period-start date).
+        for k in kline['data']:
+            last_date = k.get('last_trade_date')
+            ind = ind_map.get(last_date) if last_date else None
+            if not ind:
+                # Fallback: try the bar's own date (period-start)
+                ind = ind_map.get(k['date'])
+            if not ind:
+                continue
+            for f in _merge_fields:
+                k[_rename.get(f, f)] = ind.get(f)
 
     return kline
 
@@ -180,6 +201,7 @@ _WEEKLY_SQL = """
         stock_code,
         YEARWEEK(trade_date, 1) as week_key,
         MIN(trade_date) as trade_date,
+        MAX(trade_date) as last_trade_date,
         (SELECT open_price FROM trade_stock_daily t2
          WHERE t2.stock_code = t1.stock_code
            AND YEARWEEK(t2.trade_date, 1) = YEARWEEK(t1.trade_date, 1)
@@ -205,6 +227,7 @@ _MONTHLY_SQL = """
         stock_code,
         DATE_FORMAT(trade_date, '%%Y-%%m') as month_key,
         MIN(trade_date) as trade_date,
+        MAX(trade_date) as last_trade_date,
         (SELECT open_price FROM trade_stock_daily t2
          WHERE t2.stock_code = t1.stock_code
            AND DATE_FORMAT(t2.trade_date, '%%Y-%%m') = DATE_FORMAT(t1.trade_date, '%%Y-%%m')
@@ -235,7 +258,7 @@ def _row_to_dict(row: dict) -> dict:
     def _float(v):
         return float(v) if v is not None else None
 
-    return {
+    result = {
         'date': td,
         'open': _float(row.get('open')),
         'high': _float(row.get('high')),
@@ -245,6 +268,16 @@ def _row_to_dict(row: dict) -> dict:
         'amount': _float(row.get('amount')),
         'turnover_rate': _float(row.get('turnover_rate')),
     }
+
+    # For weekly/monthly aggregated rows, include the last trading date of
+    # the period so that indicators can be matched by period-end date.
+    ltd = row.get('last_trade_date')
+    if ltd is not None:
+        if isinstance(ltd, date_type):
+            ltd = ltd.isoformat()
+        result['last_trade_date'] = ltd
+
+    return result
 
 
 def _indicator_row_to_dict(row: dict) -> dict:
