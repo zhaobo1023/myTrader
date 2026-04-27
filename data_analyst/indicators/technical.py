@@ -276,7 +276,18 @@ class TechnicalIndicatorCalculator:
             stock_code: 股票代码
             data: 包含技术指标的DataFrame
         """
-        # 准备数据
+        # 准备数据 -- NaN 必须转为 None，否则 pymysql 报错
+        def _safe(v):
+            if v is None:
+                return None
+            if isinstance(v, float) and (v != v):
+                return None
+            if hasattr(v, 'item'):
+                v = v.item()
+                if isinstance(v, float) and (v != v):
+                    return None
+            return v
+
         records = []
         for idx, row in data.iterrows():
             if pd.isna(row.get('ma5')):
@@ -285,27 +296,27 @@ class TechnicalIndicatorCalculator:
             record = (
                 stock_code,
                 row['trade_date'],
-                row.get('ma5'),
-                row.get('ma10'),
-                row.get('ma20'),
-                row.get('ma60'),
-                row.get('ma120'),
-                row.get('ma250'),
-                row.get('macd_dif'),
-                row.get('macd_dea'),
-                row.get('macd_histogram'),
-                row.get('rsi_6'),
-                row.get('rsi_12'),
-                row.get('rsi_24'),
-                row.get('kdj_k'),
-                row.get('kdj_d'),
-                row.get('kdj_j'),
-                row.get('bollinger_upper'),
-                row.get('bollinger_middle'),
-                row.get('bollinger_lower'),
-                row.get('atr'),
-                row.get('volume_ratio'),
-                row.get('turnover_rate'),
+                _safe(row.get('ma5')),
+                _safe(row.get('ma10')),
+                _safe(row.get('ma20')),
+                _safe(row.get('ma60')),
+                _safe(row.get('ma120')),
+                _safe(row.get('ma250')),
+                _safe(row.get('macd_dif')),
+                _safe(row.get('macd_dea')),
+                _safe(row.get('macd_histogram')),
+                _safe(row.get('rsi_6')),
+                _safe(row.get('rsi_12')),
+                _safe(row.get('rsi_24')),
+                _safe(row.get('kdj_k')),
+                _safe(row.get('kdj_d')),
+                _safe(row.get('kdj_j')),
+                _safe(row.get('bollinger_upper')),
+                _safe(row.get('bollinger_middle')),
+                _safe(row.get('bollinger_lower')),
+                _safe(row.get('atr')),
+                _safe(row.get('volume_ratio')),
+                _safe(row.get('turnover_rate')),
             )
             records.append(record)
 
