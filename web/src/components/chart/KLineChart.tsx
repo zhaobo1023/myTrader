@@ -39,6 +39,7 @@ const DEFAULT_TOGGLE: IndicatorToggle = {
 interface Props {
   stockCode: string;
   stockName?: string;
+  defaultCollapsed?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +150,7 @@ function getInterpretation(
 // Component
 // ---------------------------------------------------------------------------
 
-export default function KLineChart({ stockCode, stockName }: Props) {
+export default function KLineChart({ stockCode, stockName, defaultCollapsed = false }: Props) {
   const mainRef = useRef<HTMLDivElement>(null);
   const macdRef = useRef<HTMLDivElement>(null);
   const rsiRef = useRef<HTMLDivElement>(null);
@@ -159,6 +160,7 @@ export default function KLineChart({ stockCode, stockName }: Props) {
   const rsiChartRef = useRef<IChartApi | null>(null);
   const kdjChartRef = useRef<IChartApi | null>(null);
 
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [period, setPeriod] = useState<Period>('daily');
   const [indicators, setIndicators] = useState<IndicatorToggle>(DEFAULT_TOGGLE);
   const [loading, setLoading] = useState(false);
@@ -518,8 +520,11 @@ export default function KLineChart({ stockCode, stockName }: Props) {
 
   return (
     <div>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px', flexWrap: 'wrap' }}>
+      {/* Header - clickable to collapse/expand */}
+      <div
+        onClick={() => setCollapsed(c => !c)}
+        style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: collapsed ? '0' : '12px', flexWrap: 'wrap', cursor: 'pointer', userSelect: 'none' }}
+      >
         <span style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>
           {stockName || stockCode}
         </span>
@@ -536,70 +541,80 @@ export default function KLineChart({ stockCode, stockName }: Props) {
 
         <div style={{ flex: 1 }} />
 
-        {/* Period toggle */}
-        <div style={{ display: 'flex', gap: '4px' }}>
-          {periodBtn('daily', '日K')}
-          {periodBtn('weekly', '周K')}
-          {periodBtn('monthly', '月K')}
-        </div>
+        <span style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '2px 6px' }}>
+          {collapsed ? '展开' : '收起'}
+        </span>
+
+        {/* Period toggle - stop propagation so clicking period doesn't toggle collapse */}
+        {!collapsed && (
+          <div style={{ display: 'flex', gap: '4px' }} onClick={e => e.stopPropagation()}>
+            {periodBtn('daily', '日K')}
+            {periodBtn('weekly', '周K')}
+            {periodBtn('monthly', '月K')}
+          </div>
+        )}
       </div>
 
-      {/* Indicator toggles */}
-      <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
-        {toggleBtn('ma', 'MA', '#3b82f6')}
-        {toggleBtn('boll', 'BOLL', '#f59e0b')}
-        {toggleBtn('volume', 'VOL', '#6b7280')}
-        {toggleBtn('macd', 'MACD', '#a855f7')}
-        {toggleBtn('rsi', 'RSI', '#06b6d4')}
-        {toggleBtn('kdj', 'KDJ', '#f97316')}
-      </div>
-
-      {/* Indicator interpretation panel */}
-      {interpretationText && (
-        <div style={{
-          fontSize: '12px',
-          lineHeight: '1.6',
-          color: 'var(--text-secondary)',
-          background: 'var(--bg-elevated)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: '6px',
-          padding: '8px 12px',
-          marginBottom: '10px',
-        }}>
-          {interpretationText}
-        </div>
-      )}
-
-      {/* Chart area */}
-      {loading && (
-        <div style={{ color: 'var(--text-muted)', fontSize: '12px', padding: '40px 0', textAlign: 'center' }}>
-          加载中...
-        </div>
-      )}
-      {error && (
-        <div style={{ color: 'var(--text-muted)', fontSize: '12px', padding: '40px 0', textAlign: 'center' }}>
-          {error}
-        </div>
-      )}
-
-      <div ref={mainRef} style={{ display: data.length > 0 ? 'block' : 'none' }} />
-
-      {indicators.macd && (
+      {!collapsed && (
         <>
-          {subLabel('MACD  DIF  DEA')}
-          <div ref={macdRef} style={{ display: data.length > 0 ? 'block' : 'none', marginTop: '1px' }} />
-        </>
-      )}
-      {indicators.rsi && (
-        <>
-          {subLabel('RSI-12    70 / 50 / 30')}
-          <div ref={rsiRef} style={{ display: data.length > 0 ? 'block' : 'none', marginTop: '1px' }} />
-        </>
-      )}
-      {indicators.kdj && (
-        <>
-          {subLabel('KDJ    K  D  J    80 / 20')}
-          <div ref={kdjRef} style={{ display: data.length > 0 ? 'block' : 'none', marginTop: '1px' }} />
+          {/* Indicator toggles */}
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
+            {toggleBtn('ma', 'MA', '#3b82f6')}
+            {toggleBtn('boll', 'BOLL', '#f59e0b')}
+            {toggleBtn('volume', 'VOL', '#6b7280')}
+            {toggleBtn('macd', 'MACD', '#a855f7')}
+            {toggleBtn('rsi', 'RSI', '#06b6d4')}
+            {toggleBtn('kdj', 'KDJ', '#f97316')}
+          </div>
+
+          {/* Indicator interpretation panel */}
+          {interpretationText && (
+            <div style={{
+              fontSize: '12px',
+              lineHeight: '1.6',
+              color: 'var(--text-secondary)',
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: '6px',
+              padding: '8px 12px',
+              marginBottom: '10px',
+            }}>
+              {interpretationText}
+            </div>
+          )}
+
+          {/* Chart area */}
+          {loading && (
+            <div style={{ color: 'var(--text-muted)', fontSize: '12px', padding: '40px 0', textAlign: 'center' }}>
+              加载中...
+            </div>
+          )}
+          {error && (
+            <div style={{ color: 'var(--text-muted)', fontSize: '12px', padding: '40px 0', textAlign: 'center' }}>
+              {error}
+            </div>
+          )}
+
+          <div ref={mainRef} style={{ display: data.length > 0 ? 'block' : 'none' }} />
+
+          {indicators.macd && (
+            <>
+              {subLabel('MACD  DIF  DEA')}
+              <div ref={macdRef} style={{ display: data.length > 0 ? 'block' : 'none', marginTop: '1px' }} />
+            </>
+          )}
+          {indicators.rsi && (
+            <>
+              {subLabel('RSI-12    70 / 50 / 30')}
+              <div ref={rsiRef} style={{ display: data.length > 0 ? 'block' : 'none', marginTop: '1px' }} />
+            </>
+          )}
+          {indicators.kdj && (
+            <>
+              {subLabel('KDJ    K  D  J    80 / 20')}
+              <div ref={kdjRef} style={{ display: data.length > 0 ? 'block' : 'none', marginTop: '1px' }} />
+            </>
+          )}
         </>
       )}
     </div>

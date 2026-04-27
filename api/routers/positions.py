@@ -91,7 +91,7 @@ async def list_positions(
         from config.db import execute_query
         ph = ','.join(['%s'] * len(codes))
         rows = execute_query(
-            f'SELECT stock_code, sw_level1 FROM trade_stock_info WHERE stock_code IN ({ph})',
+            f'SELECT stock_code, sw_level1 FROM trade_stock_basic WHERE stock_code IN ({ph})',
             tuple(codes), env='online',
         )
         if rows:

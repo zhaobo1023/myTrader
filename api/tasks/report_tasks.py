@@ -224,7 +224,16 @@ def _generate_technical_report(stock_code: str, stock_name: str) -> str:
 
     from api.services.analysis_service import get_or_generate_tech_report
 
-    result = asyncio.get_event_loop().run_until_complete(
+    # Celery worker threads may not have an event loop; create one if needed
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError('closed')
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    result = loop.run_until_complete(
         get_or_generate_tech_report(stock_code=stock_code, stock_name=stock_name)
     )
     # get_or_generate_tech_report returns a dict; we serialize the key fields as text

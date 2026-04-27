@@ -36,6 +36,7 @@ services:
     restart: unless-stopped
     networks:
       - mytrader-network
+      - app-network
 
   # ============================================================
   # Next.js - Frontend
@@ -101,6 +102,7 @@ services:
     restart: unless-stopped
     networks:
       - mytrader-network
+      - app-network
 
   # ============================================================
   # Celery Beat - Periodic Task Scheduler
@@ -125,6 +127,7 @@ services:
     restart: unless-stopped
     networks:
       - mytrader-network
+      - app-network
 
   # ============================================================
   # Local Model Service - BGE Embedding + Sentiment (CPU)
@@ -162,3 +165,6 @@ volumes:
 networks:
   mytrader-network:
     driver: bridge
+  app-network:
+    external: true
+    name: app_mytrader-network

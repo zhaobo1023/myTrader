@@ -477,6 +477,7 @@ async def generate_one_pager(body: OnePagerRequest):
             yield f"data: {json.dumps({'type': 'error', 'message': f'初始化失败: {exc}'}, ensure_ascii=False)}\n\n"
             return
 
+        try:
             # Data collection step
             yield f"data: {json.dumps({'type': 'step_start', 'step': 'data', 'name': '数据采集'}, ensure_ascii=False)}\n\n"
             data_blocks = analyzer._data_collector.collect(stock_code, stock_name)
