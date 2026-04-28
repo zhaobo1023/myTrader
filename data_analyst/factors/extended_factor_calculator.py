@@ -49,8 +49,83 @@ def get_all_stock_codes():
     return [r['stock_code'] for r in rows]
 
 
+def load_daily_data_batched(all_codes, start_date, end_date, batch_size=1000, env='online'):
+    """分批加载全市场日线数据，合并为单个 DataFrame"""
+    frames = []
+    total_batches = (len(all_codes) + batch_size - 1) // batch_size
+
+    for i in range(0, len(all_codes), batch_size):
+        batch_codes = all_codes[i:i + batch_size]
+        batch_num = i // batch_size + 1
+        ph = ','.join(['%s'] * len(batch_codes))
+        sql = f"""
+            SELECT stock_code, trade_date, open_price, high_price, low_price,
+                   close_price, volume, amount, turnover_rate
+            FROM trade_stock_daily
+            WHERE stock_code IN ({ph})
+              AND trade_date >= %s AND trade_date <= %s
+            ORDER BY stock_code, trade_date ASC
+        """
+        rows = execute_query(sql, batch_codes + [start_date, end_date], env=env)
+        if rows:
+            frames.append(pd.DataFrame(rows))
+            logger.info(f"  日线数据批次 {batch_num}/{total_batches}: "
+                        f"{len(rows)} 行 (累计 {sum(len(f) for f in frames)})")
+
+    if not frames:
+        return pd.DataFrame()
+
+    df = pd.concat(frames, ignore_index=True)
+    df['trade_date'] = pd.to_datetime(df['trade_date'])
+    for col in ['open_price', 'high_price', 'low_price', 'close_price',
+                'volume', 'amount', 'turnover_rate']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    df = df.sort_values(['stock_code', 'trade_date']).reset_index(drop=True)
+    return df
+
+
+def load_financial_data_batched(all_codes, batch_size=1000, env='online'):
+    """分批加载全市场财务数据，合并为单个 DataFrame"""
+    frames = []
+    total_batches = (len(all_codes) + batch_size - 1) // batch_size
+
+    for i in range(0, len(all_codes), batch_size):
+        batch_codes = all_codes[i:i + batch_size]
+        batch_num = i // batch_size + 1
+        ph = ','.join(['%s'] * len(batch_codes))
+        sql = f"""
+            SELECT stock_code, report_date, roe, net_profit, revenue,
+                   gross_margin, operating_cashflow, eps, total_equity
+            FROM trade_stock_financial
+            WHERE stock_code IN ({ph})
+            ORDER BY stock_code, report_date ASC
+        """
+        rows = execute_query(sql, batch_codes, env=env)
+        if rows:
+            frames.append(pd.DataFrame(rows))
+            logger.info(f"  财务数据批次 {batch_num}/{total_batches}: "
+                        f"{len(rows)} 行 (累计 {sum(len(f) for f in frames)})")
+
+    if not frames:
+        return pd.DataFrame()
+
+    df = pd.concat(frames, ignore_index=True)
+    df['report_date'] = pd.to_datetime(df['report_date'])
+    for col in ['roe', 'net_profit', 'revenue', 'gross_margin',
+                'operating_cashflow', 'eps', 'total_equity']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    df = df.sort_values(['stock_code', 'report_date']).reset_index(drop=True)
+    return df
+
+
+# --- Legacy per-stock loading (kept for backward compatibility) ---
+
 def load_stock_daily_data(stock_codes, start_date, end_date):
-    """批量加载指定股票的K线数据"""
+    """批量加载指定股票的K线数据 (dict格式, 旧接口)"""
     if not stock_codes:
         return {}
 
@@ -87,7 +162,7 @@ def load_stock_daily_data(stock_codes, start_date, end_date):
 
 
 def load_financial_data(stock_codes):
-    """加载财务数据"""
+    """加载财务数据 (dict格式, 旧接口)"""
     if not stock_codes:
         return {}
 
@@ -107,7 +182,6 @@ def load_financial_data(stock_codes):
     df = pd.DataFrame(rows)
     df['report_date'] = pd.to_datetime(df['report_date'])
 
-    # 转换数值
     for col in ['roe', 'net_profit', 'revenue', 'gross_margin', 'operating_cashflow', 'eps', 'total_equity']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -403,118 +477,272 @@ def save_factors_batch(factors_data):
     return len(records)
 
 
+def calc_price_volume_factors_vectorized(df):
+    """
+    向量化计算全市场量价因子
+
+    Args:
+        df: DataFrame with columns [stock_code, trade_date, close_price,
+            high_price, low_price, volume, amount, turnover_rate]
+            sorted by [stock_code, trade_date]
+
+    Returns:
+        DataFrame with factor columns added, same rows as input
+    """
+    g = df.groupby('stock_code')
+
+    df['mom_5'] = g['close_price'].transform(lambda x: x.pct_change(5))
+    df['mom_10'] = g['close_price'].transform(lambda x: x.pct_change(10))
+    df['reversal_1'] = -g['close_price'].transform(lambda x: x.pct_change(1))
+    df['turnover_20_mean'] = g['turnover_rate'].transform(
+        lambda x: x.rolling(20, min_periods=20).mean()
+    )
+
+    # Amihud: |return| / amount * 1e8, rolling 20-day mean
+    daily_ret_abs = g['close_price'].transform(lambda x: x.pct_change().abs())
+    amount_safe = df['amount'].replace(0, np.nan)
+    raw_amihud = daily_ret_abs / amount_safe * 1e8
+    df['amihud_illiquidity'] = raw_amihud.groupby(df['stock_code']).transform(
+        lambda x: x.rolling(20, min_periods=20).mean()
+    )
+
+    df['high_low_ratio'] = (df['high_price'] - df['low_price']) / df['close_price']
+
+    vol_ma_20 = g['volume'].transform(lambda x: x.rolling(20, min_periods=20).mean())
+    df['volume_ratio_20'] = df['volume'] / vol_ma_20.replace(0, np.nan)
+
+    return df
+
+
+def calc_financial_factors_vectorized(daily_df, fin_df):
+    """
+    向量化计算全市场财务因子
+
+    对每只股票的每个交易日，用 merge_asof(by='stock_code') 找到最近的财报数据,
+    然后计算 roe_ttm, gross_margin, net_profit_growth, revenue_growth。
+
+    Args:
+        daily_df: DataFrame with [stock_code, trade_date] (sorted)
+        fin_df: DataFrame with [stock_code, report_date, roe, ...]
+
+    Returns:
+        DataFrame with financial factor columns, indexed same as daily_df
+    """
+    if fin_df.empty:
+        daily_df['roe_ttm'] = np.nan
+        daily_df['gross_margin'] = np.nan
+        daily_df['net_profit_growth'] = np.nan
+        daily_df['revenue_growth'] = np.nan
+        return daily_df
+
+    fin = fin_df.copy()
+    fin = fin.rename(columns={'report_date': 'trade_date'})
+
+    # Compute YoY growth per stock before merge
+    fin = fin.sort_values(['stock_code', 'trade_date'])
+    fin['net_profit_growth'] = fin.groupby('stock_code')['net_profit'].transform(
+        lambda x: x.pct_change(4)
+    )
+    fin['revenue_growth'] = fin.groupby('stock_code')['revenue'].transform(
+        lambda x: x.pct_change(4)
+    )
+
+    fin_merge = fin[['stock_code', 'trade_date', 'roe', 'gross_margin',
+                      'net_profit_growth', 'revenue_growth']].copy()
+    # merge_asof requires the 'on' key to be sorted globally
+    fin_merge = fin_merge.sort_values('trade_date')
+
+    # Use merge_asof with by='stock_code' for vectorized per-stock lookup
+    daily_sorted = daily_df[['stock_code', 'trade_date']].copy()
+    daily_sorted = daily_sorted.sort_values('trade_date')
+
+    merged = pd.merge_asof(
+        daily_sorted,
+        fin_merge,
+        on='trade_date',
+        by='stock_code',
+        direction='backward'
+    )
+    merged = merged.rename(columns={'roe': 'roe_ttm'})
+
+    daily_df = daily_df.merge(
+        merged[['stock_code', 'trade_date', 'roe_ttm', 'gross_margin',
+                 'net_profit_growth', 'revenue_growth']],
+        on=['stock_code', 'trade_date'],
+        how='left'
+    )
+
+    return daily_df
+
+
+def save_factors_dataframe(df, env='online'):
+    """
+    批量保存因子 DataFrame 到数据库
+
+    Args:
+        df: DataFrame with columns [stock_code, trade_date, factor_columns...]
+        env: 数据库环境
+
+    Returns:
+        写入行数
+    """
+    factor_cols = ['mom_5', 'mom_10', 'reversal_1', 'turnover_20_mean',
+                   'amihud_illiquidity', 'high_low_ratio', 'volume_ratio_20',
+                   'roe_ttm', 'gross_margin', 'net_profit_growth', 'revenue_growth']
+
+    out = df[['stock_code', 'trade_date'] + factor_cols].copy()
+    out['trade_date'] = pd.to_datetime(out['trade_date']).dt.strftime('%Y-%m-%d')
+
+    # NaN/inf -> None for SQL
+    out = out.replace({np.nan: None, np.inf: None, -np.inf: None})
+
+    records = list(out.itertuples(index=False, name=None))
+
+    sql = """
+        REPLACE INTO trade_stock_extended_factor
+        (stock_code, calc_date, mom_5, mom_10, reversal_1,
+         turnover_20_mean, amihud_illiquidity, high_low_ratio, volume_ratio_20,
+         roe_ttm, gross_margin, net_profit_growth, revenue_growth)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+
+    conn, conn2 = get_dual_connections(primary_env=env)
+    total_saved = 0
+    batch_insert_size = 2000
+
+    try:
+        cursor = conn.cursor()
+        for i in range(0, len(records), batch_insert_size):
+            batch = records[i:i + batch_insert_size]
+            cursor.executemany(sql, batch)
+            conn.commit()
+            total_saved += len(batch)
+        cursor.close()
+    except Exception as e:
+        logger.error(f"Primary write failed: {e}")
+    finally:
+        conn.close()
+
+    if conn2:
+        try:
+            cursor2 = conn2.cursor()
+            for i in range(0, len(records), batch_insert_size):
+                batch = records[i:i + batch_insert_size]
+                cursor2.executemany(sql, batch)
+                conn2.commit()
+            cursor2.close()
+        except Exception as e:
+            logger.warning("Dual-write failed: %s", e)
+        finally:
+            conn2.close()
+
+    return total_saved
+
+
 def main():
-    """主函数 - 按股票分批回填扩展因子（财务数据按批加载，避免 OOM）"""
+    """主函数 - 全市场向量化计算扩展因子"""
     import argparse as _ap
     parser = _ap.ArgumentParser(description='扩展因子计算')
     parser.add_argument('--start', type=str, default=None, help='回填起始日期 YYYY-MM-DD')
     parser.add_argument('--end', type=str, default=None, help='回填结束日期 YYYY-MM-DD')
+    parser.add_argument('--env', type=str, default='online', help='数据库环境')
     args = parser.parse_args()
 
     global START_DATE, END_DATE, DATA_START_DATE
     if args.start:
         START_DATE = args.start
-        # data_start 往前推120天保证因子计算有足够历史
-        data_start_dt = pd.to_datetime(START_DATE) - pd.Timedelta(days=120)
+        data_start_dt = pd.to_datetime(START_DATE) - pd.Timedelta(days=180)
         DATA_START_DATE = data_start_dt.strftime('%Y-%m-%d')
     if args.end:
         END_DATE = args.end
 
+    env = args.env
+
     logger.info("=" * 60)
-    logger.info("扩展因子计算程序")
+    logger.info("扩展因子计算程序（向量化模式）")
     logger.info(f"回填范围: {START_DATE} ~ {END_DATE}")
     logger.info(f"数据加载范围: {DATA_START_DATE} ~ {END_DATE}")
     logger.info("=" * 60)
 
+    t_total = time()
+
     # 1. 创建表
-    logger.info(f"\n[1] 初始化扩展因子表...")
+    logger.info("[1] 初始化扩展因子表...")
     create_extended_factor_table()
 
     # 2. 获取所有股票代码
-    logger.info(f"\n[2] 获取股票列表...")
+    logger.info("[2] 获取股票列表...")
     all_codes = get_all_stock_codes()
-    total_stocks = len(all_codes)
-    logger.info(f"  共 {total_stocks} 只股票")
+    logger.info(f"  共 {len(all_codes)} 只股票")
 
-    # 3. 分批处理（财务数据 + 日线数据同时按批加载）
-    logger.info(f"\n[3] 开始分批处理 (每批 {BATCH_SIZE} 只股票)...")
-    total_records = 0
-    total_time_start = time()
+    # 3. 分批加载全市场日线数据
+    logger.info("[3] 加载全市场日线数据...")
+    t0 = time()
+    daily_df = load_daily_data_batched(all_codes, DATA_START_DATE, END_DATE, env=env)
+    if daily_df.empty:
+        logger.error("无日线数据")
+        return
+    t1 = time()
+    logger.info(f"  日线数据加载完成: {len(daily_df)} 行, {daily_df['stock_code'].nunique()} 只股票, "
+                f"耗时 {t1-t0:.1f}s")
 
-    for batch_idx in range(0, total_stocks, BATCH_SIZE):
-        batch_codes = all_codes[batch_idx:batch_idx + BATCH_SIZE]
-        batch_num = batch_idx // BATCH_SIZE + 1
-        total_batches = (total_stocks + BATCH_SIZE - 1) // BATCH_SIZE
+    # 4. 分批加载全市场财务数据
+    logger.info("[4] 加载全市场财务数据...")
+    fin_df = load_financial_data_batched(all_codes, env=env)
+    t2 = time()
+    logger.info(f"  财务数据加载完成: {len(fin_df)} 行, "
+                f"{fin_df['stock_code'].nunique() if not fin_df.empty else 0} 只股票, "
+                f"耗时 {t2-t1:.1f}s")
 
-        logger.info(f"\n--- 批次 {batch_num}/{total_batches} ({len(batch_codes)} 只股票) ---")
+    # 5. 过滤数据不足的股票 (< 60 交易日)
+    stock_counts = daily_df.groupby('stock_code').size()
+    valid_stocks = stock_counts[stock_counts >= 60].index
+    daily_df = daily_df[daily_df['stock_code'].isin(valid_stocks)].copy()
+    logger.info(f"  过滤后: {daily_df['stock_code'].nunique()} 只股票 "
+                f"(去除 {len(stock_counts) - len(valid_stocks)} 只数据不足)")
 
-        # 加载财务数据（仅当前批次）
-        t0 = time()
-        batch_financial = load_financial_data(batch_codes)
-        logger.info(f"  财务数据: {len(batch_financial)} 只股票, {time()-t0:.1f}s")
+    # 6. 向量化计算量价因子
+    logger.info("[5] 计算量价因子...")
+    t3 = time()
+    daily_df = calc_price_volume_factors_vectorized(daily_df)
+    t4 = time()
+    logger.info(f"  量价因子计算完成, 耗时 {t4-t3:.1f}s")
 
-        # 加载日线数据
-        t0 = time()
-        stock_data = load_stock_daily_data(batch_codes, DATA_START_DATE, END_DATE)
-        logger.info(f"  日线数据: {len(stock_data)} 只股票, {time()-t0:.1f}s")
+    # 7. 向量化计算财务因子
+    logger.info("[6] 计算财务因子...")
+    daily_df = calc_financial_factors_vectorized(daily_df, fin_df)
+    t5 = time()
+    logger.info(f"  财务因子计算完成, 耗时 {t5-t4:.1f}s")
+    del fin_df
+    gc.collect()
 
-        if not stock_data:
-            del batch_financial
-            gc.collect()
-            continue
+    # 8. 过滤日期范围 (只保留回填范围内的数据)
+    start_dt = pd.to_datetime(START_DATE)
+    end_dt = pd.to_datetime(END_DATE)
+    output_df = daily_df[
+        (daily_df['trade_date'] >= start_dt) & (daily_df['trade_date'] <= end_dt)
+    ].copy()
+    logger.info(f"  输出范围: {len(output_df)} 行, "
+                f"{output_df['stock_code'].nunique()} 只股票")
 
-        # 计算因子
-        t0 = time()
-        factors_data = {}
-        for code, df in stock_data.items():
-            try:
-                # 计算量价因子
-                price_factors = calc_price_volume_factors(df)
+    del daily_df
+    gc.collect()
 
-                # 计算财务因子
-                financial_df = batch_financial.get(code)
-                financial_factors = calc_financial_factors(df, financial_df) if financial_df is not None else None
+    if output_df.empty:
+        logger.info("无数据需要写入")
+        return
 
-                # 合并因子
-                merged_factors = merge_and_prepare_factors(price_factors, financial_factors, code)
+    # 9. 保存到数据库
+    logger.info("[7] 保存到数据库...")
+    t6 = time()
+    total_records = save_factors_dataframe(output_df, env=env)
+    t7 = time()
+    logger.info(f"  保存完成: {total_records} 条记录, 耗时 {t7-t6:.1f}s")
 
-                if merged_factors is not None and not merged_factors.empty:
-                    start_dt = pd.to_datetime(START_DATE)
-                    end_dt = pd.to_datetime(END_DATE)
-                    mask = (merged_factors.index >= start_dt) & (merged_factors.index <= end_dt)
-                    filtered = merged_factors[mask]
-                    if not filtered.empty:
-                        factors_data[code] = filtered
-            except Exception as e:
-                logger.debug(f"  {code} 因子计算失败: {e}")
-
-        logger.info(f"  因子计算完成: {len(factors_data)} 只股票有效, 耗时 {time()-t0:.1f}s")
-
-        # 保存到数据库
-        if factors_data:
-            t0 = time()
-            saved = save_factors_batch(factors_data)
-            total_records += saved
-            logger.info(f"  数据保存完成: {saved} 条记录, 耗时 {time()-t0:.1f}s")
-
-        # 释放内存
-        del batch_financial, stock_data, factors_data
-        gc.collect()
-
-        # 显示总进度
-        elapsed = time() - total_time_start
-        processed = min(batch_idx + BATCH_SIZE, total_stocks)
-        speed = processed / elapsed if elapsed > 0 else 0
-        eta = (total_stocks - processed) / speed / 60 if speed > 0 else 0
-
-        logger.info(f"  >>> 总进度: {processed}/{total_stocks} 只股票 ({processed*100/total_stocks:.1f}%)")
-        logger.info(f"  >>> 已保存: {total_records:,} 条记录")
-        logger.info(f"  >>> 预计剩余时间: {eta:.1f} 分钟")
-
-    # 4. 验证结果
-    logger.info(f"\n[4] 验证结果...")
+    # 10. 验证结果
+    logger.info("[8] 验证结果...")
     sql = "SELECT COUNT(*) as cnt FROM trade_stock_extended_factor"
-    result = execute_query(sql)
+    result = execute_query(sql, env=env)
     total = result[0]['cnt'] if result else 0
     logger.info(f"  扩展因子表总记录数: {total:,}")
 
@@ -525,15 +753,14 @@ def main():
         ORDER BY calc_date DESC
         LIMIT 5
     """
-    result = execute_query(sql)
-    logger.info(f"  最近5个交易日:")
+    result = execute_query(sql, env=env)
+    logger.info("  最近5个交易日:")
     for r in result:
         logger.info(f"    {r['calc_date']}: {r['cnt']} 只股票")
 
-    total_elapsed = time() - total_time_start
-    logger.info(f"\n" + "=" * 60)
-    logger.info(f"扩展因子计算完成!")
-    logger.info(f"  总耗时: {total_elapsed/60:.1f} 分钟")
+    total_elapsed = time() - t_total
+    logger.info("=" * 60)
+    logger.info(f"扩展因子计算完成! 总耗时: {total_elapsed:.1f}s")
     logger.info(f"  总记录数: {total_records:,}")
     logger.info("=" * 60)
 
