@@ -440,7 +440,7 @@ class TechnicalIndicatorCalculator:
             )
         return records
 
-    def calculate_for_all_stocks(self, start_date: Optional[str] = None):
+    def calculate_for_all_stocks(self, start_date: Optional[str] = None, lookback_days: int = 500):
         """
         Batch-compute technical indicators for all stocks.
 
@@ -448,6 +448,11 @@ class TechnicalIndicatorCalculator:
         1. Get stock list, load daily data in batches of 500 stocks
         2. Compute indicators with ThreadPoolExecutor per batch
         3. Batch-write results to DB
+
+        Args:
+            start_date: explicit start date (overrides lookback_days)
+            lookback_days: days to look back from today (default 500,
+                           use 1100 for ~3yr coverage needed by monthly K-line)
         """
         import time as _time
         import sys
@@ -457,7 +462,7 @@ class TechnicalIndicatorCalculator:
 
         if start_date is None:
             from datetime import date, timedelta
-            start_date = (date.today() - timedelta(days=500)).strftime('%Y-%m-%d')
+            start_date = (date.today() - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
 
         # Get all stock codes
         code_rows = execute_query(
@@ -563,3 +568,22 @@ class TechnicalIndicatorCalculator:
         total_time = _time.time() - t0
         print(f"\nDone! {total_time:.1f}s total, {total_stocks} stocks, "
               f"{total_records} records, {total_errors} errors")
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Calculate technical indicators')
+    parser.add_argument('--start-date', help='Start date (YYYY-MM-DD)')
+    parser.add_argument('--lookback-days', type=int, default=500,
+                        help='Days to look back (default 500, use 1100 for 3yr)')
+    parser.add_argument('--stock', help='Single stock code (e.g. 600519.SH)')
+    args = parser.parse_args()
+
+    calc = TechnicalIndicatorCalculator()
+    if args.stock:
+        calc.calculate_for_stock(args.stock, start_date=args.start_date)
+    else:
+        calc.calculate_for_all_stocks(
+            start_date=args.start_date,
+            lookback_days=args.lookback_days,
+        )

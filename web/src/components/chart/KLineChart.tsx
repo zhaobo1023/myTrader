@@ -46,6 +46,24 @@ interface Props {
 // Indicator interpretation text
 // ---------------------------------------------------------------------------
 
+// Find the latest bar that has indicator data for the given key
+function findLatestWithIndicator(data: KLineDataPoint[], key: keyof IndicatorToggle): KLineDataPoint | null {
+  const checkFields: Record<string, (d: KLineDataPoint) => boolean> = {
+    ma:     (d) => d.ma5 != null,
+    boll:   (d) => d.boll_upper != null,
+    volume: (d) => true,
+    macd:   (d) => d.macd_dif != null,
+    rsi:    (d) => d.rsi_12 != null,
+    kdj:    (d) => d.kdj_k != null,
+  };
+  const check = checkFields[key];
+  // Search backwards from the end, skip at most 2 bars (today + possibly yesterday)
+  for (let i = data.length - 1; i >= Math.max(0, data.length - 3); i--) {
+    if (check(data[i])) return data[i];
+  }
+  return null;
+}
+
 function getInterpretation(
   key: keyof IndicatorToggle,
   period: Period,
@@ -59,7 +77,8 @@ function getInterpretation(
   // Use the last N bars based on period
   const n = period === 'daily' ? 5 : period === 'weekly' ? 4 : 3;
   const recent = data.slice(-n);
-  const last = data[data.length - 1];
+  // Use the latest bar that has indicator data, not necessarily the very last bar
+  const last = findLatestWithIndicator(data, key) || data[data.length - 1];
   if (!last) return null;
 
   if (key === 'ma') {
