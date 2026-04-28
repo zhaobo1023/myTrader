@@ -77,7 +77,12 @@ def _create_document(title: str, folder_token: str = None) -> dict:
         json=body,
         timeout=15,
     )
-    resp.raise_for_status()
+    if resp.status_code != 200:
+        logger.error(
+            'Feishu create_document HTTP %d: body=%s request=%s',
+            resp.status_code, resp.text[:500], body,
+        )
+        resp.raise_for_status()
     data = resp.json()
     if data.get('code') != 0:
         raise RuntimeError('Failed to create doc: {}'.format(data.get('msg', data)))
@@ -441,6 +446,18 @@ async def publish_latest_briefing(session: str = 'morning', force: bool = False)
     briefing = await get_latest_briefing(session, force=force)
     if not briefing or not briefing.get('content'):
         raise RuntimeError('No briefing content available for session: {}'.format(session))
+
+    content = briefing['content']
+
+    # Abort markers from global_asset_briefing data quality check
+    if content.startswith('[速递中止]'):
+        logger.warning('[publish] Briefing aborted by data quality: %s', content[:200])
+        return {
+            'session': session,
+            'date': briefing.get('date', ''),
+            'aborted': True,
+            'reason': content[:200],
+        }
 
     label = '晨报' if session == 'morning' else '复盘'
     title = '{} {}'.format(label, briefing.get('date', ''))

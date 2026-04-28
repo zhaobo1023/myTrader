@@ -40,6 +40,10 @@ def publish_morning_briefing(self):
     logger.info('[BRIEFING] Starting morning briefing publish')
     try:
         result = asyncio.run(publish_latest_briefing('morning', force=True))
+        if result.get('aborted'):
+            logger.warning('[BRIEFING] Morning briefing aborted: %s', result.get('reason', ''))
+            _notify_error('晨报数据不足中止', result.get('reason', ''))
+            return {'status': 'aborted', 'reason': result.get('reason')}
         logger.info('[BRIEFING] Morning briefing published: %s', result.get('url'))
         # Push to owner inbox
         _push_to_owner_inbox(
@@ -100,6 +104,10 @@ def publish_evening_briefing(self):
     logger.info('[BRIEFING] Starting evening briefing publish')
     try:
         result = asyncio.run(publish_latest_briefing('evening', force=True))
+        if result.get('aborted'):
+            logger.warning('[BRIEFING] Evening briefing aborted: %s', result.get('reason', ''))
+            _notify_error('复盘数据不足中止', result.get('reason', ''))
+            return {'status': 'aborted', 'reason': result.get('reason')}
         logger.info('[BRIEFING] Evening briefing published: %s', result.get('url'))
         # Push to owner inbox
         _push_to_owner_inbox(
