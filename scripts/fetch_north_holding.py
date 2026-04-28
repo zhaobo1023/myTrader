@@ -2,21 +2,24 @@
 """
 scripts/fetch_north_holding.py
 
-补充 trade_north_holding 沪深港通（北向资金）个股持仓数据（AKShare 接口）
+trade_north_holding (AKShare)
 
-字段说明：
-  hold_amount  - 持股数量（股）
-  hold_ratio   - 持股比例（%）
-  hold_change  - 较上日持股变化（股）
-  hold_value   - 持股市值（元）
+:
+  hold_amount  -
+  hold_ratio   - (%)
+  hold_change  -
+  hold_value   -
 
-数据来源：AKShare ak.stock_hsgt_individual_em（沪深港通个股资金流向）
-或 ak.stock_hk_ggt_components_em
+:
+  AKShare ak.stock_hsgt_stock_statistics_em(symbol='北向持股', start_date, end_date)
+  -- ,
+  AKShare ak.stock_hsgt_individual_em(symbol=code)
+  -- ,  ()
 
-用法：
+:
   DB_ENV=online python scripts/fetch_north_holding.py
-  DB_ENV=online python scripts/fetch_north_holding.py --start 2024-01-01
-  DB_ENV=online python scripts/fetch_north_holding.py --stock 000807
+  DB_ENV=online python scripts/fetch_north_holding.py --start 2024-01-01 --end 2024-08-16
+  DB_ENV=online python scripts/fetch_north_holding.py --stock 600519
 """
 
 import argparse
@@ -70,12 +73,27 @@ def _safe_float(val, default=0.0) -> float:
         return default
 
 
-def get_latest_dates() -> dict[str, str]:
+def _normalize_code(bare: str) -> str:
+    """Convert 6-digit code to exchange-suffixed format."""
+    bare = str(bare).strip().zfill(6)
+    if bare.startswith(('6', '9')):
+        return bare + ".SH"
+    elif bare.startswith(('0', '3')):
+        return bare + ".SZ"
+    elif bare.startswith(('4', '8')):
+        return bare + ".BJ"
+    return bare + ".SZ"
+
+
+def get_latest_date() -> str:
+    """Return the latest hold_date in trade_north_holding, or empty string."""
     rows = execute_query(
-        "SELECT stock_code, MAX(hold_date) AS max_date FROM trade_north_holding GROUP BY stock_code",
+        "SELECT MAX(hold_date) AS max_date FROM trade_north_holding",
         env=DB_ENV,
     )
-    return {r["stock_code"]: str(r["max_date"]) for r in rows if r["max_date"]}
+    if rows and rows[0]["max_date"]:
+        return str(rows[0]["max_date"])
+    return ""
 
 
 def get_trading_dates(start: str, end: str) -> list[str]:
@@ -92,132 +110,104 @@ def get_trading_dates(start: str, end: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Strategy 1: Per-date bulk fetch (recommended for initial load)
+# Strategy 1: Bulk fetch by date range
+#   ak.stock_hsgt_stock_statistics_em(symbol='北向持股', start_date, end_date)
+#   Returns all stocks for a date range (efficient for batch load)
 # ---------------------------------------------------------------------------
 
-def fetch_by_date(trade_date: str) -> int:
+def fetch_by_date_range(start_date: str, end_date: str) -> int:
     """
-    Fetch north-bound holding for all stocks on a given date.
-    AKShare: ak.stock_hsgt_individual_em(symbol="沪股通"|"深股通", start_date=..., end_date=...)
-    Returns rows inserted.
+    Bulk fetch using stock_hsgt_stock_statistics_em.
+    Fetches in 1-day chunks to avoid API limits.
     """
-    date_fmt = trade_date.replace("-", "")
-    all_rows = []
+    dates = get_trading_dates(start_date, end_date)
+    logger.info(f"Trading dates to process: {len(dates)}")
 
-    for channel in ["沪股通", "深股通"]:
-        fn = getattr(ak, "stock_hsgt_individual_em", None)
-        if fn is None:
-            logger.debug("stock_hsgt_individual_em not available")
-            break
+    total = 0
+    for i, trade_date in enumerate(dates):
+        date_fmt = trade_date.replace("-", "")
         try:
-            df = fn(symbol=channel, start_date=date_fmt, end_date=date_fmt)
+            df = ak.stock_hsgt_stock_statistics_em(
+                symbol="北向持股",
+                start_date=date_fmt,
+                end_date=date_fmt,
+            )
         except Exception as e:
-            logger.debug(f"[{trade_date}] {channel} failed: {e}")
-            time.sleep(0.5)
+            logger.warning(f"[{trade_date}] stock_hsgt_stock_statistics_em failed: {e}")
+            time.sleep(1)
             continue
 
         if df is None or df.empty:
-            time.sleep(0.3)
+            if i % 20 == 0:
+                logger.info(f"[{i+1}/{len(dates)}] {trade_date}: no data")
+            time.sleep(0.5)
             continue
 
         df.columns = [str(c).strip() for c in df.columns]
-        col_map = {
-            "股票代码": "raw_code",
-            "代码": "raw_code",
-            "日期": "hold_date",
-            "持股数量": "hold_amount",
-            "持股市值": "hold_value",
-            "持股占A股百分比": "hold_ratio",
-            "持股变化数量": "hold_change",
-            "增持": "hold_change_alt",
-        }
-        df.rename(columns={k: v for k, v in col_map.items() if k in df.columns}, inplace=True)
+        # Columns: 持股日期, 股票代码, 股票简称, 当日收盘价, 当日涨跌幅,
+        #          持股数量, 持股市值, 持股数量占发行股百分比,
+        #          持股市值变化-1日, 持股市值变化-5日, 持股市值变化-10日
 
-        if "raw_code" not in df.columns:
-            logger.debug(f"[{trade_date}] {channel}: no code column. Cols: {list(df.columns)}")
-            time.sleep(0.3)
-            continue
-
-        suffix = ".SH" if channel == "沪股通" else ".SZ"
+        rows = []
         for _, row in df.iterrows():
-            bare = str(row.get("raw_code", "")).strip().zfill(6)
-            if not bare:
+            bare = str(row.get("股票代码", "")).strip().zfill(6)
+            if not bare or len(bare) != 6:
                 continue
-            stock_code = bare + suffix
-            hold_change = _safe_float(row.get("hold_change", row.get("hold_change_alt", 0)))
-            all_rows.append((
+            stock_code = _normalize_code(bare)
+            rows.append((
                 stock_code,
                 trade_date,
-                _safe_float(row.get("hold_amount")),
-                _safe_float(row.get("hold_ratio")),
-                hold_change,
-                _safe_float(row.get("hold_value")),
+                _safe_float(row.get("持股数量")),
+                _safe_float(row.get("持股数量占发行股百分比")),
+                _safe_float(row.get("持股市值变化-1日")),  # hold_change as value change
+                _safe_float(row.get("持股市值")),
             ))
 
-        time.sleep(0.4)
+        if rows:
+            _upsert_rows(rows)
+            total += len(rows)
 
-    if not all_rows:
-        return 0
+        if i % 20 == 0 or len(rows) > 0:
+            logger.info(f"[{i+1}/{len(dates)}] {trade_date}: +{len(rows)} rows (total={total})")
 
-    sql = """
-        INSERT INTO trade_north_holding
-            (stock_code, hold_date, hold_amount, hold_ratio, hold_change, hold_value)
-        VALUES (%s,%s,%s,%s,%s,%s)
-        ON DUPLICATE KEY UPDATE
-            hold_amount=VALUES(hold_amount),
-            hold_ratio=VALUES(hold_ratio),
-            hold_change=VALUES(hold_change),
-            hold_value=VALUES(hold_value)
-    """
-    try:
-        execute_many(sql, all_rows, env=DB_ENV)
-        return len(all_rows)
-    except Exception as e:
-        logger.error(f"[{trade_date}] DB insert failed: {e}")
-        return 0
+        time.sleep(0.5)
+
+    return total
 
 
 # ---------------------------------------------------------------------------
-# Strategy 2: Per-stock fetch (for targeted updates or single stock test)
+# Strategy 2: Per-stock fetch (for targeted updates)
+#   ak.stock_hsgt_individual_em(symbol=bare_code)
+#   Returns full history for one stock
 # ---------------------------------------------------------------------------
 
-def fetch_one_stock(stock_code: str, start_date: str) -> int:
-    """
-    Fetch northbound holding history for a single stock.
-    AKShare: ak.stock_hsgt_stock_statistics_em(symbol=code, start_date=..., end_date=...)
-    """
+def fetch_one_stock(stock_code: str, start_date: str = "2024-01-01") -> int:
+    """Fetch northbound holding history for a single stock."""
     bare = _strip_suffix(stock_code)
-    end_fmt = datetime.now().strftime("%Y%m%d")
-    start_fmt = start_date.replace("-", "")
 
-    fn = getattr(ak, "stock_hsgt_stock_statistics_em", None)
+    fn = getattr(ak, "stock_hsgt_individual_em", None)
     if fn is None:
+        logger.warning("stock_hsgt_individual_em not available")
         return 0
 
     try:
-        df = fn(symbol=bare, start_date=start_fmt, end_date=end_fmt)
+        df = fn(symbol=bare)
     except Exception as e:
-        logger.debug(f"[{stock_code}] stock_hsgt_stock_statistics_em failed: {e}")
+        logger.debug(f"[{stock_code}] stock_hsgt_individual_em failed: {e}")
         return 0
 
     if df is None or df.empty:
         return 0
 
     df.columns = [str(c).strip() for c in df.columns]
-    col_map = {
-        "日期": "hold_date",
-        "持股数量": "hold_amount",
-        "持股市值": "hold_value",
-        "持股比例": "hold_ratio",
-        "增持": "hold_change",
-    }
-    df.rename(columns={k: v for k, v in col_map.items() if k in df.columns}, inplace=True)
+    # Columns: 持股日期, 当日收盘价, 当日涨跌幅, 持股数量, 持股市值,
+    #          持股数量占A股百分比, 今日增持股数, 今日增持资金, 今日持股市值变化
 
-    if "hold_date" not in df.columns:
+    if "持股日期" not in df.columns:
         return 0
 
-    df["hold_date"] = df["hold_date"].astype(str).str[:10]
-    df = df[df["hold_date"] >= start_date].copy()
+    df["持股日期"] = df["持股日期"].astype(str).str[:10]
+    df = df[df["持股日期"] >= start_date].copy()
     if df.empty:
         return 0
 
@@ -225,16 +215,24 @@ def fetch_one_stock(stock_code: str, start_date: str) -> int:
     for _, row in df.iterrows():
         rows.append((
             stock_code,
-            row["hold_date"],
-            _safe_float(row.get("hold_amount")),
-            _safe_float(row.get("hold_ratio")),
-            _safe_float(row.get("hold_change")),
-            _safe_float(row.get("hold_value")),
+            row["持股日期"],
+            _safe_float(row.get("持股数量")),
+            _safe_float(row.get("持股数量占A股百分比")),
+            _safe_float(row.get("今日增持股数")),
+            _safe_float(row.get("持股市值")),
         ))
 
-    if not rows:
-        return 0
+    if rows:
+        _upsert_rows(rows)
 
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# DB upsert
+# ---------------------------------------------------------------------------
+
+def _upsert_rows(rows: list[tuple]) -> None:
     sql = """
         INSERT INTO trade_north_holding
             (stock_code, hold_date, hold_amount, hold_ratio, hold_change, hold_value)
@@ -245,12 +243,7 @@ def fetch_one_stock(stock_code: str, start_date: str) -> int:
             hold_change=VALUES(hold_change),
             hold_value=VALUES(hold_value)
     """
-    try:
-        execute_many(sql, rows, env=DB_ENV)
-        return len(rows)
-    except Exception as e:
-        logger.error(f"[{stock_code}] DB insert failed: {e}")
-        return 0
+    execute_many(sql, rows, env=DB_ENV)
 
 
 # ---------------------------------------------------------------------------
@@ -272,34 +265,27 @@ def main():
     global DB_ENV
     DB_ENV = args.envs.split(",")[0]
 
-    logger.info(f"DB_ENV={DB_ENV}, start={args.start}")
+    start = args.start
+    if args.incremental:
+        latest = get_latest_date()
+        if latest:
+            last = datetime.strptime(latest, "%Y-%m-%d")
+            start = (last + timedelta(days=1)).strftime("%Y-%m-%d")
+            logger.info(f"Incremental mode: last date={latest}, starting from {start}")
+
     end_date = args.end or datetime.now().strftime("%Y-%m-%d")
+    logger.info(f"DB_ENV={DB_ENV}, start={start}, end={end_date}")
 
     if args.stock:
-        latest = get_latest_dates()
         code = args.stock
         if "." not in code:
-            code = code + (".SH" if code.startswith("6") else ".SZ")
-        start = args.start
-        if code in latest:
-            last = datetime.strptime(latest[code], "%Y-%m-%d")
-            start = (last + timedelta(days=1)).strftime("%Y-%m-%d")
+            code = _normalize_code(code)
         n = fetch_one_stock(code, start)
         logger.info(f"Done. Inserted {n} rows for {code}")
         return
 
-    # By-date mode (default for bulk load)
-    dates = get_trading_dates(args.start, end_date)
-    logger.info(f"Trading dates to process: {len(dates)}")
-
-    total = 0
-    for i, d in enumerate(dates):
-        n = fetch_by_date(d)
-        total += n
-        if i % 20 == 0:
-            logger.info(f"Progress: {i}/{len(dates)} dates, total rows={total}")
-
-    logger.info(f"Done. Total rows inserted: {total}")
+    n = fetch_by_date_range(start, end_date)
+    logger.info(f"Done. Total rows inserted: {n}")
 
 
 if __name__ == "__main__":

@@ -394,22 +394,172 @@ class TechnicalIndicatorCalculator:
         # 保存到数据库
         self.save_indicators_to_db(stock_code, df_with_indicators)
 
+    @staticmethod
+    def _nan_to_none(val):
+        """Convert NaN/numpy scalar to None for MySQL compatibility."""
+        if val is None:
+            return None
+        if isinstance(val, float) and val != val:  # NaN check
+            return None
+        if hasattr(val, 'item'):
+            val = val.item()
+            if isinstance(val, float) and val != val:
+                return None
+        return val
+
+    def _compute_one_stock(self, stock_code: str, df: pd.DataFrame) -> list:
+        """
+        Compute all indicators for one stock and return list of record tuples.
+        df is already sorted by trade_date ASC and numeric-typed.
+        """
+        if len(df) < 5:
+            return []
+
+        df_with = self.calculate_all_indicators(df)
+
+        # Filter rows that have at least ma5
+        valid = df_with[df_with['ma5'].notna()]
+        if valid.empty:
+            return []
+
+        _n = self._nan_to_none
+        indicator_cols = [
+            'ma5', 'ma10', 'ma20', 'ma60', 'ma120', 'ma250',
+            'macd_dif', 'macd_dea', 'macd_histogram',
+            'rsi_6', 'rsi_12', 'rsi_24',
+            'kdj_k', 'kdj_d', 'kdj_j',
+            'bollinger_upper', 'bollinger_middle', 'bollinger_lower',
+            'atr', 'volume_ratio', 'turnover_rate',
+        ]
+
+        records = []
+        for _, row in valid.iterrows():
+            records.append(
+                (stock_code, row['trade_date']) +
+                tuple(_n(row.get(col)) for col in indicator_cols)
+            )
+        return records
+
     def calculate_for_all_stocks(self, start_date: Optional[str] = None):
         """
-        为所有股票计算技术指标
+        Batch-compute technical indicators for all stocks.
 
-        Args:
-            start_date: 开始日期（可选）
+        Optimized flow:
+        1. Get stock list, load daily data in batches of 500 stocks
+        2. Compute indicators with ThreadPoolExecutor per batch
+        3. Batch-write results to DB
         """
-        # 获取所有股票代码
-        sql = "SELECT DISTINCT stock_code FROM trade_stock_daily ORDER BY stock_code"
-        rows = execute_query(sql)
-        stock_codes = [row['stock_code'] for row in rows]
+        import time as _time
+        import sys
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        print(f"\n开始计算 {len(stock_codes)} 只股票的技术指标...\n")
+        t0 = _time.time()
 
-        for i, stock_code in enumerate(stock_codes, 1):
-            print(f"[{i}/{len(stock_codes)}] 处理 {stock_code}...")
-            self.calculate_for_stock(stock_code, start_date)
+        if start_date is None:
+            from datetime import date, timedelta
+            start_date = (date.today() - timedelta(days=500)).strftime('%Y-%m-%d')
 
-        print(f"\n技术指标计算完成！")
+        # Get all stock codes
+        code_rows = execute_query(
+            "SELECT DISTINCT stock_code FROM trade_stock_daily WHERE trade_date >= %s ORDER BY stock_code",
+            [start_date],
+        )
+        all_codes = [r['stock_code'] for r in code_rows]
+        total_stocks = len(all_codes)
+        print(f"Total stocks: {total_stocks}, start_date: {start_date}")
+        sys.stdout.flush()
+
+        sql_insert = """
+            INSERT INTO trade_technical_indicator
+            (stock_code, trade_date, ma5, ma10, ma20, ma60, ma120, ma250,
+             macd_dif, macd_dea, macd_histogram, rsi_6, rsi_12, rsi_24,
+             kdj_k, kdj_d, kdj_j, bollinger_upper, bollinger_middle, bollinger_lower,
+             atr, volume_ratio, turnover_rate)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+            ma5=VALUES(ma5), ma10=VALUES(ma10), ma20=VALUES(ma20),
+            ma60=VALUES(ma60), ma120=VALUES(ma120), ma250=VALUES(ma250),
+            macd_dif=VALUES(macd_dif), macd_dea=VALUES(macd_dea), macd_histogram=VALUES(macd_histogram),
+            rsi_6=VALUES(rsi_6), rsi_12=VALUES(rsi_12), rsi_24=VALUES(rsi_24),
+            kdj_k=VALUES(kdj_k), kdj_d=VALUES(kdj_d), kdj_j=VALUES(kdj_j),
+            bollinger_upper=VALUES(bollinger_upper), bollinger_middle=VALUES(bollinger_middle),
+            bollinger_lower=VALUES(bollinger_lower), atr=VALUES(atr),
+            volume_ratio=VALUES(volume_ratio), turnover_rate=VALUES(turnover_rate)
+        """
+
+        batch_stock_size = 500  # stocks per SQL batch
+        total_records = 0
+        total_errors = 0
+        processed = 0
+
+        for batch_start in range(0, total_stocks, batch_stock_size):
+            batch_codes = all_codes[batch_start:batch_start + batch_stock_size]
+            batch_num = batch_start // batch_stock_size + 1
+            total_batches = (total_stocks + batch_stock_size - 1) // batch_stock_size
+
+            # Load data for this batch
+            placeholders = ','.join(['%s'] * len(batch_codes))
+            sql = f"""
+                SELECT stock_code, trade_date, open_price, high_price,
+                       low_price, close_price, volume, turnover_rate
+                FROM trade_stock_daily
+                WHERE trade_date >= %s AND stock_code IN ({placeholders})
+                ORDER BY stock_code, trade_date ASC
+            """
+            params = [start_date] + batch_codes
+            rows = execute_query(sql, params)
+
+            if not rows:
+                processed += len(batch_codes)
+                continue
+
+            batch_df = pd.DataFrame(rows)
+            for col in ['open_price', 'high_price', 'low_price', 'close_price', 'volume', 'turnover_rate']:
+                if col in batch_df.columns:
+                    batch_df[col] = pd.to_numeric(batch_df[col], errors='coerce')
+
+            grouped = dict(list(batch_df.groupby('stock_code')))
+
+            # Parallel compute
+            batch_records = []
+            errors = 0
+
+            def _compute(code_df_pair):
+                code, df = code_df_pair
+                try:
+                    return self._compute_one_stock(code, df.reset_index(drop=True))
+                except Exception as e:
+                    return f"ERROR:{code}:{e}"
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                futures = [pool.submit(_compute, item) for item in grouped.items()]
+                for future in as_completed(futures):
+                    result = future.result()
+                    if isinstance(result, str) and result.startswith("ERROR:"):
+                        errors += 1
+                    elif result:
+                        batch_records.extend(result)
+
+            # Batch write
+            write_batch = 2000
+            for i in range(0, len(batch_records), write_batch):
+                chunk = batch_records[i:i + write_batch]
+                try:
+                    execute_many(sql_insert, chunk)
+                except Exception as e:
+                    print(f"  [ERROR] Batch write failed: {e}")
+                    errors += 1
+
+            processed += len(batch_codes)
+            total_records += len(batch_records)
+            total_errors += errors
+
+            elapsed = _time.time() - t0
+            print(f"  Batch {batch_num}/{total_batches}: {len(batch_codes)} stocks, "
+                  f"{len(batch_records)} records, {errors} errors "
+                  f"({processed}/{total_stocks} done, {elapsed:.0f}s elapsed)")
+            sys.stdout.flush()
+
+        total_time = _time.time() - t0
+        print(f"\nDone! {total_time:.1f}s total, {total_stocks} stocks, "
+              f"{total_records} records, {total_errors} errors")

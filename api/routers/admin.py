@@ -339,6 +339,26 @@ async def get_data_health(
         },
         # --- 资金与情绪 ---
         {
+            'key': 'margin_trade',
+            'label': '融资融券明细',
+            'group': '资金',
+            'sql_date': 'SELECT MAX(trade_date) as d FROM trade_margin_trade',
+            'sql_count': 'SELECT COUNT(DISTINCT stock_code) as cnt FROM trade_margin_trade WHERE trade_date = (SELECT MAX(trade_date) FROM trade_margin_trade)',
+            'count_label': '股票数',
+            'expected_count': 1600,
+            'warn_days': 3,
+        },
+        {
+            'key': 'north_holding',
+            'label': '北向个股持仓',
+            'group': '资金',
+            'sql_date': 'SELECT MAX(hold_date) as d FROM trade_north_holding',
+            'sql_count': 'SELECT COUNT(DISTINCT stock_code) as cnt FROM trade_north_holding WHERE hold_date = (SELECT MAX(hold_date) FROM trade_north_holding)',
+            'count_label': '股票数',
+            'expected_count': 1200,
+            'warn_days': 3,
+        },
+        {
             'key': 'north_flow',
             'label': '北向资金流向',
             'group': '资金',
@@ -355,6 +375,16 @@ async def get_data_health(
             'sql_count': "SELECT COUNT(*) as cnt FROM macro_data WHERE indicator = 'margin_balance'",
             'count_label': '数据条数',
             'warn_days': 7,
+        },
+        {
+            'key': 'concept_map',
+            'label': '概念板块映射',
+            'group': '资金',
+            'sql_date': 'SELECT MAX(updated_at) as d FROM stock_concept_map',
+            'sql_count': 'SELECT COUNT(DISTINCT concept_name) as cnt FROM stock_concept_map',
+            'count_label': '概念数',
+            'expected_count': 300,
+            'warn_days': 14,
         },
         {
             'key': 'fear_index',

@@ -198,7 +198,7 @@ def fetch_margin_incremental(dry_run: bool = False, envs: str = "local,online"):
     import os
     import importlib.util
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    sys.argv = ["fetch_margin", "--by-date", "--start", yesterday, "--no-proxy", "--envs", envs]
+    sys.argv = ["fetch_margin", "--incremental", "--start", yesterday, "--no-proxy", "--envs", envs]
 
     script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts", "fetch_margin.py")
     spec = importlib.util.spec_from_file_location("fetch_margin", script_path)
@@ -220,7 +220,7 @@ def fetch_north_holding_incremental(dry_run: bool = False, envs: str = "local,on
     import os
     import importlib.util
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    sys.argv = ["fetch_north_holding", "--start", yesterday, "--no-proxy", "--envs", envs]
+    sys.argv = ["fetch_north_holding", "--incremental", "--start", yesterday, "--no-proxy", "--envs", envs]
 
     script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts", "fetch_north_holding.py")
     spec = importlib.util.spec_from_file_location("fetch_north_holding", script_path)

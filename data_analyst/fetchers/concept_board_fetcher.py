@@ -201,7 +201,7 @@ def em_fetch_all_boards() -> list[dict]:
     """Return all concept boards from Eastmoney push2 HTTP."""
     boards = []
     pn = 1
-    pz = 500
+    pz = 100  # EM API returns at most 100 per page
     while True:
         url = _EM_BOARD_LIST_URL.format(pn=pn, pz=pz)
         data = _em_http_get(url)
@@ -212,7 +212,8 @@ def em_fetch_all_boards() -> list[dict]:
             break
         for item in diff:
             boards.append({'code': item.get('f12', ''), 'name': item.get('f14', '')})
-        if len(diff) < pz:
+        total = data.get('data', {}).get('total', 0)
+        if len(boards) >= total or len(diff) < pz:
             break
         pn += 1
     logger.info('[EM] Total concept boards: %d', len(boards))
@@ -223,7 +224,7 @@ def em_fetch_board_members(board_code: str, board_name: str) -> list[dict]:
     """Return members of one EM concept board."""
     members = []
     pn = 1
-    pz = 500
+    pz = 100  # EM API returns at most 100 per page
     while True:
         url = (
             f'https://29.push2.eastmoney.com/api/qt/clist/get'
@@ -244,7 +245,8 @@ def em_fetch_board_members(board_code: str, board_name: str) -> list[dict]:
             name = str(item.get('f14', '')).strip()
             if code and name:
                 members.append({'stock_code': code, 'stock_name': name})
-        if len(diff) < pz:
+        total = data.get('data', {}).get('total', 0)
+        if len(members) >= total or len(diff) < pz:
             break
         pn += 1
     return members

@@ -23,7 +23,6 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 import numpy as np
-from scipy import stats
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -80,10 +79,14 @@ class RPSCalculator:
     def calc_rps_slope(self, rps_250: pd.Series, trade_dates: pd.Series,
                        stock_codes: pd.Series, window: int = SLOPE_WINDOW) -> pd.Series:
         """
-        计算 RPS 动量斜率 Z-Score
+        计算 RPS 动量斜率 Z-Score (向量化版本)
 
         对每只股票的 rps_250 序列取 window 日滚动窗口做线性回归取斜率，
         然后每日截面对所有股票的斜率做 Z-Score 标准化。
+
+        使用向量化最小二乘公式替代逐行 scipy.linregress:
+        slope = (n * sum(x*y) - sum(x) * sum(y)) / (n * sum(x^2) - sum(x)^2)
+        其中 x = [0, 1, ..., n-1] 是固定常量。
 
         Args:
             rps_250: RPS(250) 值 Series
@@ -101,22 +104,32 @@ class RPSCalculator:
         })
         df = df.sort_values(['stock_code', 'trade_date'])
 
-        def _slope(y):
-            valid = y.dropna()
-            if len(valid) < window:
-                return np.nan
-            x_vals = np.arange(len(valid))
-            try:
-                slope, _, _, _, _ = stats.linregress(x_vals, valid.values)
-                return slope
-            except (ValueError, np.linalg.LinAlgError):
-                return np.nan
+        # 预计算 x 向量的常量 (x = 0,1,...,window-1)
+        n = window
+        sum_x = n * (n - 1) / 2.0
+        sum_x2 = n * (n - 1) * (2 * n - 1) / 6.0
+        denom = n * sum_x2 - sum_x * sum_x
 
-        df['slope_raw'] = df.groupby('stock_code')['rps_250'].transform(
-            lambda x: x.rolling(window=window, min_periods=window).apply(_slope, raw=False)
-        )
+        # 向量化滚动斜率: 对每组 stock_code 计算
+        # slope = (n * rolling_sum(x*y) - sum_x * rolling_sum(y)) / denom
+        # 等价于 (n * sum(i * y_i) - sum_x * sum(y_i)) / denom
+        # 其中 sum(i * y_i) 可通过 rolling 两个序列实现
+        x_weights = np.arange(n, dtype=np.float64)
 
-        # 截面 Z-Score 标准化（全 NaN 时保持 NaN，不写 0）
+        def _vectorized_slope(series):
+            idx = series.index
+            vals = series.values.astype(np.float64)
+            s = pd.Series(vals, index=idx)
+            sum_y = s.rolling(window=n, min_periods=n).sum()
+            sum_xy = s.rolling(window=n, min_periods=n).apply(
+                lambda w: np.dot(x_weights, w), raw=True
+            )
+            slope = (n * sum_xy - sum_x * sum_y) / denom
+            return slope
+
+        df['slope_raw'] = df.groupby('stock_code')['rps_250'].transform(_vectorized_slope)
+
+        # 截面 Z-Score 标准化
         def _zscore(x):
             s = x.std()
             if s > 0:
@@ -397,19 +410,70 @@ def rps_backfill(env: str = 'online') -> int:
     return total
 
 
-def rps_daily_update(env: str = 'online', batch_size: int = 500) -> int:
+def _load_all_data_batched(env: str, start_date: str, all_codes: list,
+                           batch_size: int = 1000) -> pd.DataFrame:
+    """
+    分批加载全市场日线数据并合并为单个 DataFrame
+
+    按 batch_size 只股票分批查询数据库，避免单次查询数据量过大导致连接超时。
+    所有批次合并后返回完整 DataFrame，用于全市场截面 RPS 计算。
+
+    Args:
+        env: 数据库环境
+        start_date: 起始日期
+        all_codes: 全量股票代码列表
+        batch_size: 每批加载的股票数量
+
+    Returns:
+        DataFrame with columns [stock_code, trade_date, close]
+    """
+    frames = []
+    total_batches = (len(all_codes) + batch_size - 1) // batch_size
+
+    for i in range(0, len(all_codes), batch_size):
+        batch_codes = all_codes[i:i + batch_size]
+        batch_num = i // batch_size + 1
+        ph = ','.join(['%s'] * len(batch_codes))
+        sql = f"""
+            SELECT stock_code, trade_date, close_price as close
+            FROM trade_stock_daily
+            WHERE trade_date >= %s AND stock_code IN ({ph})
+            ORDER BY stock_code, trade_date
+        """
+        rows = execute_query(sql, [start_date] + batch_codes, env=env)
+        if rows:
+            batch_df = pd.DataFrame(rows)
+            frames.append(batch_df)
+            logger.info(f"  加载批次 {batch_num}/{total_batches}: "
+                        f"{len(rows)} 行 (累计 {sum(len(f) for f in frames)})")
+
+    if not frames:
+        return pd.DataFrame()
+
+    df = pd.concat(frames, ignore_index=True)
+    df['trade_date'] = pd.to_datetime(df['trade_date'])
+    df['close'] = df['close'].astype(float)
+    logger.info(f"数据加载完成: {len(df)} 行, {df['stock_code'].nunique()} 只股票")
+    return df
+
+
+def rps_daily_update(env: str = 'online', batch_size: int = 1000) -> int:
     """
     每日增量更新 RPS
 
-    策略：分批按股票加载日线数据，避免全量加载导致 MySQL 连接超时。
-    每批 batch_size 只股票，加载 INCREMENTAL_LOOKBACK_DAYS 天历史，
-    计算 RPS + slope 后写入，再处理下一批。
+    策略：分批加载全市场日线数据（避免网络超时），合并后在完整数据集上
+    一次性计算 RPS（包括截面排名和 slope），无需二次修正。
+
+    相比旧版（分批计算 + slope 修正），减少了重复 IO 和计算。
 
     Returns:
         写入行数
     """
+    import time as _time
+    t0 = _time.time()
+
     logger.info("=" * 60)
-    logger.info("开始增量 RPS 更新（分批模式）")
+    logger.info("开始增量 RPS 更新（全市场一次计算模式）")
     logger.info("=" * 60)
 
     storage = RPSStorage(env=env)
@@ -441,59 +505,45 @@ def rps_daily_update(env: str = 'online', batch_size: int = 500) -> int:
         (latest_trade_date,), env=env
     )
     all_codes = [r['stock_code'] for r in stock_rows]
-    logger.info(f"待处理股票数: {len(all_codes)}，分批大小: {batch_size}")
+    logger.info(f"待处理股票数: {len(all_codes)}")
 
     start_date = (datetime.now() - timedelta(days=INCREMENTAL_LOOKBACK_DAYS)).strftime('%Y-%m-%d')
+
+    # 阶段 1: 分批加载全市场数据
+    logger.info("阶段 1/3: 加载全市场日线数据...")
+    df = _load_all_data_batched(env, start_date, all_codes, batch_size=batch_size)
+    if df.empty:
+        logger.error("无日线数据")
+        return 0
+    t1 = _time.time()
+    logger.info(f"数据加载耗时: {t1 - t0:.1f}s")
+
+    # 阶段 2: 全市场一次性计算 RPS + slope
+    logger.info("阶段 2/3: 全市场 RPS 计算...")
     calculator = RPSCalculator()
-    total = 0
+    result = calculator.calculate(df)
+    t2 = _time.time()
+    logger.info(f"RPS 计算耗时: {t2 - t1:.1f}s")
+
+    # 只保留需要入库的日期（新数据）
     last_dt = pd.Timestamp(last_calc_date) if last_calc_date else None
+    if last_dt is not None:
+        result = result[result['trade_date'] > last_dt]
 
-    for i in range(0, len(all_codes), batch_size):
-        batch_codes = all_codes[i:i + batch_size]
-        logger.info(f"处理批次 {i // batch_size + 1}/{(len(all_codes) + batch_size - 1) // batch_size}，"
-                    f"股票 {i + 1}~{min(i + batch_size, len(all_codes))}")
+    if result.empty:
+        logger.info("无新数据需要写入")
+        return 0
 
-        # 加载该批股票的日线数据
-        ph = ','.join(['%s'] * len(batch_codes))
-        sql = f"""
-            SELECT stock_code, trade_date, close_price as close
-            FROM trade_stock_daily
-            WHERE trade_date >= %s AND stock_code IN ({ph})
-            ORDER BY stock_code, trade_date
-        """
-        rows = execute_query(sql, [start_date] + batch_codes, env=env)
-        if not rows:
-            continue
-
-        df = pd.DataFrame(rows)
-        df['trade_date'] = pd.to_datetime(df['trade_date'])
-        df['close'] = df['close'].astype(float)
-
-        # 计算 RPS（截面排名在全市场，批次内只有部分股票会影响精度，
-        # 但截面 rps_250 排名通过下面的 UPDATE slope 方式规避）
-        result = calculator.calculate(df)
-
-        # 只保留需要入库的日期
-        if last_dt is not None:
-            result = result[result['trade_date'] > last_dt]
-
-        if result.empty:
-            continue
-
-        output_cols = ['stock_code', 'trade_date', 'rps_20', 'rps_60', 'rps_120', 'rps_250', 'rps_slope']
-        result = result[output_cols]
-        affected = storage.save(result)
-        total += affected
-        logger.info(f"  批次写入 {affected} 行")
-
-    # slope 需要全市场截面才准确，分批计算有偏差
-    # 补跑一次全市场 slope 修正（只更新 rps_slope 列）
-    logger.info("补跑全市场 slope 截面修正...")
-    total += _recalc_slope_only(env=env, last_calc_date=last_calc_date,
-                                latest_trade_date=latest_trade_date)
+    # 阶段 3: 批量入库
+    logger.info(f"阶段 3/3: 写入 {len(result)} 行新数据...")
+    output_cols = ['stock_code', 'trade_date', 'rps_20', 'rps_60', 'rps_120', 'rps_250', 'rps_slope']
+    result = result[output_cols]
+    total = storage.save(result, batch_size=2000)
+    t3 = _time.time()
+    logger.info(f"数据写入耗时: {t3 - t2:.1f}s")
 
     logger.info("=" * 60)
-    logger.info(f"增量更新完成: 共写入 {total} 行")
+    logger.info(f"增量更新完成: 共写入 {total} 行, 总耗时 {t3 - t0:.1f}s")
     logger.info("=" * 60)
     return total
 

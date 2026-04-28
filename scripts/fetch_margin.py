@@ -2,22 +2,25 @@
 """
 scripts/fetch_margin.py
 
-补充 trade_margin_trade 融资融券数据（AKShare 接口）
+trade_margin_trade (AKShare)
 
-字段说明：
-  rzye   - 融资余额（元）
-  rqye   - 融券余额（元）
-  rzmre  - 融资买入额（元）
-  rzche  - 融资偿还额（元）
-  rqmcl  - 融券卖出量（股）
-  rqchl  - 融券偿还量（股）
+:
+  rzye   -
+  rqye   -
+  rzmre  -
+  rzche  -
+  rqmcl  -
+  rqchl  -
 
-数据来源：AKShare ak.stock_margin_detail_szse / ak.stock_margin_sse
+:
+  AKShare ak.stock_margin_detail_sse(date=...) -- SSE (SH)
+  AKShare ak.stock_margin_detail_szse(date=...) -- SZSE (SZ)
+  date
 
-用法：
+:
   DB_ENV=online python scripts/fetch_margin.py
-  DB_ENV=online python scripts/fetch_margin.py --stock 000807 --start 2024-01-01
-  DB_ENV=online python scripts/fetch_margin.py --start 2023-01-01
+  DB_ENV=online python scripts/fetch_margin.py --start 2024-01-01
+  DB_ENV=online python scripts/fetch_margin.py --start 2026-01-01 --end 2026-04-28
 """
 
 import argparse
@@ -60,10 +63,6 @@ DB_ENV = os.getenv("DB_ENV", "online")
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _strip_suffix(code: str) -> str:
-    return code.split(".")[0]
-
-
 def _safe_float(val, default=0.0) -> float:
     try:
         return float(val) if val is not None else default
@@ -71,95 +70,96 @@ def _safe_float(val, default=0.0) -> float:
         return default
 
 
-def get_stock_list() -> list[dict]:
-    return execute_query(
-        "SELECT stock_code, stock_name FROM trade_stock_basic WHERE is_st = 0",
-        env=DB_ENV,
-    )
-
-
-def get_latest_dates() -> dict[str, str]:
+def get_latest_date() -> str:
+    """Return the latest trade_date in trade_margin_trade, or empty string."""
     rows = execute_query(
-        "SELECT stock_code, MAX(trade_date) AS max_date FROM trade_margin_trade GROUP BY stock_code",
+        "SELECT MAX(trade_date) AS max_date FROM trade_margin_trade",
         env=DB_ENV,
     )
-    return {r["stock_code"]: str(r["max_date"]) for r in rows if r["max_date"]}
+    if rows and rows[0]["max_date"]:
+        return str(rows[0]["max_date"])
+    return ""
+
+
+def get_trading_dates(start: str, end: str) -> list[str]:
+    """Get trading dates from trade_stock_daily_basic."""
+    rows = execute_query(
+        """
+        SELECT DISTINCT trade_date FROM trade_stock_daily_basic
+        WHERE trade_date >= %s AND trade_date <= %s
+        ORDER BY trade_date ASC
+        """,
+        [start, end],
+        env=DB_ENV,
+    )
+    return [str(r["trade_date"]) for r in rows]
 
 
 # ---------------------------------------------------------------------------
-# AKShare fetch (individual stock)
+# Fetch one day (SSE + SZSE)
 # ---------------------------------------------------------------------------
 
-def fetch_one_margin(stock_code: str, start_date: str) -> int:
+def fetch_one_day(trade_date: str) -> int:
     """
-    Fetch margin trade data for one stock.
-    AKShare: ak.stock_margin_detail_szse(symbol=code, start_date=..., end_date=...)
-             ak.stock_margin_sse(date=...) — by date, not by stock
-
-    Use ak.stock_margin_detail_szse for SZ stocks and
-    ak.stock_margin_detail_sse for SH stocks.
+    Fetch margin trade data for all stocks on a given date.
+    Uses ak.stock_margin_detail_sse(date=YYYYMMDD) for SH stocks
+    and ak.stock_margin_detail_szse(date=YYYYMMDD) for SZ stocks.
+    Returns number of rows inserted.
     """
-    bare = _strip_suffix(stock_code)
-    end_date = datetime.now().strftime("%Y%m%d")
-    start_fmt = start_date.replace("-", "")
+    date_fmt = trade_date.replace("-", "")
+    day_rows = []
 
-    # Determine exchange
-    if stock_code.endswith(".SH") or bare.startswith("6"):
-        fetch_fn_name = "stock_margin_detail_sse"
-    else:
-        fetch_fn_name = "stock_margin_detail_szse"
-
-    fetch_fn = getattr(ak, fetch_fn_name, None)
-    if fetch_fn is None:
-        logger.debug(f"[{stock_code}] {fetch_fn_name} not available in this AKShare version")
-        return 0
-
+    # --- SSE (SH) ---
+    # Columns: 信用交易日期, 标的证券代码, 标的证券简称, 融资余额, 融资买入额, 融资偿还额, 融券余量, 融券卖出量, 融券偿还量
     try:
-        df = fetch_fn(symbol=bare, start_date=start_fmt, end_date=end_date)
+        df_sh = ak.stock_margin_detail_sse(date=date_fmt)
+        if df_sh is not None and not df_sh.empty:
+            df_sh.columns = [str(c).strip() for c in df_sh.columns]
+            for _, row in df_sh.iterrows():
+                bare = str(row.get("标的证券代码", "")).strip().zfill(6)
+                if not bare or len(bare) != 6:
+                    continue
+                stock_code = bare + ".SH"
+                day_rows.append((
+                    stock_code,
+                    trade_date,
+                    _safe_float(row.get("融资余额")),
+                    0.0,  # rqye: SSE detail does not have 融券余额, use 0
+                    _safe_float(row.get("融资买入额")),
+                    _safe_float(row.get("融资偿还额")),
+                    _safe_float(row.get("融券卖出量")),
+                    _safe_float(row.get("融券偿还量")),
+                ))
     except Exception as e:
-        logger.debug(f"[{stock_code}] {fetch_fn_name} failed: {e}")
-        return 0
+        logger.warning(f"[{trade_date}] stock_margin_detail_sse failed: {e}")
+    time.sleep(0.3)
 
-    if df is None or df.empty:
-        return 0
+    # --- SZSE (SZ) ---
+    # Columns: 证券代码, 证券简称, 融资买入额, 融资余额, 融券卖出量, 融券余量, 融券余额, 融资融券余额
+    try:
+        df_sz = ak.stock_margin_detail_szse(date=date_fmt)
+        if df_sz is not None and not df_sz.empty:
+            df_sz.columns = [str(c).strip() for c in df_sz.columns]
+            for _, row in df_sz.iterrows():
+                bare = str(row.get("证券代码", "")).strip().zfill(6)
+                if not bare or len(bare) != 6:
+                    continue
+                stock_code = bare + ".SZ"
+                day_rows.append((
+                    stock_code,
+                    trade_date,
+                    _safe_float(row.get("融资余额")),
+                    _safe_float(row.get("融券余额")),
+                    _safe_float(row.get("融资买入额")),
+                    0.0,  # rzche: SZSE detail does not have 融资偿还额
+                    _safe_float(row.get("融券卖出量")),
+                    0.0,  # rqchl: SZSE detail does not have 融券偿还量
+                ))
+    except Exception as e:
+        logger.warning(f"[{trade_date}] stock_margin_detail_szse failed: {e}")
+    time.sleep(0.3)
 
-    df.columns = [str(c).strip() for c in df.columns]
-
-    # Normalize columns (AKShare version-dependent)
-    col_map = {
-        "信用交易日期": "trade_date",
-        "日期": "trade_date",
-        "融资余额": "rzye",
-        "融券余额": "rqye",
-        "融资买入额": "rzmre",
-        "融资偿还额": "rzche",
-        "融券卖出量": "rqmcl",
-        "融券偿还量": "rqchl",
-    }
-    df.rename(columns={k: v for k, v in col_map.items() if k in df.columns}, inplace=True)
-
-    if "trade_date" not in df.columns:
-        return 0
-
-    df["trade_date"] = df["trade_date"].astype(str).str[:10]
-    df = df[df["trade_date"] >= start_date].copy()
-    if df.empty:
-        return 0
-
-    rows = []
-    for _, row in df.iterrows():
-        rows.append((
-            stock_code,
-            row["trade_date"],
-            _safe_float(row.get("rzye")),
-            _safe_float(row.get("rqye")),
-            _safe_float(row.get("rzmre")),
-            _safe_float(row.get("rzche")),
-            _safe_float(row.get("rqmcl")),
-            _safe_float(row.get("rqchl")),
-        ))
-
-    if not rows:
+    if not day_rows:
         return 0
 
     sql = """
@@ -168,104 +168,37 @@ def fetch_one_margin(stock_code: str, start_date: str) -> int:
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
         ON DUPLICATE KEY UPDATE
             rzye=VALUES(rzye), rqye=VALUES(rqye),
-            rzmre=VALUES(rzmre), rzche=VALUES(rzche)
+            rzmre=VALUES(rzmre), rzche=VALUES(rzche),
+            rqmcl=VALUES(rqmcl), rqchl=VALUES(rqchl)
     """
     try:
-        execute_many(sql, rows, env=DB_ENV)
-        return len(rows)
+        execute_many(sql, day_rows, env=DB_ENV)
+        return len(day_rows)
     except Exception as e:
-        logger.error(f"[{stock_code}] DB insert failed: {e}")
+        logger.error(f"[{trade_date}] DB insert failed: {e}")
         return 0
 
 
 # ---------------------------------------------------------------------------
-# Batch by date (alternative approach: fetch all stocks for a given date)
+# Batch fetch by date range
 # ---------------------------------------------------------------------------
 
 def fetch_by_date_range(start_date: str, end_date: str = None) -> int:
     """
-    Bulk fetch: iterate over each trading date and pull all margin data for that day.
-    More efficient than per-stock for initial full load.
-    AKShare: ak.stock_margin_szse(date=...) and ak.stock_margin_sse(date=...)
+    Iterate over trading dates and pull all margin data for each day.
     """
     if end_date is None:
         end_date = datetime.now().strftime("%Y-%m-%d")
 
-    # Get trading dates from our DB
-    rows = execute_query(
-        """
-        SELECT DISTINCT trade_date FROM trade_stock_daily_basic
-        WHERE trade_date >= %s AND trade_date <= %s
-        ORDER BY trade_date ASC
-        """,
-        [start_date, end_date],
-        env=DB_ENV,
-    )
-    dates = [str(r["trade_date"]) for r in rows]
+    dates = get_trading_dates(start_date, end_date)
     logger.info(f"Trading dates to process: {len(dates)}")
 
     total_inserted = 0
-
-    for trade_date in dates:
-        date_fmt = trade_date.replace("-", "")
-        day_rows = []
-
-        for exchange, fn_name in [("sz", "stock_margin_szse"), ("sh", "stock_margin_sse")]:
-            fn = getattr(ak, fn_name, None)
-            if fn is None:
-                continue
-            try:
-                df = fn(date=date_fmt)
-                if df is None or df.empty:
-                    continue
-                df.columns = [str(c).strip() for c in df.columns]
-                col_map = {
-                    "证券代码": "raw_code",
-                    "代码": "raw_code",
-                    "融资余额": "rzye",
-                    "融券余额": "rqye",
-                    "融资买入额": "rzmre",
-                    "融资偿还额": "rzche",
-                    "融券卖出量": "rqmcl",
-                    "融券偿还量": "rqchl",
-                }
-                df.rename(columns={k: v for k, v in col_map.items() if k in df.columns}, inplace=True)
-                if "raw_code" not in df.columns:
-                    continue
-
-                suffix = ".SH" if exchange == "sh" else ".SZ"
-                for _, row in df.iterrows():
-                    bare = str(row["raw_code"]).strip().zfill(6)
-                    stock_code = bare + suffix
-                    day_rows.append((
-                        stock_code,
-                        trade_date,
-                        _safe_float(row.get("rzye")),
-                        _safe_float(row.get("rqye")),
-                        _safe_float(row.get("rzmre")),
-                        _safe_float(row.get("rzche")),
-                        _safe_float(row.get("rqmcl")),
-                        _safe_float(row.get("rqchl")),
-                    ))
-            except Exception as e:
-                logger.debug(f"[{trade_date}] {fn_name} failed: {e}")
-            time.sleep(0.3)
-
-        if day_rows:
-            sql = """
-                INSERT INTO trade_margin_trade
-                    (stock_code, trade_date, rzye, rqye, rzmre, rzche, rqmcl, rqchl)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-                ON DUPLICATE KEY UPDATE
-                    rzye=VALUES(rzye), rqye=VALUES(rqye),
-                    rzmre=VALUES(rzmre), rzche=VALUES(rzche)
-            """
-            try:
-                execute_many(sql, day_rows, env=DB_ENV)
-                total_inserted += len(day_rows)
-                logger.info(f"[{trade_date}] Inserted {len(day_rows)} rows (total={total_inserted})")
-            except Exception as e:
-                logger.error(f"[{trade_date}] DB insert failed: {e}")
+    for i, trade_date in enumerate(dates):
+        n = fetch_one_day(trade_date)
+        total_inserted += n
+        if i % 20 == 0 or n > 0:
+            logger.info(f"[{i+1}/{len(dates)}] {trade_date}: +{n} rows (total={total_inserted})")
 
     return total_inserted
 
@@ -276,7 +209,6 @@ def fetch_by_date_range(start_date: str, end_date: str = None) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Fetch trade_margin_trade from AKShare")
-    parser.add_argument("--stock", help="Single stock code")
     parser.add_argument("--start", default="2024-01-01", help="Start date YYYY-MM-DD")
     parser.add_argument("--end", help="End date YYYY-MM-DD (default: today)")
     parser.add_argument("--envs", default=os.getenv("DB_ENV", "online"),
@@ -284,45 +216,25 @@ def main():
     parser.add_argument("--no-proxy", dest="no_proxy", action="store_true")
     parser.add_argument("--incremental", action="store_true",
                         help="Auto-detect start from last loaded date")
+    # Keep --by-date for backward compatibility (now default behavior)
     parser.add_argument("--by-date", action="store_true",
-                        help="Fetch by date (bulk) instead of per-stock")
+                        help="(deprecated, now default) Fetch by date")
     args = parser.parse_args()
 
     global DB_ENV
     DB_ENV = args.envs.split(",")[0]
 
-    logger.info(f"DB_ENV={DB_ENV}, start={args.start}")
+    start = args.start
+    if args.incremental:
+        latest = get_latest_date()
+        if latest:
+            last = datetime.strptime(latest, "%Y-%m-%d")
+            start = (last + timedelta(days=1)).strftime("%Y-%m-%d")
+            logger.info(f"Incremental mode: last date={latest}, starting from {start}")
 
-    if args.by_date:
-        n = fetch_by_date_range(args.start, args.end)
-        logger.info(f"Done (by-date). Total rows: {n}")
-        return
-
-    if args.stock:
-        stocks = [{"stock_code": args.stock}]
-    else:
-        stocks = get_stock_list()
-
-    latest_dates = get_latest_dates()
-    total = 0
-    for i, s in enumerate(stocks):
-        code = s["stock_code"]
-        if code in latest_dates:
-            last = datetime.strptime(latest_dates[code], "%Y-%m-%d")
-            effective_start = (last + timedelta(days=1)).strftime("%Y-%m-%d")
-        else:
-            effective_start = args.start
-
-        if effective_start > datetime.now().strftime("%Y-%m-%d"):
-            continue
-
-        n = fetch_one_margin(code, effective_start)
-        total += n
-        if i % 100 == 0:
-            logger.info(f"Progress: {i}/{len(stocks)}, inserted={total}")
-        time.sleep(0.5)
-
-    logger.info(f"Done. Total rows inserted: {total}")
+    logger.info(f"DB_ENV={DB_ENV}, start={start}, end={args.end or 'today'}")
+    n = fetch_by_date_range(start, args.end)
+    logger.info(f"Done. Total rows inserted: {n}")
 
 
 if __name__ == "__main__":

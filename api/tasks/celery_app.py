@@ -192,6 +192,12 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=16, minute=50, day_of_week='1-5'),
     },
 
+    # 周日 03:00 - 概念板块成员同步
+    'weekly-concept-board-sync': {
+        'task': 'sync_concept_board',
+        'schedule': crontab(hour=3, minute=0, day_of_week='0'),
+    },
+
     # 17:00 - 复盘生成并发布到飞书
     'daily-evening-briefing': {
         'task': 'publish_evening_briefing',
