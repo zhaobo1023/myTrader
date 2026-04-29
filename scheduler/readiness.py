@@ -9,8 +9,10 @@ with the expected trade date.
 import os
 import time
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+_SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 from config.db import execute_query
 
@@ -33,13 +35,16 @@ def get_latest_trade_date(env=None) -> Optional[str]:
 
 def expected_trade_date() -> str:
     """
-    Calculate the expected trade date based on current time.
+    Calculate the expected trade date based on current Beijing time.
 
-    If it's a weekday before 17:00, expects today.
-    If it's a weekday after 17:00 or weekend, expects the most recent weekday.
+    Uses Asia/Shanghai timezone regardless of server timezone to match
+    the Celery Beat schedule (timezone='Asia/Shanghai').
+
+    If it's a weekday, expects today.
+    If it's a weekend, expects the most recent Friday.
     Returns date string (YYYY-MM-DD).
     """
-    now = datetime.now()
+    now = datetime.now(_SHANGHAI_TZ)
 
     # If weekend, go back to Friday
     if now.weekday() >= 5:  # Saturday=5, Sunday=6
@@ -47,8 +52,7 @@ def expected_trade_date() -> str:
         expected = now - timedelta(days=days_back)
         return expected.strftime("%Y-%m-%d")
 
-    # Weekday: if before 17:00, expect today; after 17:00, expect today
-    # (data should be available after market close ~15:30)
+    # Weekday: expect today
     return now.strftime("%Y-%m-%d")
 
 

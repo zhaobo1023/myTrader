@@ -444,6 +444,14 @@ def run_factor_calculation(dry_run: bool = False, env: str = 'online'):
         logger.info("[DRY-RUN] run_factor_calculation: would run all factor calculations (env=%s)", env)
         return
 
+    from scheduler.readiness import get_latest_trade_date, expected_trade_date
+    latest = get_latest_trade_date(env=env)
+    expected = expected_trade_date()
+    if latest != expected:
+        logger.error("[SKIP] run_factor_calculation: data not ready (latest=%s, expected=%s). "
+                     "Skipping to avoid computing on stale data.", latest, expected)
+        return
+
     from scheduler.task_logger import TaskLogger
 
     # Basic factors
@@ -504,6 +512,14 @@ def run_indicator_calculation(dry_run: bool = False, env: str = 'online'):
     """
     if dry_run:
         logger.info("[DRY-RUN] run_indicator_calculation: would run all indicator calculations (env=%s)", env)
+        return
+
+    from scheduler.readiness import get_latest_trade_date, expected_trade_date
+    latest = get_latest_trade_date(env=env)
+    expected = expected_trade_date()
+    if latest != expected:
+        logger.error("[SKIP] run_indicator_calculation: data not ready (latest=%s, expected=%s). "
+                     "Skipping to avoid computing on stale data.", latest, expected)
         return
 
     from scheduler.task_logger import TaskLogger

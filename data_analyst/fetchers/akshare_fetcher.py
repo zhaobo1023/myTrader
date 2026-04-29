@@ -331,7 +331,7 @@ def main():
         print(f"\n并行下载（{NUM_WORKERS} 线程)...")
 
         with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
-            futures = {executor.submit(download_and_save, t): t[0] for t in tasks}
+            futures = {executor.submit(download_and_save, *t): t[0] for t in tasks}
             done = 0
             for future in as_completed(futures):
                 code, count, err = future.result()

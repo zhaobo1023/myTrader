@@ -36,12 +36,15 @@ sys.path.insert(0, ROOT)
 
 from config.db import get_connection
 
+_log_dir = os.path.join(ROOT, 'output', 'microcap')
+os.makedirs(_log_dir, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(os.path.join(ROOT, 'output', 'microcap', 'daily_basic_history.log'), mode='a'),
+        logging.FileHandler(os.path.join(_log_dir, 'daily_basic_history.log'), mode='a'),
     ]
 )
 logger = logging.getLogger(__name__)
