@@ -53,6 +53,18 @@ interface SignalRow {
   circ_mv?: number | null;
   pe_ttm?: number | null;
   pb?: number | null;
+  // hardtech fields
+  industry?: string;
+  composite_score?: number | null;
+  rd_intensity?: number | null;
+  rd_growth?: number | null;
+  rd_efficiency?: number | null;
+  gross_margin_trend?: number | null;
+  revenue_growth?: number | null;
+  gross_margin?: number | null;
+  net_profit_growth?: number | null;
+  rps_250?: number | null;
+  mom_20?: number | null;
 }
 
 interface PresetRunDetail extends PresetRunSummary {
@@ -321,7 +333,9 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
               <tr style={{ borderBottom: '1px solid var(--border-subtle)', borderTop: '1px solid var(--border-subtle)' }}>
                 {(card.meta.key === 'microcap_pure_mv'
                   ? ['日期', '状态', '候选数', '交易日', '操作']
-                  : ['日期', '状态', '总信号', '动量', '反转', '大盘', '操作']
+                  : card.meta.key === 'hardtech'
+                    ? ['日期', '状态', '选股数', '创新龙头', '价值股', '操作']
+                    : ['日期', '状态', '总信号', '动量', '反转', '大盘', '操作']
                 ).map((h) => (
                   <th
                     key={h}
@@ -370,6 +384,15 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                       <td style={{ padding: '8px 12px', color: 'var(--text-secondary)', fontSize: '11px' }}>
                         {run.market_message ? run.market_message.replace('trade_date=', '') : '--'}
                       </td>
+                    ) : card.meta.key === 'hardtech' ? (
+                      <>
+                        <td style={{ padding: '8px 12px', color: 'var(--text-secondary)' }}>
+                          {run.status === 'done' ? run.momentum_count : '--'}
+                        </td>
+                        <td style={{ padding: '8px 12px', color: 'var(--text-secondary)' }}>
+                          {run.status === 'done' ? run.reversal_count : '--'}
+                        </td>
+                      </>
                     ) : (
                       <>
                         <td style={{ padding: '8px 12px', color: 'var(--text-secondary)' }}>
@@ -432,7 +455,7 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                   {/* Expanded signals detail */}
                   {expandedRunId === run.id && (
                     <tr key={`detail-${run.id}`}>
-                      <td colSpan={card.meta.key === 'microcap_pure_mv' ? 5 : 7} style={{ padding: '0', borderBottom: '1px solid var(--border-subtle)' }}>
+                      <td colSpan={card.meta.key === 'microcap_pure_mv' ? 5 : card.meta.key === 'hardtech' ? 6 : 7} style={{ padding: '0', borderBottom: '1px solid var(--border-subtle)' }}>
                         <div style={{ padding: '12px 20px', background: 'var(--bg-elevated)' }}>
                           {loadingDetail && (
                             <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '10px 0' }}>加载中...</div>
@@ -442,9 +465,11 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
                                 {card.meta.key === 'microcap_pure_mv'
                                   ? `持仓候选（${runDetail.signals.length} 只）· ${runDetail.market_message || ''}`
-                                  : <>信号明细（{runDetail.signals.length} 只）· 大盘：<span style={marketBadge(runDetail.market_status)}>{runDetail.market_status || '--'}</span>
-                                    {runDetail.market_message && <span style={{ marginLeft: '8px', color: 'var(--text-tertiary)' }}>{runDetail.market_message}</span>}
-                                  </>
+                                  : card.meta.key === 'hardtech'
+                                    ? `硬科技选股（${runDetail.signals.length} 只）· 创新龙头: ${runDetail.momentum_count} / 价值股: ${runDetail.reversal_count}`
+                                    : <>信号明细（{runDetail.signals.length} 只）· 大盘：<span style={marketBadge(runDetail.market_status)}>{runDetail.market_status || '--'}</span>
+                                      {runDetail.market_message && <span style={{ marginLeft: '8px', color: 'var(--text-tertiary)' }}>{runDetail.market_message}</span>}
+                                    </>
                                 }
                               </div>
                               {runDetail.signals.length === 0 ? (
@@ -492,6 +517,63 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                                                 circ_mv: sig.circ_mv,
                                                 pe_ttm: sig.pe_ttm,
                                                 pb: sig.pb,
+                                              }}
+                                            />
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              ) : card.meta.key === 'hardtech' ? (
+                                <div className="table-scroll">
+                                  <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse', minWidth: '900px' }}>
+                                    <thead>
+                                      <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                                        {['#', '代码', '名称', '行业', '综合分', 'R&D强度', 'R&D增长', '毛利率趋势', '营收增长', '净利润增长', 'RPS250', 'PE-TTM', ''].map((h) => (
+                                          <th key={h} style={{ padding: '5px 10px', textAlign: h === '#' || h === 'RPS250' || h === 'PE-TTM' || h === '综合分' || h === 'R&D强度' || h === 'R&D增长' || h === '毛利率趋势' || h === '营收增长' || h === '净利润增长' ? 'right' : h === '' ? 'center' : 'left', color: 'var(--text-muted)', fontWeight: 400 }}>
+                                            {h}
+                                          </th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {runDetail.signals.map((sig, idx) => (
+                                        <tr
+                                          key={`${sig.stock_code}-${idx}`}
+                                          style={{ borderBottom: '1px solid var(--border-subtle)' }}
+                                          onMouseEnter={(e) => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--bg-card)'; }}
+                                          onMouseLeave={(e) => { (e.currentTarget as HTMLTableRowElement).style.background = 'transparent'; }}
+                                        >
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-muted)', fontWeight: 400 }}>{idx + 1}</td>
+                                          <td style={{ padding: '5px 10px', fontFamily: 'var(--font-geist-mono)', color: 'var(--text-secondary)' }}>{sig.stock_code}</td>
+                                          <td style={{ padding: '5px 10px', color: 'var(--text-primary)' }}>{sig.stock_name || '--'}</td>
+                                          <td style={{ padding: '5px 10px', color: 'var(--text-secondary)', fontSize: '11px' }}>{sig.industry || '--'}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-primary)', fontWeight: 510 }}>{fmt(sig.composite_score, 3)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.rd_intensity, 3)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.rd_growth, 3)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.gross_margin_trend, 3)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.revenue_growth, 3)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.net_profit_growth, 3)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.rps_250, 1)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.pe_ttm, 1)}</td>
+                                          <td style={{ padding: '5px 10px', textAlign: 'center' }}>
+                                            <QuickAddMenu
+                                              stockCode={sig.stock_code}
+                                              stockName={sig.stock_name || sig.stock_code}
+                                              sourceType="strategy"
+                                              sourceDetail={card.meta.name}
+                                              snapshot={{
+                                                strategy_name: card.meta.name,
+                                                composite_score: sig.composite_score,
+                                                industry: sig.industry,
+                                                rd_intensity: sig.rd_intensity,
+                                                rd_growth: sig.rd_growth,
+                                                gross_margin_trend: sig.gross_margin_trend,
+                                                revenue_growth: sig.revenue_growth,
+                                                net_profit_growth: sig.net_profit_growth,
+                                                rps_250: sig.rps_250,
+                                                pe_ttm: sig.pe_ttm,
                                               }}
                                             />
                                           </td>

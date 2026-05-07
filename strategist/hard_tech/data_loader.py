@@ -4,25 +4,32 @@ Hard-tech data loader
 
 Loads and merges factor data from multiple tables:
   - trade_stock_hardtech_factor (rd_intensity, rd_growth, rd_efficiency, gross_margin_trend)
-  - trade_stock_extended_factor (revenue_growth, gross_margin, roe_ttm)
+  - trade_stock_extended_factor (revenue_growth, gross_margin, net_profit_growth)
   - trade_stock_basic_factor (mom_20)
-  - trade_stock_valuation_factor (market_cap)
+  - trade_stock_rps (rps_250)
+  - trade_stock_valuation_factor (pe_ttm)
   - trade_stock_daily (close_price for forward returns)
 """
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
+from datetime import timedelta
 
 import pandas as pd
-import numpy as np
 
-from config.db import get_connection, execute_query
+from config.db import get_connection
 
 logger = logging.getLogger(__name__)
 
-CHUNK_SIZE = 50000
 MAX_RETRIES = 3
 RETRY_BACKOFF = 10
+
+# Authoritative industry list (must match hardtech_factor_calculator.HARD_TECH_INDUSTRIES)
+HARD_TECH_INDUSTRIES = [
+    '电子', '计算机', '通信', '电力设备',
+    '机械设备', '国防军工', '医药生物', '汽车',
+    '有色金属', '化工',
+]
 
 
 def _read_sql_by_batches(sql_template, batch_col, batch_values):
@@ -69,28 +76,28 @@ def load_hardtech_panel(start_date, end_date):
     """
     logger.info(f"Loading hard-tech factor panel: {start_date} ~ {end_date}")
 
-    # Get available dates from hardtech_factor table
+    # Get available dates from hardtech_factor table (parameterized)
     conn = get_connection()
     try:
-        dates_sql = f"""
+        dates_sql = """
             SELECT DISTINCT calc_date FROM trade_stock_hardtech_factor
-            WHERE calc_date >= '{start_date}' AND calc_date <= '{end_date}'
+            WHERE calc_date >= %s AND calc_date <= %s
             ORDER BY calc_date
         """
-        dates_df = pd.read_sql(dates_sql, conn)
+        dates_df = pd.read_sql(dates_sql, conn, params=(start_date, end_date))
     finally:
         conn.close()
 
     if dates_df.empty:
-        # Fallback to valuation_factor dates
+        # Fallback to valuation_factor dates (parameterized)
         conn = get_connection()
         try:
-            dates_sql = f"""
+            dates_sql = """
                 SELECT DISTINCT calc_date FROM trade_stock_valuation_factor
-                WHERE calc_date >= '{start_date}' AND calc_date <= '{end_date}'
+                WHERE calc_date >= %s AND calc_date <= %s
                 ORDER BY calc_date
             """
-            dates_df = pd.read_sql(dates_sql, conn)
+            dates_df = pd.read_sql(dates_sql, conn, params=(start_date, end_date))
         finally:
             conn.close()
 
@@ -101,11 +108,11 @@ def load_hardtech_panel(start_date, end_date):
     dates = [str(d) for d in dates_df.iloc[:, 0]]
     logger.info(f"  {len(dates)} trading dates to process")
 
-    # Sample monthly for performance (hardtech factors change slowly)
+    # Sample every 20 trading days for performance (hardtech factors change slowly)
     sampled = dates[::20]
     if dates[-1] not in sampled:
         sampled.append(dates[-1])
-    logger.info(f"  Sampled {len(sampled)} monthly dates")
+    logger.info(f"  Sampled {len(sampled)} dates")
 
     # 1) Hard-tech factors
     sql_hardtech_tpl = """
@@ -121,10 +128,10 @@ def load_hardtech_panel(start_date, end_date):
         logger.warning("No hardtech factor data found")
         return pd.DataFrame()
 
-    # 2) Extended factors: revenue_growth, gross_margin, roe_ttm
+    # 2) Extended factors: revenue_growth, gross_margin, net_profit_growth
     sql_ext_tpl = """
         SELECT stock_code, calc_date AS trade_date,
-               revenue_growth, gross_margin, roe_ttm
+               revenue_growth, gross_margin, net_profit_growth
         FROM trade_stock_extended_factor
         WHERE calc_date = '__trade_date__'
     """
@@ -141,10 +148,20 @@ def load_hardtech_panel(start_date, end_date):
     logger.info("  Loading basic_factor...")
     df_basic = _read_sql_by_batches(sql_basic_tpl, 'trade_date', sampled)
 
-    # 4) Valuation factors: market_cap
+    # 4) RPS: rps_250
+    sql_rps_tpl = """
+        SELECT stock_code, calc_date AS trade_date,
+               rps_250
+        FROM trade_stock_rps
+        WHERE calc_date = '__trade_date__'
+    """
+    logger.info("  Loading rps...")
+    df_rps = _read_sql_by_batches(sql_rps_tpl, 'trade_date', sampled)
+
+    # 5) Valuation factors: pe_ttm
     sql_val_tpl = """
         SELECT stock_code, calc_date AS trade_date,
-               market_cap
+               pe_ttm
         FROM trade_stock_valuation_factor
         WHERE calc_date = '__trade_date__'
     """
@@ -152,7 +169,7 @@ def load_hardtech_panel(start_date, end_date):
     df_val = _read_sql_by_batches(sql_val_tpl, 'trade_date', sampled)
 
     # Merge all
-    dfs = [df_hardtech, df_ext, df_basic, df_val]
+    dfs = [df_hardtech, df_ext, df_basic, df_rps, df_val]
     dfs = [df for df in dfs if not df.empty]
 
     if not dfs:
@@ -187,12 +204,12 @@ def load_forward_returns(start_date, end_date, periods=(20,)):
 
     conn = get_connection()
     try:
-        dates_sql = f"""
+        dates_sql = """
             SELECT DISTINCT trade_date FROM trade_stock_daily
-            WHERE trade_date >= '{start_date}' AND trade_date <= '{end_ext}'
+            WHERE trade_date >= %s AND trade_date <= %s
             ORDER BY trade_date
         """
-        dates_df = pd.read_sql(dates_sql, conn)
+        dates_df = pd.read_sql(dates_sql, conn, params=(start_date, end_ext))
     finally:
         conn.close()
 
@@ -201,13 +218,7 @@ def load_forward_returns(start_date, end_date, periods=(20,)):
 
     dates = [str(d) for d in dates_df.iloc[:, 0]]
 
-    # Sample monthly to match panel dates
-    sampled = dates[::20]
-    if dates[-1] not in sampled:
-        sampled.append(dates[-1])
-
-    # Need all daily prices between sampled dates for forward return calc
-    # Load full range
+    # Load full daily prices for forward return calculation
     sql_tpl = """
         SELECT stock_code, trade_date, close_price
         FROM trade_stock_daily
@@ -237,3 +248,208 @@ def load_forward_returns(start_date, end_date, periods=(20,)):
 
     logger.info(f"  Forward returns: {len(result):,} rows")
     return result
+
+
+def load_single_day_factors(trade_date, stock_codes=None, env='online'):
+    """
+    Load factor values for a single trade date.
+
+    Args:
+        trade_date: str, date string YYYY-MM-DD
+        stock_codes: optional list of stock codes to filter
+        env: database environment
+
+    Returns:
+        DataFrame with index=stock_code, columns=factor names
+    """
+    if env == 'online':
+        from config.db import get_online_connection
+        conn_fn = get_online_connection
+    else:
+        conn_fn = get_connection
+
+    dfs = []
+
+    # 1) Hard-tech factors
+    sql = """
+        SELECT stock_code, calc_date,
+               rd_intensity, rd_growth, rd_efficiency, gross_margin_trend
+        FROM trade_stock_hardtech_factor
+        WHERE calc_date = %s
+    """
+    if stock_codes:
+        placeholders = ','.join(['%s'] * len(stock_codes))
+        sql += f" AND stock_code IN ({placeholders})"
+        params = [trade_date] + stock_codes
+    else:
+        params = [trade_date]
+
+    try:
+        conn = conn_fn()
+        try:
+            df = pd.read_sql(sql, conn, params=params)
+        finally:
+            conn.close()
+        if not df.empty:
+            df = df.rename(columns={'calc_date': 'trade_date'})
+            dfs.append(df)
+    except Exception as e:
+        logger.warning(f"Failed to load hardtech factors for {trade_date}: {e}")
+
+    # 2) Extended factors
+    sql_ext = """
+        SELECT stock_code, calc_date,
+               revenue_growth, gross_margin, net_profit_growth
+        FROM trade_stock_extended_factor
+        WHERE calc_date = %s
+    """
+    if stock_codes:
+        sql_ext += f" AND stock_code IN ({placeholders})"
+        params_ext = [trade_date] + stock_codes
+    else:
+        params_ext = [trade_date]
+
+    try:
+        conn = conn_fn()
+        try:
+            df_ext = pd.read_sql(sql_ext, conn, params=params_ext)
+        finally:
+            conn.close()
+        if not df_ext.empty:
+            df_ext = df_ext.rename(columns={'calc_date': 'trade_date'})
+            dfs.append(df_ext)
+    except Exception as e:
+        logger.warning(f"Failed to load extended factors for {trade_date}: {e}")
+
+    # 3) Basic factors: mom_20
+    sql_basic = """
+        SELECT stock_code, calc_date, mom_20
+        FROM trade_stock_basic_factor
+        WHERE calc_date = %s
+    """
+    if stock_codes:
+        sql_basic += f" AND stock_code IN ({placeholders})"
+        params_basic = [trade_date] + stock_codes
+    else:
+        params_basic = [trade_date]
+
+    try:
+        conn = conn_fn()
+        try:
+            df_basic = pd.read_sql(sql_basic, conn, params=params_basic)
+        finally:
+            conn.close()
+        if not df_basic.empty:
+            df_basic = df_basic.rename(columns={'calc_date': 'trade_date'})
+            dfs.append(df_basic)
+    except Exception as e:
+        logger.warning(f"Failed to load basic factors for {trade_date}: {e}")
+
+    # 4) RPS: rps_250
+    sql_rps = """
+        SELECT stock_code, calc_date, rps_250
+        FROM trade_stock_rps
+        WHERE calc_date = %s
+    """
+    if stock_codes:
+        sql_rps += f" AND stock_code IN ({placeholders})"
+        params_rps = [trade_date] + stock_codes
+    else:
+        params_rps = [trade_date]
+
+    try:
+        conn = conn_fn()
+        try:
+            df_rps = pd.read_sql(sql_rps, conn, params=params_rps)
+        finally:
+            conn.close()
+        if not df_rps.empty:
+            df_rps = df_rps.rename(columns={'calc_date': 'trade_date'})
+            dfs.append(df_rps)
+    except Exception as e:
+        logger.warning(f"Failed to load rps for {trade_date}: {e}")
+
+    # 5) Valuation: pe_ttm
+    sql_val = """
+        SELECT stock_code, calc_date, pe_ttm
+        FROM trade_stock_valuation_factor
+        WHERE calc_date = %s
+    """
+    if stock_codes:
+        sql_val += f" AND stock_code IN ({placeholders})"
+        params_val = [trade_date] + stock_codes
+    else:
+        params_val = [trade_date]
+
+    try:
+        conn = conn_fn()
+        try:
+            df_val = pd.read_sql(sql_val, conn, params=params_val)
+        finally:
+            conn.close()
+        if not df_val.empty:
+            df_val = df_val.rename(columns={'calc_date': 'trade_date'})
+            dfs.append(df_val)
+    except Exception as e:
+        logger.warning(f"Failed to load valuation factors for {trade_date}: {e}")
+
+    if not dfs:
+        return pd.DataFrame()
+
+    # Merge
+    result = dfs[0]
+    for other in dfs[1:]:
+        result = pd.merge(result, other, on=['trade_date', 'stock_code'], how='outer')
+
+    for col in result.columns:
+        if col not in ('stock_code', 'trade_date'):
+            result[col] = pd.to_numeric(result[col], errors='coerce')
+
+    result = result.set_index('stock_code')
+    logger.info(f"Single day factors for {trade_date}: {len(result)} stocks")
+    return result
+
+
+def load_hardtech_universe(env='online'):
+    """
+    Load hard-tech stock universe from trade_stock_basic.
+
+    Filters by sw_level1 industry (same list as hardtech_factor_calculator)
+    and excludes ST stocks.
+
+    Returns:
+        DataFrame with columns [stock_code, stock_name, sw_industry]
+    """
+    if env == 'online':
+        from config.db import get_online_connection
+        conn_fn = get_online_connection
+    else:
+        conn_fn = get_connection
+
+    placeholders = ','.join(['%s'] * len(HARD_TECH_INDUSTRIES))
+    sql = f"""
+        SELECT b.stock_code, b.stock_name, b.industry AS sw_industry
+        FROM trade_stock_basic b
+        WHERE b.industry IN ({placeholders})
+          AND b.stock_name NOT LIKE '%%ST%%'
+          AND b.list_status = 'L'
+    """
+    params = HARD_TECH_INDUSTRIES
+
+    try:
+        conn = conn_fn()
+        try:
+            df = pd.read_sql(sql, conn, params=params)
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Failed to load hardtech universe: {e}")
+        return pd.DataFrame()
+
+    if df.empty:
+        logger.warning("Empty hardtech universe")
+        return df
+
+    logger.info(f"Hardtech universe: {len(df)} stocks across "
+                f"{df['sw_industry'].nunique()} industries")
+    return df

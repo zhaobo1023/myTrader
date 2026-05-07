@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Celery tasks for preset strategies (momentum_reversal, microcap_pure_mv)
+Celery tasks for preset strategies (momentum_reversal, microcap_pure_mv, hardtech)
 """
 import logging
 import traceback
@@ -18,7 +18,7 @@ def run_preset_strategy(self, run_id: int, strategy_key: str, env: str = 'online
 
     Args:
         run_id: Database record ID
-        strategy_key: Strategy identifier (momentum_reversal or microcap_pure_mv)
+        strategy_key: Strategy identifier (momentum_reversal, microcap_pure_mv, or hardtech)
         env: Database environment (default: online)
 
     Returns:
@@ -41,6 +41,8 @@ def run_preset_strategy(self, run_id: int, strategy_key: str, env: str = 'online
             result = _run_momentum_reversal(run_id, env)
         elif strategy_key == 'microcap_pure_mv':
             result = _run_microcap_pure_mv(run_id, env)
+        elif strategy_key == 'hardtech':
+            result = _run_hardtech_tech(run_id, env)
         else:
             raise ValueError(f'Unknown strategy key: {strategy_key}')
 
@@ -308,6 +310,89 @@ def _run_microcap_pure_mv(run_id: int, env: str) -> dict:
                 run_id, signal_count, trade_date)
 
     return {'signal_count': signal_count}
+
+
+def _run_hardtech_tech(run_id: int, env: str) -> dict:
+    """Execute hard-tech stock screening and persist results."""
+    import os
+    import sys
+
+    ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+
+    from config.db import execute_update, execute_query as db_query
+    import json
+
+    # Get run_date from database record
+    run_date_rows = db_query(
+        "SELECT run_date FROM trade_preset_strategy_run WHERE id = %s",
+        (run_id,),
+        env=env,
+    )
+    if not run_date_rows or not run_date_rows[0].get('run_date'):
+        raise ValueError(f'No run_date found for run_id {run_id}')
+    trade_date = str(run_date_rows[0]['run_date'])
+    logger.info('[CELERY] hardtech run %d: using trade_date %s', run_id, trade_date)
+
+    from strategist.hard_tech.screener import screen_hardtech_stocks
+    from strategist.hard_tech.config import TOP_N
+    result_df = screen_hardtech_stocks(trade_date=trade_date, top_n=TOP_N, env=env)
+
+    if result_df.empty:
+        logger.warning('[CELERY] hardtech: empty result for %s', trade_date)
+        execute_update(
+            """
+            UPDATE trade_preset_strategy_run
+            SET status = 'done', signal_count = 0, momentum_count = 0, reversal_count = 0,
+                market_status = '', market_message = %s, signals_json = '[]', finished_at = NOW()
+            WHERE id = %s
+            """,
+            (f'no hardtech data for {trade_date}', run_id),
+            env=env,
+        )
+        return {'signal_count': 0}
+
+    # Build signals list, convert Decimal to float for JSON serialization
+    from decimal import Decimal
+    signals = result_df.to_dict('records')
+    for sig in signals:
+        for k, v in sig.items():
+            if isinstance(v, (float, Decimal)):
+                sig[k] = round(float(v), 4)
+
+    signals_json = json.dumps(signals, ensure_ascii=False)
+    signal_count = len(signals)
+
+    # Use momentum_count for innovation_leaders, reversal_count for value_stocks
+    innovation_leaders = int(result_df.attrs.get('innovation_leaders', 0))
+    value_stocks = int(result_df.attrs.get('value_stocks', 0))
+
+    execute_update(
+        """
+        UPDATE trade_preset_strategy_run
+        SET status = 'done',
+            signal_count = %s,
+            momentum_count = %s,
+            reversal_count = %s,
+            market_status = '',
+            market_message = %s,
+            signals_json = %s,
+            finished_at = NOW()
+        WHERE id = %s
+        """,
+        (signal_count, innovation_leaders, value_stocks,
+         f'trade_date={trade_date}', signals_json, run_id),
+        env=env,
+    )
+    logger.info('[CELERY] hardtech run %s completed: %s stocks for %s',
+                run_id, signal_count, trade_date)
+
+    return {
+        'signal_count': signal_count,
+        'momentum_count': innovation_leaders,
+        'reversal_count': value_stocks,
+    }
 
 
 def _safe_float(v):

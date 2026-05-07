@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Daily scheduled tasks for preset strategies (动量反转 + 微盘股)
+Daily scheduled tasks for preset strategies (动量反转 + 微盘股 + 硬科技)
 
-每日收盘后自动执行策略筛选。
+每日收盘后自动执行策略筛选。硬科技策略仅周五执行。
 
 NOTE: Beat 调度时直接同步执行策略（不通过 apply_async 二次投递），
 避免 Docker 网络隔离导致 Celery 任务投递失败。
@@ -24,7 +24,7 @@ def run_preset_strategies_daily(self):
     直接在 Worker 进程内同步运行，不通过 apply_async 二次投递。
     """
     from config.db import execute_query, execute_update
-    from api.tasks.preset_strategies import _run_momentum_reversal, _run_microcap_pure_mv
+    from api.tasks.preset_strategies import _run_momentum_reversal, _run_microcap_pure_mv, _run_hardtech_tech
 
     logger.info('=' * 60)
     logger.info('[SCHEDULE] Starting daily preset strategies execution')
@@ -45,6 +45,15 @@ def run_preset_strategies_daily(self):
         'momentum_reversal': _run_momentum_reversal,
         'microcap_pure_mv': _run_microcap_pure_mv,
     }
+
+    # Hardtech: only run on Friday (weekday == 4)
+    try:
+        trade_dt = datetime.strptime(trade_date_str, '%Y-%m-%d')
+        if trade_dt.weekday() == 4:
+            strategies['hardtech'] = _run_hardtech_tech
+            logger.info('[SCHEDULE] Friday detected, adding hardtech strategy')
+    except (ValueError, TypeError):
+        pass
     results = {}
 
     for strategy_key, run_fn in strategies.items():

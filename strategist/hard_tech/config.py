@@ -3,11 +3,10 @@
 Hard-tech factor definitions and parameters
 
 Factor groups:
-  Innovation (25%): rd_intensity, rd_growth, rd_efficiency
-  Growth (25%):     revenue_growth, gross_margin_trend
-  Quality (20%):    roe_ttm, gross_margin
-  Technical (15%):  mom_20
-  Valuation (15%):  market_cap
+  Innovation (30%): rd_intensity, rd_growth, rd_efficiency, gross_margin_trend
+  Quality (30%):    gross_margin, revenue_growth, net_profit_growth
+  Momentum (25%):   rps_250, mom_20
+  Valuation (15%):  pe_ttm
 """
 
 # Hard-tech specific factors (from trade_stock_hardtech_factor)
@@ -45,13 +44,6 @@ HARDTECH_FACTOR_DEFS = [
 # Reused factors from existing factor tables
 REUSED_FACTOR_DEFS = [
     {
-        'name': 'revenue_growth',
-        'table': 'trade_stock_extended_factor',
-        'column': 'revenue_growth',
-        'direction': 1,
-        'label': 'Revenue Growth',
-    },
-    {
         'name': 'gross_margin',
         'table': 'trade_stock_extended_factor',
         'column': 'gross_margin',
@@ -59,11 +51,25 @@ REUSED_FACTOR_DEFS = [
         'label': 'Gross Margin',
     },
     {
-        'name': 'roe_ttm',
+        'name': 'revenue_growth',
         'table': 'trade_stock_extended_factor',
-        'column': 'roe_ttm',
+        'column': 'revenue_growth',
         'direction': 1,
-        'label': 'ROE TTM',
+        'label': 'Revenue Growth',
+    },
+    {
+        'name': 'net_profit_growth',
+        'table': 'trade_stock_extended_factor',
+        'column': 'net_profit_growth',
+        'direction': 1,
+        'label': 'Net Profit Growth',
+    },
+    {
+        'name': 'rps_250',
+        'table': 'trade_stock_rps',
+        'column': 'rps_250',
+        'direction': 1,
+        'label': 'RPS 250D',
     },
     {
         'name': 'mom_20',
@@ -73,11 +79,11 @@ REUSED_FACTOR_DEFS = [
         'label': 'Momentum 20D',
     },
     {
-        'name': 'market_cap',
+        'name': 'pe_ttm',
         'table': 'trade_stock_valuation_factor',
-        'column': 'market_cap',
+        'column': 'pe_ttm',
         'direction': -1,
-        'label': 'Small Cap',
+        'label': 'PE TTM',
     },
 ]
 
@@ -92,39 +98,37 @@ FACTOR_LABELS = {f['name']: f['label'] for f in ALL_FACTOR_DEFS}
 # Factor name list
 HARDTECH_FACTORS = [f['name'] for f in ALL_FACTOR_DEFS]
 
-# Five-group factor structure
+# Factor group structure
 FACTOR_GROUPS = [
     {
         'name': 'innovation',
         'label': 'Innovation',
-        'factors': ['rd_intensity', 'rd_growth', 'rd_efficiency'],
-        'weight': 0.25,
-    },
-    {
-        'name': 'growth',
-        'label': 'Growth',
-        'factors': ['revenue_growth', 'gross_margin_trend'],
-        'weight': 0.25,
+        'factors': ['rd_intensity', 'rd_growth', 'rd_efficiency', 'gross_margin_trend'],
+        'weight': 0.30,
     },
     {
         'name': 'quality',
         'label': 'Quality',
-        'factors': ['roe_ttm', 'gross_margin'],
-        'weight': 0.20,
+        'factors': ['gross_margin', 'revenue_growth', 'net_profit_growth'],
+        'weight': 0.30,
     },
     {
-        'name': 'technical',
-        'label': 'Technical',
-        'factors': ['mom_20'],
-        'weight': 0.15,
+        'name': 'momentum',
+        'label': 'Momentum',
+        'factors': ['rps_250', 'mom_20'],
+        'weight': 0.25,
     },
     {
         'name': 'valuation',
         'label': 'Valuation',
-        'factors': ['market_cap'],
+        'factors': ['pe_ttm'],
         'weight': 0.15,
     },
 ]
+
+# Selection parameters
+TOP_N = 20
+INDUSTRY_MAX_WEIGHT = 0.30
 
 # IC validation parameters
 IC_FORWARD_PERIOD = 20

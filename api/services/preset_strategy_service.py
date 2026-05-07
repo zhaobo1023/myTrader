@@ -28,6 +28,24 @@ PRESET_STRATEGIES = [
         'warnings': [],
     },
     {
+        'key': 'hardtech',
+        'name': '硬科技选股策略',
+        'description': '聚焦电子/计算机/通信/军工等10个硬科技行业，10因子4分组评分选股，每周五盘后运行',
+        'params_desc': 'Top 20 / 周频调仓 / Innovation 30% + Quality 30% + Momentum 25% + Valuation 15% / 行业上限 30%',
+        'warnings': [
+            {
+                'type': 'info',
+                'title': '[INFO] 调仓频率',
+                'body': '本策略每周五调仓，非每日运行。硬科技因子（R&D强度/增长率/效率）更新频率低，周频调仓已充分',
+            },
+            {
+                'type': 'warning',
+                'title': '[WARN] R&D 数据依赖',
+                'body': '核心创新因子依赖研报R&D支出数据（Sina Finance），若数据源异常可能导致因子缺失。建议关注数据完整性告警',
+            },
+        ],
+    },
+    {
         'key': 'microcap_pure_mv',
         'name': '微盘股策略',
         'description': '全市场市值后20%微盘股，财务风控过滤（排除亏损/高负债/负现金流），每日盘后更新持仓候选',
