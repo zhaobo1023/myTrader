@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 绝对禁止
 
 - **禁止使用任何 emoji 字符**。代码、注释、报告、CSV、日志、Markdown 输出中一律不使用 emoji。原因：MySQL utf8 字符集不支持 4 字节 emoji，会导致写入失败。用纯文本标记替代（[RED]、[WARN]、[OK]、[BAD]、[CRITICAL]）。
+- **禁止读取 docs/archive/ 下的任何文件**。这些是已过期的历史文档（旧 PRD、实施计划、设计方案），内容与当前代码不符，会误导你的判断。如需了解历史决策，用 `git log` 或 `git blame` 查看代码变更记录。
 
 ## 项目概述
 
@@ -59,7 +60,7 @@ myTrader/
 ├── tasks/            # YAML 任务定义 (_base / 02_macro / 03_factors / 04_indicators / 05_strategy)
 ├── web/              # Next.js 16: src/app/ src/components/ src/lib/
 ├── tests/            # unit/ e2e/ load/ security/
-├── docs/             # 文档（含 docs/claude/ 领域文档）
+├── docs/             # ops/ 运维文档 | claude/ 领域文档 | archive/ 已归档(禁止读取)
 ├── output/           # 统一输出目录（git ignored）
 ├── docker-compose.yml / Dockerfile / nginx.conf / Makefile
 └── .env / .env.example / requirements.txt
@@ -134,6 +135,15 @@ DB_ENV=online python scripts/yfinance_sync.py --days 30
 - 用户说"do it"或给出简短确认时，直接执行最明显的下一步，不要反问可以推断的内容。
 - **实现任何功能前，先列出：1) 计划修改的文件列表，2) 最小化方案描述。等待确认后再写代码。**
 - 实现大功能前确认 scope：询问"要完整版还是精简版？"，不要默认做完整实现。
+
+### 异步沟通与任务执行
+
+任务文件位于 `/Users/zhaobo/Documents/notes/Daily/task/tasks_myTrader.md`，执行长任务（涉及 3+ 文件改动或预计 10+ 分钟）时遵守以下规则：
+
+1. **定期回读**：每完成一个子步骤，回读任务文件，检查「待决策」区和「追加要求」区是否有新内容
+2. **决策分级**：遇到红灯事项（涉及资金逻辑、数据库 migration、对外接口变更、生产部署）时，将问题写入任务文件的「待决策」区（附上选项和建议），然后跳过该步继续做其他子任务，不要停下来等
+3. **进展更新**：DOING 状态的任务加 `进展：` 字段，每完成一个关键步骤更新一行，格式为 `- [时间] 做了什么`
+4. **黄灯自主决策**：可逆操作（内部重构、UI 调整等）自行决策，在进展中记录决策理由
 
 ### Code Review
 - 每次做 diff review 前必须重新运行 `git diff`，禁止使用缓存或上次的 diff 结果。
