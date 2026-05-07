@@ -91,32 +91,37 @@ def get_hardtech_stock_codes():
 # Phase 1: Fetch rd_expense from Sina via AKShare
 # ========================================================================
 
-def fetch_rd_expense_sina(stock_codes_bare, delay=0.3):
+def fetch_and_save_rd_expense(stock_codes_bare, delay=0.3, batch_save=50):
     """
-    Fetch rd_expense from Sina income statement for given stocks.
+    Fetch rd_expense from Sina income statement and save to DB in batches.
 
     Args:
-        stock_codes_bare: list of bare stock codes (e.g. ['300750', '688981'])
-        delay: seconds between requests (rate limiting)
-
-    Returns:
-        DataFrame with columns: stock_code, report_date, rd_expense, revenue, cost
+        stock_codes_bare: list of bare stock codes
+        delay: seconds between requests
+        batch_save: save to DB every N stocks
     """
     import akshare as ak
 
-    all_data = []
+    upsert_sql = """
+        INSERT INTO financial_income_detail
+            (stock_code, report_date, rd_expense, operating_revenue, operating_cost)
+        VALUES (%s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            rd_expense = VALUES(rd_expense),
+            operating_revenue = VALUES(operating_revenue),
+            operating_cost = VALUES(operating_cost)
+    """
+
     total = len(stock_codes_bare)
+    pending = []
+    total_saved = 0
 
     for i, code in enumerate(stock_codes_bare):
-        if (i + 1) % 50 == 0 or i == total - 1:
-            logger.info(f"  Fetching rd_expense: {i+1}/{total}")
-
         try:
             df = ak.stock_financial_report_sina(stock=code, symbol='利润表')
             if df is None or df.empty:
                 continue
 
-            # Find relevant columns
             rd_col = [c for c in df.columns if '研发费用' in c]
             rev_col = [c for c in df.columns if '营业收入' in c and '总' not in c and '利息' not in c]
             cost_col = [c for c in df.columns if '营业成本' in c and '总' not in c and '税' not in c and '其他' not in c]
@@ -129,7 +134,7 @@ def fetch_rd_expense_sina(stock_codes_bare, delay=0.3):
             rev_col = rev_col[0]
             cost_col = cost_col[0] if cost_col else None
 
-            for _, row in df.head(8).iterrows():  # Last 8 quarters
+            for _, row in df.head(8).iterrows():
                 rd = pd.to_numeric(row.get(rd_col), errors='coerce')
                 rev = pd.to_numeric(row.get(rev_col), errors='coerce')
                 cost = pd.to_numeric(row.get(cost_col), errors='coerce') if cost_col else np.nan
@@ -138,25 +143,38 @@ def fetch_rd_expense_sina(stock_codes_bare, delay=0.3):
                 if pd.isna(rd) or pd.isna(rev):
                     continue
 
-                all_data.append({
-                    'stock_code': code,
-                    'report_date': report_date,
-                    'rd_expense': rd,
-                    'revenue': rev,
-                    'cost': cost,
-                })
+                # Format date: '20260331' -> '2026-03-31'
+                if len(report_date) == 8:
+                    formatted = f"{report_date[:4]}-{report_date[4:6]}-{report_date[6:8]}"
+                else:
+                    continue
+
+                pending.append((code, formatted, float(rd), float(rev), float(cost) if pd.notna(cost) else None))
 
         except Exception as e:
             if i < 5:
                 logger.warning(f"  {code}: failed - {str(e)[:60]}")
             continue
 
+        # Save batch
+        if (i + 1) % batch_save == 0 or i == total - 1:
+            if pending:
+                conn = get_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.executemany(upsert_sql, pending)
+                    conn.commit()
+                    total_saved += len(pending)
+                    cursor.close()
+                finally:
+                    conn.close()
+                logger.info(f"  Fetched {i+1}/{total} stocks, saved {total_saved} rows so far")
+                pending = []
+
         time.sleep(delay)
 
-    if not all_data:
-        return pd.DataFrame()
-
-    return pd.DataFrame(all_data)
+    logger.info(f"Fetch complete: {total_saved} rd_expense rows saved")
+    return total_saved
 
 
 def save_rd_expense_to_db(df):
@@ -451,9 +469,7 @@ def main():
         codes = get_hardtech_stock_codes()
         bare_codes = [c[0] for c in codes]
         logger.info(f"  {len(bare_codes)} hard-tech stocks to fetch")
-        df = fetch_rd_expense_sina(bare_codes)
-        if not df.empty:
-            save_rd_expense_to_db(df)
+        fetch_and_save_rd_expense(bare_codes)
 
     if args.all or args.calc_rd:
         logger.info("Step 2: Calculating rd factors...")
