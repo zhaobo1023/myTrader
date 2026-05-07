@@ -25,16 +25,23 @@ logger = logging.getLogger(__name__)
 class FactorSelector:
     """多因子选股器"""
 
-    def __init__(self, factors=None, weights=None, use_groups=False):
+    def __init__(self, factors=None, weights=None, use_groups=False,
+                 factor_groups=None, factor_directions=None):
         """
         Args:
             factors: list of factor names, None = all factors
             weights: list of float, None = equal weight
-            use_groups: if True, derive weights from FACTOR_GROUPS
+            use_groups: if True, derive weights from FACTOR_GROUPS or factor_groups
+            factor_groups: optional list of group dicts overriding FACTOR_GROUPS
+            factor_directions: optional dict {factor_name: direction} overriding FACTOR_DIRECTIONS
         """
+        groups = factor_groups if factor_groups is not None else FACTOR_GROUPS
+        directions = factor_directions if factor_directions is not None else FACTOR_DIRECTIONS
+        self._factor_directions = directions
+
         if factors is None:
             if use_groups:
-                factors = [f for g in FACTOR_GROUPS for f in g['factors']]
+                factors = [f for g in groups for f in g['factors']]
             else:
                 factors = [f['name'] for f in FACTOR_DEFS]
         self.factors = factors
@@ -43,7 +50,7 @@ class FactorSelector:
             if use_groups:
                 # group-level equal weight, within-group equal weight
                 weights = {}
-                for g in FACTOR_GROUPS:
+                for g in groups:
                     n = len(g['factors'])
                     w_per_factor = g['weight'] / n
                     for f in g['factors']:
@@ -82,7 +89,7 @@ class FactorSelector:
         scores = pd.DataFrame(index=df.index)
 
         for f in available:
-            direction = FACTOR_DIRECTIONS.get(f, 1)
+            direction = self._factor_directions.get(f, 1)
             # 百分位排名: rank(pct=True) -> [0, 1]
             pct = df[f].rank(pct=True, ascending=True)
             if direction == -1:
