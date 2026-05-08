@@ -442,8 +442,37 @@ def load_hardtech_universe(env='online'):
         finally:
             conn.close()
     except Exception as e:
-        logger.error(f"Failed to load hardtech universe: {e}")
-        return pd.DataFrame()
+        logger.warning(f"Failed to load from trade_stock_basic: {e}")
+        # Fallback: use trade_stock_info if trade_stock_basic has no industry
+        try:
+            conn = conn_fn()
+            try:
+                sql2 = f"""
+                    SELECT i.stock_code, i.stock_name,
+                           CASE WHEN i.industry LIKE '%%软件%%' THEN '计算机'
+                                WHEN i.industry LIKE '%%通信%%' THEN '通信'
+                                WHEN i.industry LIKE '%%电子%%' THEN '电子'
+                                WHEN i.industry LIKE '%%医药%%' THEN '医药生物'
+                                WHEN i.industry LIKE '%%汽车%%' THEN '汽车'
+                                WHEN i.industry LIKE '%%机械%%' THEN '机械设备'
+                                WHEN i.industry LIKE '%%化学%%' THEN '化工'
+                                WHEN i.industry LIKE '%%有色%%' THEN '有色金属'
+                                WHEN i.industry LIKE '%%军工%%' THEN '国防军工'
+                                WHEN i.industry LIKE '%%电气%%' THEN '电力设备'
+                                ELSE NULL END AS sw_industry
+                    FROM trade_stock_info i
+                    WHERE i.stock_code LIKE '688%%'
+                       OR i.stock_code LIKE '300%%'
+                       OR i.stock_code LIKE '301%%'
+                """
+                df = pd.read_sql(sql2, conn)
+                df = df[df['sw_industry'].notna()]
+                df = df[~df['stock_name'].str.contains('ST', na=False)]
+            finally:
+                conn.close()
+        except Exception as e2:
+            logger.error(f"Fallback also failed: {e2}")
+            return pd.DataFrame()
 
     if df.empty:
         logger.warning("Empty hardtech universe")
