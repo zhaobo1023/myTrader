@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Hard-tech factor definitions and parameters
+Hard-tech factor definitions and strategy parameters
 
-Factor groups:
-  Innovation (30%): rd_intensity, rd_growth, rd_efficiency, gross_margin_trend
-  Quality (30%):    gross_margin, revenue_growth, net_profit_growth
-  Momentum (25%):   rps_250, mom_20
-  Valuation (15%):  pe_ttm
+IC-validated factor weights (Phase 1 results):
+  - gross_margin IC=0.16 (strong), mom_20 IC=0.35 (strong)
+  - rd_intensity IC=-0.06 (negative, use as filter not ranker)
+  - rd_growth, gross_margin_trend weak
+
+Strategy: rd_intensity > 3% as entry filter, then rank by factors.
 """
 
 # Hard-tech specific factors (from trade_stock_hardtech_factor)
@@ -89,16 +90,16 @@ REUSED_FACTOR_DEFS = [
 
 ALL_FACTOR_DEFS = HARDTECH_FACTOR_DEFS + REUSED_FACTOR_DEFS
 
-# Factor direction mapping
+# Factor direction mapping (for IC analysis -- all factors)
 FACTOR_DIRECTIONS = {f['name']: f['direction'] for f in ALL_FACTOR_DEFS}
 
 # Factor labels
 FACTOR_LABELS = {f['name']: f['label'] for f in ALL_FACTOR_DEFS}
 
-# Factor name list
+# Factor name list (for IC analysis)
 HARDTECH_FACTORS = [f['name'] for f in ALL_FACTOR_DEFS]
 
-# Factor group structure
+# Factor group structure (for preset strategy system)
 FACTOR_GROUPS = [
     {
         'name': 'innovation',
@@ -126,9 +127,71 @@ FACTOR_GROUPS = [
     },
 ]
 
-# Selection parameters
+# Selection parameters (for preset strategy system)
 TOP_N = 20
 INDUSTRY_MAX_WEIGHT = 0.30
+
+# ========================================================================
+# Strategy parameters (IC-validated weights for stock selection)
+# ========================================================================
+
+# R&D intensity threshold for hard-tech stock screening
+RD_INTENSITY_THRESHOLD = 0.03
+
+# Hard-tech industries for stock pool
+HARD_TECH_INDUSTRIES = [
+    '电子', '计算机', '通信', '电力设备',
+    '机械设备', '国防军工', '医药生物', '汽车',
+    '有色金属', '化工',
+]
+
+# Strategy ranking factors (IC-validated, rd_intensity excluded from ranking)
+STRATEGY_FACTOR_GROUPS = [
+    {
+        'name': 'quality',
+        'label': 'Quality',
+        'factors': ['gross_margin'],
+        'weight': 0.30,
+    },
+    {
+        'name': 'technical',
+        'label': 'Technical',
+        'factors': ['mom_20'],
+        'weight': 0.30,
+    },
+    {
+        'name': 'profitability',
+        'label': 'Profitability',
+        'factors': ['roe_ttm'] if 'roe_ttm' in [f['name'] for f in ALL_FACTOR_DEFS] else ['revenue_growth'],
+        'weight': 0.15,
+    },
+    {
+        'name': 'innovation',
+        'label': 'Innovation',
+        'factors': ['rd_growth'],
+        'weight': 0.15,
+    },
+    {
+        'name': 'valuation',
+        'label': 'Valuation',
+        'factors': ['pe_ttm'],
+        'weight': 0.10,
+    },
+]
+
+# Factor directions for strategy (same as FACTOR_DIRECTIONS for these factors)
+STRATEGY_FACTOR_DIRECTIONS = {f: FACTOR_DIRECTIONS.get(f, 1) for g in STRATEGY_FACTOR_GROUPS for f in g['factors']}
+
+# Backtest parameters
+BACKTEST_PARAMS = {
+    'top_n': 20,
+    'rebalance_freq': 20,      # 20 trading days = monthly
+    'buy_cost_rate': 0.0003,   # 0.03% commission
+    'sell_cost_rate': 0.0013,  # 0.03% commission + 0.1% stamp tax
+    'slippage_rate': 0.001,    # 0.1% per side
+    'industry_max_weight': 0.20,
+    'benchmark_code': '000300.SH',
+}
 
 # IC validation parameters
 IC_FORWARD_PERIOD = 20

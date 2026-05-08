@@ -91,7 +91,7 @@ def get_hardtech_stock_codes():
 # Phase 1: Fetch rd_expense from Sina via AKShare
 # ========================================================================
 
-def fetch_and_save_rd_expense(stock_codes_bare, delay=0.3, batch_save=50):
+def fetch_and_save_rd_expense(stock_codes_bare, delay=0.3, batch_save=50, skip=0):
     """
     Fetch rd_expense from Sina income statement and save to DB in batches.
 
@@ -99,6 +99,7 @@ def fetch_and_save_rd_expense(stock_codes_bare, delay=0.3, batch_save=50):
         stock_codes_bare: list of bare stock codes
         delay: seconds between requests
         batch_save: save to DB every N stocks
+        skip: number of stocks to skip (for resuming)
     """
     import akshare as ak
 
@@ -116,11 +117,19 @@ def fetch_and_save_rd_expense(stock_codes_bare, delay=0.3, batch_save=50):
     pending = []
     total_saved = 0
 
+    import socket
+    socket.setdefaulttimeout(15)
+
     for i, code in enumerate(stock_codes_bare):
+        if i < skip:
+            continue
         try:
             df = ak.stock_financial_report_sina(stock=code, symbol='利润表')
             if df is None or df.empty:
                 continue
+
+            # Safety: reset index to avoid issues
+            df = df.reset_index(drop=True)
 
             rd_col = [c for c in df.columns if '研发费用' in c]
             rev_col = [c for c in df.columns if '营业收入' in c and '总' not in c and '利息' not in c]
