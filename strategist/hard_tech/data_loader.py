@@ -435,6 +435,7 @@ def load_hardtech_universe(env='online'):
     """
     params = HARD_TECH_INDUSTRIES
 
+    df = pd.DataFrame()
     try:
         conn = conn_fn()
         try:
@@ -443,11 +444,14 @@ def load_hardtech_universe(env='online'):
             conn.close()
     except Exception as e:
         logger.warning(f"Failed to load from trade_stock_basic: {e}")
-        # Fallback: use trade_stock_info if trade_stock_basic has no industry
+
+    # Fallback: use trade_stock_info when trade_stock_basic has no industry data
+    if df.empty:
+        logger.info("No results from trade_stock_basic, trying trade_stock_info fallback")
         try:
             conn = conn_fn()
             try:
-                sql2 = f"""
+                sql2 = """
                     SELECT i.stock_code, i.stock_name,
                            CASE WHEN i.industry LIKE '%%软件%%' THEN '计算机'
                                 WHEN i.industry LIKE '%%通信%%' THEN '通信'
