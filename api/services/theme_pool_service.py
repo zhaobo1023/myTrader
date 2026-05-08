@@ -498,7 +498,9 @@ async def get_price_history(db: AsyncSession, theme_id: int, days: int = 60) -> 
     history = []
     for stock in stocks:
         try:
-            if _is_etf(stock.stock_code):
+            if stock.stock_code.endswith('.HK'):
+                table, col = 'trade_hk_daily', 'stock_code'
+            elif _is_etf(stock.stock_code):
                 table, col = 'trade_etf_daily', 'fund_code'
             else:
                 table, col = 'trade_stock_daily', 'stock_code'

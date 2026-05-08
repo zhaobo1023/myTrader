@@ -299,7 +299,52 @@ export const themePoolApi = {
     apiClient.post<{ up_votes: number; down_votes: number; my_vote: number | null }>(`/api/theme-pool/stocks/${stockId}/vote`, { vote }),
   removeVote: (stockId: number) =>
     apiClient.delete<{ up_votes: number; down_votes: number; my_vote: number | null }>(`/api/theme-pool/stocks/${stockId}/vote`),
+
+  // Dashboard
+  getDashboard: (themeId: number) =>
+    apiClient.get<ThemeDashboardData>(`/api/theme-pool/themes/${themeId}/dashboard`),
 };
+
+// Dashboard types
+interface ThemeDashboardMappingPeer {
+  code: string;
+  name: string;
+  latest_close: number | null;
+  return_5d: number | null;
+  return_20d: number | null;
+  normalized: { date: string; value: number | null }[];
+}
+
+interface ThemeDashboardMapping {
+  cn_stock: {
+    code: string; name: string; market: string;
+    latest_close: number | null;
+    return_5d: number | null;
+    return_20d: number | null;
+    normalized: { date: string; value: number | null }[];
+  };
+  us_peers: ThemeDashboardMappingPeer[];
+}
+
+interface ThemeDashboardSummary {
+  total_stocks: number;
+  a_share_count: number;
+  hk_count: number;
+  us_count: number;
+  avg_return_5d: number | null;
+  avg_return_20d: number | null;
+  a_share_avg_return_5d: number | null;
+  a_share_avg_return_20d: number | null;
+  us_avg_return_5d: number | null;
+  us_avg_return_20d: number | null;
+}
+
+interface ThemeDashboardData {
+  theme: { id: number; name: string; description: string };
+  summary: ThemeDashboardSummary;
+  mappings: ThemeDashboardMapping[];
+  stocks: ThemeStockItem[];
+}
 
 export const marketOverviewApi = {
   summary: () =>

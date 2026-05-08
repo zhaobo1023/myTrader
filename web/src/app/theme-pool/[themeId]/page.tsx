@@ -602,6 +602,16 @@ export default function ThemeDetailPage() {
           {theme && (
             <>
               <button
+                onClick={() => router.push(`/theme-pool/${themeId}/dashboard`)}
+                style={{
+                  padding: '5px 12px', borderRadius: '6px', fontSize: '11px',
+                  border: '1px solid var(--accent)', background: 'var(--accent)',
+                  color: '#fff', cursor: 'pointer', fontWeight: 500,
+                }}
+              >
+                主题大盘
+              </button>
+              <button
                 onClick={() => setShowReview(true)}
                 style={{
                   padding: '5px 12px', borderRadius: '6px', fontSize: '11px',

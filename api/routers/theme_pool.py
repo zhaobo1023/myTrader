@@ -318,6 +318,28 @@ async def get_price_history(
     return {'stocks': history}
 
 
+@router.get('/themes/{theme_id}/dashboard')
+async def get_theme_dashboard(
+    theme_id: int,
+    current_user: User = Depends(_get_user_or_dev),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get aggregated dashboard data for a theme pool."""
+    from api.services.theme_dashboard_service import get_theme_dashboard
+    from api.dependencies import get_redis
+
+    redis_client = None
+    try:
+        redis_client = await get_redis()
+    except Exception:
+        pass
+
+    data = await get_theme_dashboard(db, theme_id, redis_client)
+    if not data:
+        raise HTTPException(status_code=404, detail='Theme not found')
+    return data
+
+
 @router.delete('/themes/{theme_id}/stocks/{stock_code}', status_code=status.HTTP_204_NO_CONTENT)
 async def remove_stock(
     theme_id: int,
