@@ -148,12 +148,12 @@ def load_hardtech_panel(start_date, end_date):
     logger.info("  Loading basic_factor...")
     df_basic = _read_sql_by_batches(sql_basic_tpl, 'trade_date', sampled)
 
-    # 4) RPS: rps_250
+    # 4) RPS: rps_250 (uses trade_date, not calc_date)
     sql_rps_tpl = """
-        SELECT stock_code, calc_date AS trade_date,
+        SELECT stock_code, trade_date,
                rps_250
         FROM trade_stock_rps
-        WHERE calc_date = '__trade_date__'
+        WHERE trade_date = '__trade_date__'
     """
     logger.info("  Loading rps...")
     df_rps = _read_sql_by_batches(sql_rps_tpl, 'trade_date', sampled)
@@ -345,11 +345,11 @@ def load_single_day_factors(trade_date, stock_codes=None, env='online'):
     except Exception as e:
         logger.warning(f"Failed to load basic factors for {trade_date}: {e}")
 
-    # 4) RPS: rps_250
+    # 4) RPS: rps_250 (uses trade_date, not calc_date)
     sql_rps = """
-        SELECT stock_code, calc_date, rps_250
+        SELECT stock_code, trade_date, rps_250
         FROM trade_stock_rps
-        WHERE calc_date = %s
+        WHERE trade_date = %s
     """
     if stock_codes:
         sql_rps += f" AND stock_code IN ({placeholders})"
