@@ -53,3 +53,19 @@ tasks:
     env:
       prod:
         enabled: false
+
+  - id: fetch_hardtech_rd
+    name: "Fetch rd_expense for hard-tech stocks (quarterly)"
+    module: scheduler.adapters
+    func: run_fetch_hardtech_rd
+    tags: [maintenance, factor]
+    schedule: manual
+    depends_on: []
+    params: {}
+    timeout_seconds: 7200
+    retry:
+      max_attempts: 2
+      delay_seconds: 300
+    env:
+      prod:
+        enabled: false

@@ -67,3 +67,15 @@ tasks:
     depends_on:
       - _gate_daily_price
     params: {}
+
+  - id: calc_hardtech_factor
+    name: "Calculate hard-tech factors (rd + gross_margin_trend)"
+    module: data_analyst.factors.hardtech_factor_calculator
+    func: main
+    tags: [factor, daily]
+    schedule: "after_gate"
+    depends_on:
+      - calc_basic_factor
+      - calc_extended_factor
+    params: {}
+    timeout_seconds: 600

@@ -31,6 +31,7 @@ def screen_hardtech_stocks(trade_date=None, top_n=20, env='online'):
     """
     from strategist.hard_tech.config import (
         FACTOR_GROUPS, FACTOR_DIRECTIONS, INDUSTRY_MAX_WEIGHT,
+        RD_INTENSITY_THRESHOLD,
     )
     from strategist.hard_tech.data_loader import (
         load_single_day_factors, load_hardtech_universe,
@@ -71,6 +72,16 @@ def screen_hardtech_stocks(trade_date=None, top_n=20, env='online'):
     factors_df = factors_df.loc[factors_df.index.isin(common_codes)]
 
     logger.info(f"[HARDTECH] {len(factors_df)} stocks with factor data")
+
+    # R&D intensity filter: keep stocks with rd_intensity >= threshold OR no rd data
+    # Stocks without rd data are kept to avoid missing potential gems
+    if 'rd_intensity' in factors_df.columns:
+        before_rd = len(factors_df)
+        factors_df = factors_df[
+            factors_df['rd_intensity'].isna() | (factors_df['rd_intensity'] >= RD_INTENSITY_THRESHOLD)
+        ]
+        logger.info(f"[HARDTECH] RD filter (>= {RD_INTENSITY_THRESHOLD:.1%}): "
+                    f"{len(factors_df)}/{before_rd} stocks passed")
 
     # Score
     selector = FactorSelector(

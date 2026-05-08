@@ -776,3 +776,45 @@ def run_morning_picks_daily(dry_run: bool = False, env: str = 'online'):
         n = run_daily(env=env)
         logger.info("[OK] morning picks done: %d records written", n)
         return n
+
+
+# ---------------------------------------------------------------------------
+# Hard-tech rd_expense fetch adapter
+# ---------------------------------------------------------------------------
+
+def run_fetch_hardtech_rd(dry_run: bool = False, env: str = 'online'):
+    """Fetch rd_expense from Sina for hard-tech stocks. Run quarterly."""
+    if dry_run:
+        logger.info("[DRY-RUN] run_fetch_hardtech_rd: would fetch rd_expense for hard-tech stocks")
+        return
+
+    from scheduler.task_logger import TaskLogger
+    import importlib.util
+    import os
+
+    script_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'scripts', 'fetch_all_hardtech_rd.py'
+    )
+
+    with TaskLogger('fetch_hardtech_rd', 'factor', env=env):
+        spec = importlib.util.spec_from_file_location('fetch_all_hardtech_rd', script_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        from config.db import execute_query
+        rows = execute_query(
+            'SELECT COUNT(DISTINCT stock_code) as cnt FROM financial_income_detail WHERE rd_expense IS NOT NULL'
+        )
+        before = rows[0]['cnt'] if rows else 0
+        logger.info("rd_expense coverage before: %d stocks", before)
+
+        codes = mod.get_codes_to_fetch(skip_existing=True)
+        if not codes:
+            logger.info("[OK] All hard-tech stocks already have rd_expense data")
+            return 0
+
+        logger.info("Fetching rd_expense for %d stocks...", len(codes))
+        n = mod.fetch_rd_for_codes(codes)
+        logger.info("[OK] Fetched %d rows", n)
+        return n

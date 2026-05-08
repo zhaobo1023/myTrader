@@ -99,25 +99,32 @@ FACTOR_LABELS = {f['name']: f['label'] for f in ALL_FACTOR_DEFS}
 # Factor name list (for IC analysis)
 HARDTECH_FACTORS = [f['name'] for f in ALL_FACTOR_DEFS]
 
-# Factor group structure (for preset strategy system)
+# Factor group structure (IC-validated, used by preset strategy system + backtest)
+# rd_intensity excluded from ranking (negative IC=-0.06), used as entry filter instead.
 FACTOR_GROUPS = [
-    {
-        'name': 'innovation',
-        'label': 'Innovation',
-        'factors': ['rd_intensity', 'rd_growth', 'rd_efficiency', 'gross_margin_trend'],
-        'weight': 0.30,
-    },
     {
         'name': 'quality',
         'label': 'Quality',
-        'factors': ['gross_margin', 'revenue_growth', 'net_profit_growth'],
-        'weight': 0.30,
+        'factors': ['gross_margin', 'net_profit_growth'],
+        'weight': 0.25,
     },
     {
         'name': 'momentum',
         'label': 'Momentum',
         'factors': ['rps_250', 'mom_20'],
-        'weight': 0.25,
+        'weight': 0.30,
+    },
+    {
+        'name': 'innovation',
+        'label': 'Innovation',
+        'factors': ['rd_growth', 'gross_margin_trend'],
+        'weight': 0.20,
+    },
+    {
+        'name': 'growth',
+        'label': 'Growth',
+        'factors': ['revenue_growth'],
+        'weight': 0.10,
     },
     {
         'name': 'valuation',
@@ -129,7 +136,7 @@ FACTOR_GROUPS = [
 
 # Selection parameters (for preset strategy system)
 TOP_N = 20
-INDUSTRY_MAX_WEIGHT = 0.30
+INDUSTRY_MAX_WEIGHT = 0.25
 
 # ========================================================================
 # Strategy parameters (IC-validated weights for stock selection)
@@ -146,41 +153,11 @@ HARD_TECH_INDUSTRIES = [
 ]
 
 # Strategy ranking factors (IC-validated, rd_intensity excluded from ranking)
-STRATEGY_FACTOR_GROUPS = [
-    {
-        'name': 'quality',
-        'label': 'Quality',
-        'factors': ['gross_margin'],
-        'weight': 0.30,
-    },
-    {
-        'name': 'technical',
-        'label': 'Technical',
-        'factors': ['mom_20'],
-        'weight': 0.30,
-    },
-    {
-        'name': 'profitability',
-        'label': 'Profitability',
-        'factors': ['roe_ttm'] if 'roe_ttm' in [f['name'] for f in ALL_FACTOR_DEFS] else ['revenue_growth'],
-        'weight': 0.15,
-    },
-    {
-        'name': 'innovation',
-        'label': 'Innovation',
-        'factors': ['rd_growth'],
-        'weight': 0.15,
-    },
-    {
-        'name': 'valuation',
-        'label': 'Valuation',
-        'factors': ['pe_ttm'],
-        'weight': 0.10,
-    },
-]
+# Same as FACTOR_GROUPS above, kept as alias for backtest/sim_pool compatibility.
+STRATEGY_FACTOR_GROUPS = FACTOR_GROUPS
 
-# Factor directions for strategy (same as FACTOR_DIRECTIONS for these factors)
-STRATEGY_FACTOR_DIRECTIONS = {f: FACTOR_DIRECTIONS.get(f, 1) for g in STRATEGY_FACTOR_GROUPS for f in g['factors']}
+# Factor directions for strategy
+STRATEGY_FACTOR_DIRECTIONS = FACTOR_DIRECTIONS
 
 # Backtest parameters
 BACKTEST_PARAMS = {
