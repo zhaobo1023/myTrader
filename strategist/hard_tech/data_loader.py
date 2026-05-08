@@ -432,7 +432,6 @@ def load_hardtech_universe(env='online'):
         FROM trade_stock_basic b
         WHERE b.industry IN ({placeholders})
           AND b.stock_name NOT LIKE '%%ST%%'
-          AND b.list_status = 'L'
     """
     params = HARD_TECH_INDUSTRIES
 
