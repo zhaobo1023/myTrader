@@ -652,9 +652,14 @@ export default function ThemeDetailPage() {
           )}
         </div>
         {theme?.description && (
-          <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--text-secondary)' }}>
-            {theme.description}
-          </p>
+          <details style={{ margin: '6px 0 0' }}>
+            <summary style={{ fontSize: '11px', color: 'var(--text-muted)', cursor: 'pointer', userSelect: 'none' }}>
+              查看投资逻辑
+            </summary>
+            <p style={{ margin: '4px 0 0', fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5, whiteSpace: 'pre-line' }}>
+              {theme.description}
+            </p>
+          </details>
         )}
       </div>
 
