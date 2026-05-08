@@ -10,6 +10,7 @@ import {
 } from '@/lib/api-client';
 import { ThemeReviewDialog } from '@/components/theme-pool/ThemeReviewDialog';
 import MiniSparkline from '@/components/market/MiniSparkline';
+import ThemeDashboardTab from './dashboard/ThemeDashboardTab';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -473,6 +474,7 @@ export default function ThemeDetailPage() {
   const [expandedStock, setExpandedStock] = useState<number | null>(null);
   const [showComparison, setShowComparison] = useState(false);
   const [showReview, setShowReview] = useState(false);
+  const [activeTab, setActiveTab] = useState<'stocks' | 'dashboard'>('stocks');
 
   // Fetch theme detail
   const { data: theme } = useQuery({
@@ -602,16 +604,6 @@ export default function ThemeDetailPage() {
           {theme && (
             <>
               <button
-                onClick={() => router.push(`/theme-pool/${themeId}/dashboard`)}
-                style={{
-                  padding: '5px 12px', borderRadius: '6px', fontSize: '11px',
-                  border: '1px solid var(--accent)', background: 'var(--accent)',
-                  color: '#fff', cursor: 'pointer', fontWeight: 500,
-                }}
-              >
-                主题大盘
-              </button>
-              <button
                 onClick={() => setShowReview(true)}
                 style={{
                   padding: '5px 12px', borderRadius: '6px', fontSize: '11px',
@@ -666,6 +658,28 @@ export default function ThemeDetailPage() {
         )}
       </div>
 
+      {/* Tab Switcher */}
+      <div style={{ display: 'flex', gap: '0', marginBottom: '16px', borderBottom: '1px solid var(--border-subtle)' }}>
+        {[
+          { key: 'stocks', label: '标的列表' },
+          { key: 'dashboard', label: '专题跟踪' },
+        ].map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key as 'stocks' | 'dashboard')}
+            style={{
+              padding: '8px 16px', fontSize: '13px', fontWeight: 500, cursor: 'pointer',
+              border: 'none', background: 'transparent',
+              color: activeTab === tab.key ? 'var(--accent)' : 'var(--text-muted)',
+              borderBottom: activeTab === tab.key ? '2px solid var(--accent)' : '2px solid transparent',
+              transition: 'color 0.15s, border-color 0.15s',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
       {/* Status/Score messages */}
       {statusMut.isError && (
         <div style={{ marginBottom: '8px', padding: '8px 12px', borderRadius: '6px', background: '#fef2f2', color: '#ef4444', fontSize: '12px' }}>
@@ -684,6 +698,7 @@ export default function ThemeDetailPage() {
       )}
 
       {/* Add stock */}
+      {activeTab === 'stocks' && <>
       <AddStockSection themeId={themeId} onAdded={refetchStocks} />
 
       {/* Metric legend */}
@@ -1006,6 +1021,12 @@ export default function ThemeDetailPage() {
             </div>
           </div>
         </div>
+      )}
+      </>}
+
+      {/* Dashboard Tab */}
+      {activeTab === 'dashboard' && (
+        <ThemeDashboardTab themeId={themeId} onStockClick={(code) => router.push(`/stock?code=${code}`)} />
       )}
 
       {/* AI Review Dialog */}
