@@ -127,6 +127,8 @@ def _dispatch(report_type: str, stock_code: str, stock_name: str) -> str:
         return _generate_five_section(stock_code, stock_name)
     if report_type == 'technical_report':
         return _generate_technical_report(stock_code, stock_name)
+    if report_type == 'eight_section':
+        return _generate_eight_section(stock_code, stock_name)
     raise ValueError(f'Unknown report_type: {report_type}')
 
 
@@ -281,3 +283,22 @@ def _generate_technical_report(stock_code: str, stock_name: str) -> str:
     rows = list(execute_query(cache_sql, (code, data['trade_date'])))
     report = _row_to_detail(rows[0]) if rows else _build_detail_from_data(data, name)
     return json.dumps({'generated': True, 'report': report}, ensure_ascii=False, default=str)
+
+
+def _generate_eight_section(stock_code: str, stock_name: str) -> str:
+    """Generate eight-section comprehensive analysis report."""
+    import os
+    import sys
+
+    ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+
+    from investment_rag.report_engine.eight_section import EightSectionAnalyzer
+
+    analyzer = EightSectionAnalyzer(db_env='online')
+    results = analyzer.generate(
+        stock_code=stock_code,
+        stock_name=stock_name,
+    )
+    return results.get('full_report', '')

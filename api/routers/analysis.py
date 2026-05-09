@@ -603,6 +603,7 @@ async def run_health_check():
 
 VALID_REPORT_TYPES = frozenset({
     'one_pager', 'comprehensive', 'fundamental', 'five_section', 'technical_report',
+    'eight_section',
 })
 
 

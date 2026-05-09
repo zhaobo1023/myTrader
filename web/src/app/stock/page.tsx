@@ -2031,12 +2031,13 @@ function KlineTechTab({ stock }: { stock: StockOption }) {
 // Composite Tab: 深度研报 (one-pager + five_section + fundamental)
 // ---------------------------------------------------------------------------
 
-type ReportSubType = 'one_pager' | 'five_section' | 'fundamental';
+type ReportSubType = 'one_pager' | 'five_section' | 'fundamental' | 'eight_section';
 
 const REPORT_SUB_CONFIG: { key: ReportSubType; label: string }[] = [
-  { key: 'one_pager',    label: '一页纸研究' },
-  { key: 'five_section', label: '综合五步法' },
-  { key: 'fundamental',  label: '基本面分析' },
+  { key: 'one_pager',     label: '一页纸研究' },
+  { key: 'eight_section', label: '全面分析' },
+  { key: 'five_section',  label: '综合五步法' },
+  { key: 'fundamental',   label: '基本面分析' },
 ];
 
 function ReportsTab({ stock }: { stock: StockOption }) {
@@ -2095,6 +2096,16 @@ function ReportsTab({ stock }: { stock: StockOption }) {
           submitLabel="生成基本面研报"
           resubmitLabel="重新生成"
           placeholder="今日尚未生成基本面研报，点击上方按钮开始分析"
+        />
+      )}
+      {subType === 'eight_section' && (
+        <MarkdownReportTab
+          stock={stock}
+          reportType="eight_section"
+          submitLabel="生成全面分析报告"
+          resubmitLabel="重新生成"
+          placeholder="点击生成八章节全面分析报告（公司概览/财报/可比公司/DCF估值/竞争格局/行业研究/技术面/投资观点）"
+          showHistory
         />
       )}
     </div>
