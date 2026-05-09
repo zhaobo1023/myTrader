@@ -818,3 +818,62 @@ def run_fetch_hardtech_rd(dry_run: bool = False, env: str = 'online'):
         n = mod.fetch_rd_for_codes(codes)
         logger.info("[OK] Fetched %d rows", n)
         return n
+
+
+def fetch_financial_statements_incremental(dry_run: bool = False, env: str = 'online'):
+    """Incremental fetch of financial_income + financial_balance for all A-shares.
+
+    Uses progress file to skip already-fetched stocks.
+    Designed to run weekly during earnings season, monthly otherwise.
+    """
+    if dry_run:
+        logger.info("[DRY-RUN] fetch_financial_statements_incremental: would fetch income/balance for all A-shares")
+        return
+
+    from scheduler.task_logger import TaskLogger
+    import importlib.util
+    import types
+    import os
+
+    _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    with TaskLogger('fetch_financial_incremental', 'data_supplement', env=env):
+        # Register dummy parent package to avoid xtquant import
+        if 'data_analyst' not in __import__('sys').modules:
+            dummy = types.ModuleType('data_analyst')
+            dummy.__path__ = [os.path.join(_ROOT, 'data_analyst')]
+            dummy.__package__ = 'data_analyst'
+            __import__('sys').modules['data_analyst'] = dummy
+
+        from data_analyst.financial_fetcher.config import FinancialFetcherConfig
+        from data_analyst.financial_fetcher.storage import FinancialStorage
+        from data_analyst.financial_fetcher.run_fetcher import _load_all_stocks, _load_done_codes
+
+        config = FinancialFetcherConfig()
+        config.db_env = env
+
+        all_stocks = _load_all_stocks(config.db_env)
+        progress_file = os.path.join(_ROOT, 'output', 'financial_fetcher', 'progress.txt')
+        done_codes = _load_done_codes(progress_file)
+        pending = {k: v for k, v in all_stocks.items() if k not in done_codes}
+
+        if not pending:
+            logger.info("[OK] All %d stocks already fetched", len(all_stocks))
+            return
+
+        logger.info("Fetching income/balance for %d pending stocks (total: %d, done: %d)",
+                     len(pending), len(all_stocks), len(done_codes))
+
+        FinancialStorage(env=env).init_tables()
+
+        from data_analyst.financial_fetcher.fetcher import run_fetch
+        stats = run_fetch(config, stock_codes=pending, skip_init=True)
+
+        # Mark all as done (including those with no data)
+        from data_analyst.financial_fetcher.run_fetcher import _mark_done
+        os.makedirs(os.path.dirname(progress_file), exist_ok=True)
+        for code in pending:
+            _mark_done(progress_file, code)
+
+        total_rows = sum(stats.values())
+        logger.info("[OK] Fetched %d stocks, %d total rows", len(stats), total_rows)

@@ -51,28 +51,19 @@ HARD_TECH_INDUSTRIES = [
 
 def get_codes_to_fetch(skip_existing=True, prefix_filter=None):
     """Get bare codes for all hard-tech stocks needing rd_expense data."""
-    placeholders = ', '.join(['%s'] * len(HARD_TECH_INDUSTRIES))
+    params_str = ', '.join(['%s'] * len(HARD_TECH_INDUSTRIES))
 
     prefix_cond = ''
-    params = list(HARD_TECH_INDUSTRIES)
     if prefix_filter:
         prefix_cond = f"AND SUBSTRING_INDEX(b.stock_code, '.', 1) LIKE '{prefix_filter}%%'"
-        params_str = ', '.join(['%s'] * len(HARD_TECH_INDUSTRIES))
-        sql = f"""
-            SELECT DISTINCT SUBSTRING_INDEX(b.stock_code, ".", 1) as bare_code
-            FROM trade_stock_basic b
-            WHERE b.industry IN ({params_str})
-              {prefix_cond}
-            ORDER BY bare_code
-        """
-    else:
-        params_str = ', '.join(['%s'] * len(HARD_TECH_INDUSTRIES))
-        sql = f"""
-            SELECT DISTINCT SUBSTRING_INDEX(b.stock_code, ".", 1) as bare_code
-            FROM trade_stock_basic b
-            WHERE b.industry IN ({params_str})
-            ORDER BY bare_code
-        """
+
+    sql = f"""
+        SELECT DISTINCT SUBSTRING_INDEX(b.stock_code, ".", 1) as bare_code
+        FROM trade_stock_basic b
+        WHERE b.industry IN ({params_str})
+          {prefix_cond}
+        ORDER BY bare_code
+    """
 
     rows = execute_query(sql, HARD_TECH_INDUSTRIES)
     codes = [r['bare_code'] for r in rows]

@@ -28,6 +28,10 @@ TABLE_CHECKS = [
     ("trade_etf_daily", "daily", "ETF日线", 500, 1),
     ("trade_log_bias_daily", "indicator", "对数乖离率", 30, 3),
 
+    # 财务报表明细
+    ("financial_income", "financial", "利润表明细", 5000, 30),
+    ("financial_balance", "financial", "资产负债表明细", 5000, 30),
+
     # 策略相关
     ("trade_preset_strategy_run", "strategy", "预设策略运行", None, None),
     ("trade_tech_report", "strategy", "技术面报告", None, None),
@@ -39,14 +43,9 @@ TABLE_CHECKS = [
 
 
 def get_connection():
-    """获取数据库连接"""
-    return pymysql.connect(
-        host='localhost',
-        user='root',
-        password='Hao1023@zb',
-        database='trade',
-        charset='utf8mb4'
-    )
+    """获取数据库连接 -- use config.db for env-aware credentials"""
+    from config.db import get_connection as _get_conn
+    return _get_conn()
 
 
 def check_table(conn, table_name: str) -> Tuple[int, int, str]:
@@ -291,11 +290,11 @@ if __name__ == '__main__':
 
     for r in result['details']:
         status_icon = {
-            'ok': '✅',
-            'warning': '⚠️',
-            'critical': '🔴',
-            'empty': '❌',
-        }.get(r['status'], '❓')
+            'ok': '[OK]',
+            'warning': '[WARN]',
+            'critical': '[RED]',
+            'empty': '[BAD]',
+        }.get(r['status'], '[?]')
 
         print(f"{status_icon} {r['table']:35} {r['max_date']:12} {r['count']:>10,} 条  status={r['status']}")
 

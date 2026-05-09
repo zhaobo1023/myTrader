@@ -6,7 +6,6 @@ import logging
 import os
 import sys
 
-import numpy as np
 import pandas as pd
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
@@ -20,7 +19,7 @@ from strategist.multi_factor.scorer import FactorSelector
 from strategist.multi_factor.data_loader import load_stock_filter
 from strategist.hard_tech.config import (
     STRATEGY_FACTOR_GROUPS, STRATEGY_FACTOR_DIRECTIONS,
-    BACKTEST_PARAMS, HARD_TECH_INDUSTRIES,
+    BACKTEST_PARAMS,
 )
 from strategist.hard_tech.stock_pool import (
     build_hardtech_universe, get_industry_map, get_stock_names,

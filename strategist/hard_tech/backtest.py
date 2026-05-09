@@ -20,7 +20,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date
 from time import time
 
 import numpy as np
@@ -31,13 +31,13 @@ sys.path.insert(0, ROOT)
 
 from config.db import execute_query, get_connection
 from strategist.multi_factor.scorer import FactorSelector
-from strategist.multi_factor.data_loader import load_stock_filter, _read_sql_by_batches
+from strategist.multi_factor.data_loader import load_stock_filter
 
 from .config import (
     STRATEGY_FACTOR_GROUPS, STRATEGY_FACTOR_DIRECTIONS,
-    BACKTEST_PARAMS, HARD_TECH_INDUSTRIES, RD_INTENSITY_THRESHOLD,
+    BACKTEST_PARAMS, RD_INTENSITY_THRESHOLD,
 )
-from .stock_pool import build_hardtech_universe, get_industry_map, get_stock_names
+from .stock_pool import get_industry_map, get_stock_names
 from .data_loader import _read_sql_by_batches as _read_batches_ht
 
 logging.basicConfig(
@@ -366,8 +366,8 @@ def print_report(results: pd.DataFrame):
     print("=" * 90)
 
     # Monthly returns table
-    print(f"\n| Month | N | Portfolio | Benchmark | Excess | CumStrat | CumBM |")
-    print(f"|-------|---|-----------|-----------|--------|----------|-------|")
+    print("\n| Month | N | Portfolio | Benchmark | Excess | CumStrat | CumBM |")
+    print("|-------|---|-----------|-----------|--------|----------|-------|")
 
     for _, row in results.iterrows():
         mark = ' *' if row['excess_return'] > 0 else ''
@@ -402,8 +402,8 @@ def print_report(results: pd.DataFrame):
     worst_idx = excess.idxmin()
 
     print(f"\n### Summary ({n} months)\n")
-    print(f"| Metric | Value |")
-    print(f"|--------|-------|")
+    print("| Metric | Value |")
+    print("|--------|-------|")
     print(f"| Total Return (Strategy) | {total_strat:.2%} |")
     print(f"| Total Return (Benchmark) | {total_bm:.2%} |")
     print(f"| Total Excess | {total_excess:+.2%} |")
