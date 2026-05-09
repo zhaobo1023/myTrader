@@ -13,6 +13,24 @@ import MiniSparkline from '@/components/market/MiniSparkline';
 import ThemeDashboardTab from './dashboard/ThemeDashboardTab';
 
 // ---------------------------------------------------------------------------
+// US Mapping for theme 16 (AI-Resilient Software)
+// ---------------------------------------------------------------------------
+const US_MAPPINGS: Record<string, { ticker: string; name: string }[]> = {
+  '603039.SH': [{ ticker: 'NOW', name: 'ServiceNow' }, { ticker: 'CRM', name: 'Salesforce' }],
+  '688111.SH': [{ ticker: 'MSFT', name: 'Microsoft' }],
+  '688615.SH': [{ ticker: 'PATH', name: 'UiPath' }, { ticker: 'ADBE', name: 'Adobe' }],
+  '688083.SH': [{ ticker: 'ADSK', name: 'Autodesk' }],
+  '301269.SZ': [{ ticker: 'SNPS', name: 'Synopsys' }, { ticker: 'CDNS', name: 'Cadence' }],
+  '603383.SH': [{ ticker: 'FIS', name: 'FIS Global' }],
+  '688692.SH': [{ ticker: 'ORCL', name: 'Oracle' }, { ticker: 'SNOW', name: 'Snowflake' }],
+  '600588.SH': [{ ticker: 'SAP', name: 'SAP' }],
+  '00268.HK': [{ ticker: 'WDAY', name: 'Workday' }, { ticker: 'SAP', name: 'SAP' }],
+  '03888.HK': [{ ticker: 'MSFT', name: 'Microsoft' }],
+  '300170.SZ': [{ ticker: 'ACN', name: 'Accenture' }, { ticker: 'CTSH', name: 'Cognizant' }],
+  '09878.HK': [{ ticker: 'APP', name: 'AppLovin' }, { ticker: 'MNST', name: 'Mintegral' }],
+};
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -491,7 +509,11 @@ export default function ThemeDetailPage() {
     }).then((r) => r.data),
   });
 
-  const stocks = stocksData?.items || [];
+  const stocks = (stocksData?.items || []).filter((s: ThemeStockItem) => {
+    const code = s.stock_code;
+    // Keep A-share (ends with .SH/.SZ/.BJ) and HK (ends with .HK), exclude pure US tickers
+    return code.includes('.');
+  });
 
   // Fetch price history
   interface PriceStock {
@@ -565,6 +587,7 @@ export default function ThemeDetailPage() {
   // Table headers
   const columns = [
     { key: 'stock', label: '股票', width: '130px', tip: null },
+    { key: 'us_mapping', label: '美股映射', width: '100px', tip: '对应的美股可比公司' },
     { key: 'recommender', label: '推荐人', width: '70px', tip: null },
     { key: 'reason', label: '推荐理由', width: '110px', tip: null },
     { key: 'rps_20', label: 'RPS20', width: '50px', tip: '相对价格强度(20日)：该股过去20日涨幅在全市场中的百分位排名，满分100。>80为强势，<50为弱势。' },
@@ -816,6 +839,15 @@ export default function ThemeDetailPage() {
                       onClick={(e) => { e.stopPropagation(); setEditReason({ id: s.id, reason: s.reason || '' }); }}
                     >
                       {s.reason || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>添加理由</span>}
+                    </td>
+                    {/* US Mapping */}
+                    <td style={{ padding: '8px 6px' }}>
+                      {(US_MAPPINGS[s.stock_code] || []).map((m, i, arr) => (
+                        <span key={m.ticker}>
+                          <span style={{ fontSize: '10px', fontWeight: 500, color: '#7c3aed' }} title={m.name}>{m.ticker}</span>
+                          {i < arr.length - 1 && <span style={{ fontSize: '10px', color: 'var(--text-muted)', margin: '0 2px' }}>/</span>}
+                        </span>
+                      ))}
                     </td>
                     {/* RPS */}
                     <td style={{ padding: '8px 6px', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
