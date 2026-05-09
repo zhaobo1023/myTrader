@@ -137,85 +137,52 @@ def _normalize_prices(prices: list, key: str = 'close') -> list:
     ]
 
 
-async def fetch_us_stock_snapshots(tickers: list, redis_client=None) -> dict:
+def fetch_us_stock_snapshots_from_db(tickers: list) -> dict:
     """
-    Fetch latest price + recent returns for US tickers via yfinance.
-    Returns: {"MSFT": {"price": 420.5, "return_5d": 2.1, "return_20d": -1.3,
-              "name": "Microsoft", "history": [...]}}
-    Caches in Redis for 4 hours.
+    Fetch US stock snapshots from trade_us_daily table.
+    Returns: {"MSFT": {"price": 420.5, "return_5d": 2.1, "return_20d": -1.3, "history": [...]}}
     """
+    from config.db import execute_query
+
     results = {}
-    uncached = []
+    for ticker in tickers:
+        try:
+            rows = list(execute_query(
+                "SELECT trade_date, open_price, high_price, low_price, close_price, volume "
+                "FROM trade_us_daily WHERE stock_code = %s "
+                "ORDER BY trade_date DESC LIMIT 130",
+                (ticker,),
+                env='online',
+            ))
+            if not rows:
+                continue
 
-    # Try Redis cache first
-    if redis_client:
-        for ticker in tickers:
-            try:
-                cached = await redis_client.get(f'dashboard:us:{ticker}')
-                if cached:
-                    results[ticker] = json.loads(cached)
-                else:
-                    uncached.append(ticker)
-            except Exception:
-                uncached.append(ticker)
-    else:
-        uncached = list(tickers)
+            rows.reverse()  # chronological order
+            history = [
+                {'date': str(r['trade_date']), 'close': float(r['close_price'])}
+                for r in rows if r.get('close_price')
+            ]
+            if not history:
+                continue
 
-    if not uncached:
-        return results
+            latest = history[-1]['close']
+            ret_5d = None
+            ret_20d = None
+            if len(history) >= 6:
+                ret_5d = round((latest - history[-6]['close']) / history[-6]['close'] * 100, 1)
+            if len(history) >= 21:
+                ret_20d = round((latest - history[-21]['close']) / history[-21]['close'] * 100, 1)
 
-    # Fetch via yfinance in executor
-    try:
-        loop = asyncio.get_event_loop()
-        snapshots = await loop.run_in_executor(
-            None, _yfinance_batch_fetch, uncached
-        )
-    except Exception as e:
-        logger.error('[DASHBOARD] yfinance fetch failed: %s', e)
-        return results
+            results[ticker] = {
+                'price': round(latest, 2),
+                'return_5d': ret_5d,
+                'return_20d': ret_20d,
+                'history': history,
+            }
+        except Exception as e:
+            logger.warning('[DASHBOARD] US stock DB fetch failed for %s: %s', ticker, e)
 
-    # Cache results
-    if redis_client:
-        for ticker, data in snapshots.items():
-            try:
-                await redis_client.setex(
-                    f'dashboard:us:{ticker}',
-                    14400,  # 4 hours
-                    json.dumps(data),
-                )
-            except Exception:
-                pass
-
-    results.update(snapshots)
     return results
-
-
-def _yfinance_batch_fetch(tickers: list) -> dict:
-    """Synchronous yfinance fetch for multiple tickers."""
-    import yfinance as yf
-    import pandas as pd
-
-    results = {}
-    try:
-        data = yf.download(
-            tickers=tickers,
-            period='1mo',
-            interval='1d',
-            group_by='ticker',
-            auto_adjust=True,
-            threads=True,
-            progress=False,
-        )
-
-        for ticker in tickers:
-            try:
-                if len(tickers) == 1:
-                    df = data
-                else:
-                    df = data[ticker] if ticker in data else None
-
-                if df is None or df.empty:
-                    continue
 
                 close_col = 'Close' if 'Close' in df.columns else 'close'
                 closes = df[close_col].dropna()
@@ -334,7 +301,7 @@ async def get_theme_dashboard(db, theme_id: int, redis_client=None) -> dict:
 
     us_snapshots = {}
     if all_us_tickers:
-        us_snapshots = await fetch_us_stock_snapshots(all_us_tickers, redis_client)
+        us_snapshots = fetch_us_stock_snapshots_from_db(all_us_tickers)
 
     # 6. Build mappings with comparison data
     mappings = []
