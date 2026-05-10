@@ -747,6 +747,7 @@ class EightSectionDataCollector:
     _BETA_INDUSTRY_MAP = {
         # Cyclical / commodities
         "有色金属": 1.1, "采掘": 1.1, "钢铁": 1.1, "化工": 1.1,
+        "煤炭": 1.1, "煤炭开采": 1.1, "煤炭开采和洗选业": 1.1,
         "建筑材料": 1.1, "交通运输": 1.0,
         # Technology / growth
         "电子": 1.3, "计算机": 1.3, "通信": 1.3, "传媒": 1.3,
