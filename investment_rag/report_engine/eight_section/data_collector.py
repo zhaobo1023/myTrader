@@ -797,8 +797,12 @@ class EightSectionDataCollector:
         self._beta_reason = f"{sw1}行业未匹配，使用默认值"
         return 1.1
 
-    def _calculate_base_fcf(self, bare: str, annual: list) -> Optional[float]:
-        """Calculate base FCF from actual cashflow data: OCF - capex."""
+    def _calculate_base_fcf(self, bare: str, annual: list) -> tuple:
+        """Calculate base FCF from actual cashflow data.
+
+        Returns (fcf_value, fcf_source) tuple where fcf_source describes
+        the derivation method for LLM context.
+        """
         # Get latest annual cashflow
         cf_row = self._q(
             "SELECT operating_cashflow, investing_cashflow "
@@ -811,20 +815,27 @@ class EightSectionDataCollector:
             ocf = _sf(cf_row[0]["operating_cashflow"])
             icf = _sf(cf_row[0]["investing_cashflow"])
             if ocf is not None and icf is not None:
-                # FCF = Operating Cash Flow - Capital Expenditure
-                # investing_cashflow is typically negative for capex
                 capex = abs(icf) if icf < 0 else 0
                 fcf = ocf - capex
                 if fcf > 0:
-                    return fcf
+                    return (fcf, f"OCF({ocf:.1f}亿) - 资本支出({capex:.1f}亿) = {fcf:.1f}亿")
+                else:
+                    # Heavy capex: capex > OCF, likely expansionary investment
+                    # Use sustainable FCF = OCF * 0.5 (assume ~half capex is maintenance)
+                    sustainable_fcf = ocf * 0.5
+                    return (
+                        sustainable_fcf,
+                        f"OCF({ocf:.1f}亿) < 资本支出({capex:.1f}亿)，属于重资本开支企业，"
+                        f"假设约50%为维持性capex，可持续FCF = OCF x 0.5 = {sustainable_fcf:.1f}亿"
+                    )
 
         # Fallback: if cashflow data unavailable, estimate from net profit
         if annual:
             np_val = _sf(annual[0]["net_profit"])
             if np_val and np_val > 0:
-                return np_val * 0.7
+                return (np_val * 0.7, f"现金流量表数据缺失，以净利({np_val:.1f}亿) x 0.7估算")
 
-        return None
+        return (None, "数据不足")
 
     def _prepare_dcf_inputs(self, bare: str, full: str = "") -> str:
         # Current market cap + close price
@@ -887,7 +898,8 @@ class EightSectionDataCollector:
         lines.append(f"\n### 敏感性分析表（WACC vs 永续增长率）\n")
 
         # Calculate base FCF from actual cashflow data
-        base_fcf = self._calculate_base_fcf(bare, annual)
+        base_fcf, fcf_source = self._calculate_base_fcf(bare, annual)
+        lines.append(f"\n**FCF计算**: {fcf_source}")
 
         if base_fcf and mv:
             # Project FCF 5 years forward using base_growth, then terminal value

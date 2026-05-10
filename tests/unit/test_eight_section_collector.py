@@ -133,15 +133,25 @@ class TestCalculateBaseFCF:
         """FCF should be OCF - |capex| when capex is negative."""
         c = self._make_collector(ocf=87.43, icf=-12.93)
         annual = [{"net_profit": 40.05}]
-        fcf = c._calculate_base_fcf("000933", annual)
+        fcf, source = c._calculate_base_fcf("000933", annual)
         # OCF 87.43 - |ICF| 12.93 = 74.50
         assert fcf == pytest.approx(74.50, abs=0.01)
+        assert "OCF" in source
+
+    def test_fcf_heavy_capex(self):
+        """Heavy capex company: OCF < capex, should use OCF * 0.5."""
+        c = self._make_collector(ocf=297.92, icf=-309.25)
+        annual = [{"net_profit": 178.84}]
+        fcf, source = c._calculate_base_fcf("000933", annual)
+        # capex > OCF, use sustainable FCF = OCF * 0.5
+        assert fcf == pytest.approx(148.96, abs=0.01)
+        assert "重资本开支" in source
 
     def test_fcf_no_investing(self):
         """When investing is positive (unusual), capex=0, FCF=OCF."""
         c = self._make_collector(ocf=50.0, icf=5.0)
         annual = [{"net_profit": 30.0}]
-        fcf = c._calculate_base_fcf("000933", annual)
+        fcf, source = c._calculate_base_fcf("000933", annual)
         assert fcf == 50.0
 
     def test_fcf_fallback_to_net_profit(self):
@@ -149,14 +159,15 @@ class TestCalculateBaseFCF:
         collector = EightSectionDataCollector.__new__(EightSectionDataCollector)
         collector._q = MagicMock(return_value=[])
         annual = [{"net_profit": 40.05}]
-        fcf = collector._calculate_base_fcf("000933", annual)
+        fcf, source = collector._calculate_base_fcf("000933", annual)
         assert fcf == pytest.approx(28.035, abs=0.01)
+        assert "估算" in source
 
     def test_fcf_no_data(self):
         """When all data is missing, return None."""
         collector = EightSectionDataCollector.__new__(EightSectionDataCollector)
         collector._q = MagicMock(return_value=[])
-        fcf = collector._calculate_base_fcf("000933", [])
+        fcf, source = collector._calculate_base_fcf("000933", [])
         assert fcf is None
 
 
