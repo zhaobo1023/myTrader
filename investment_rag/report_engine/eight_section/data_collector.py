@@ -518,36 +518,58 @@ class EightSectionDataCollector:
     # ==============================================================
 
     def _find_comparables(self, full: str, bare: str) -> str:
-        # Get industry of target stock - prefer sw_level2 for more specific matching
-        info = self._q(
-            "SELECT industry, sw_level1, sw_level2 FROM trade_stock_basic WHERE stock_code=%s LIMIT 1",
+        # Strategy: use trade_stock_info.industry for most precise matching
+        # (e.g. "专用设备制造业" matches semiconductor equipment peers, not chip designers)
+        # Fallback to sw_level2, then sw_level1
+        info_row = self._q(
+            "SELECT i.industry, b.sw_level1, b.sw_level2 "
+            "FROM trade_stock_basic b "
+            "LEFT JOIN trade_stock_info i ON b.stock_code = i.stock_code "
+            "WHERE b.stock_code=%s LIMIT 1",
             (full,),
         )
-        if not info:
+        if not info_row:
             return "[无法确定行业，跳过可比公司分析]"
 
-        # Use sw_level2 for precise industry matching, fallback to sw_level1
-        industry = info[0].get("sw_level2") or info[0].get("sw_level1") or info[0].get("industry")
-        industry_col = "sw_level2" if info[0].get("sw_level2") else "sw_level1"
-        if not industry:
-            return "[无法确定行业，跳过可比公司分析]"
+        r = info_row[0]
+        industry_label = r.get("sw_level2") or r.get("sw_level1") or "(未知)"
 
-        # Find peers in same sub-industry, get top 5 by market cap (exclude target)
-        peers = self._q(
-            "SELECT b.stock_code, b.stock_name "
-            "FROM trade_stock_basic b "
-            "JOIN trade_stock_daily_basic d ON b.stock_code COLLATE utf8mb4_unicode_ci = d.stock_code "
-            f"WHERE b.{industry_col} = %s AND b.stock_code != %s "
-            "AND d.trade_date = (SELECT MAX(trade_date) FROM trade_stock_daily_basic) "
-            "ORDER BY d.total_mv DESC LIMIT 5",
-            (industry, full),
-        )
+        # Try trade_stock_info.industry first (most precise)
+        tsi_industry = r.get("industry")
+        peers = []
+        if tsi_industry:
+            peers = self._q(
+                "SELECT b.stock_code, b.stock_name "
+                "FROM trade_stock_basic b "
+                "JOIN trade_stock_info i ON b.stock_code = i.stock_code "
+                "JOIN trade_stock_daily_basic d ON b.stock_code COLLATE utf8mb4_unicode_ci = d.stock_code "
+                "WHERE i.industry = %s AND b.stock_code != %s "
+                "AND d.trade_date = (SELECT MAX(trade_date) FROM trade_stock_daily_basic) "
+                "ORDER BY d.total_mv DESC LIMIT 5",
+                (tsi_industry, full),
+            )
 
-        # If too few peers found at sw_level2, try sw_level1
-        if len(peers) < 3 and industry_col == "sw_level2":
-            sw1 = info[0].get("sw_level1")
+        # Fallback to sw_level2 if too few peers from trade_stock_info
+        if len(peers) < 3:
+            sw2 = r.get("sw_level2")
+            if sw2:
+                peers = self._q(
+                    "SELECT b.stock_code, b.stock_name "
+                    "FROM trade_stock_basic b "
+                    "JOIN trade_stock_daily_basic d ON b.stock_code COLLATE utf8mb4_unicode_ci = d.stock_code "
+                    "WHERE b.sw_level2 = %s AND b.stock_code != %s "
+                    "AND d.trade_date = (SELECT MAX(trade_date) FROM trade_stock_daily_basic) "
+                    "ORDER BY d.total_mv DESC LIMIT 5",
+                    (sw2, full),
+                )
+                if len(peers) >= 3:
+                    industry_label = sw2
+
+        # Final fallback to sw_level1
+        if len(peers) < 3:
+            sw1 = r.get("sw_level1")
             if sw1:
-                peers_sw1 = self._q(
+                peers = self._q(
                     "SELECT b.stock_code, b.stock_name "
                     "FROM trade_stock_basic b "
                     "JOIN trade_stock_daily_basic d ON b.stock_code COLLATE utf8mb4_unicode_ci = d.stock_code "
@@ -556,12 +578,11 @@ class EightSectionDataCollector:
                     "ORDER BY d.total_mv DESC LIMIT 5",
                     (sw1, full),
                 )
-                if len(peers_sw1) > len(peers):
-                    peers = peers_sw1
-                    industry = sw1
+                if len(peers) >= 3:
+                    industry_label = sw1
 
         if not peers:
-            return f"[同行业({industry})无可比公司数据]"
+            return f"[同行业({industry_label})无可比公司数据]"
 
         # Get latest date for consistent comparison
         date_row = self._q(
@@ -570,7 +591,6 @@ class EightSectionDataCollector:
         )
         target_date = str(date_row[0]["max_date"]) if date_row else None
 
-        industry_label = info[0].get("sw_level2") or industry
         lines = [f"### 可比公司分析（同行业: {industry_label}）\n"]
         lines.append(f"**估值对比日**: {target_date}\n")
 
