@@ -534,10 +534,24 @@ class EightSectionDataCollector:
         r = info_row[0]
         industry_label = r.get("sw_level2") or r.get("sw_level1") or "(未知)"
 
-        # Try trade_stock_info.industry first (most precise)
+        # Strategy 1: Double-filter with trade_stock_info.industry + sw_level2 (most precise)
         tsi_industry = r.get("industry")
+        sw2 = r.get("sw_level2")
         peers = []
-        if tsi_industry:
+        if tsi_industry and sw2:
+            peers = self._q(
+                "SELECT b.stock_code, b.stock_name "
+                "FROM trade_stock_basic b "
+                "JOIN trade_stock_info i ON b.stock_code = i.stock_code "
+                "JOIN trade_stock_daily_basic d ON b.stock_code COLLATE utf8mb4_unicode_ci = d.stock_code "
+                "WHERE i.industry = %s AND b.sw_level2 = %s AND b.stock_code != %s "
+                "AND d.trade_date = (SELECT MAX(trade_date) FROM trade_stock_daily_basic) "
+                "ORDER BY d.total_mv DESC LIMIT 5",
+                (tsi_industry, sw2, full),
+            )
+
+        # Strategy 2: Only trade_stock_info.industry (if sw_level2 filter too restrictive)
+        if len(peers) < 3 and tsi_industry:
             peers = self._q(
                 "SELECT b.stock_code, b.stock_name "
                 "FROM trade_stock_basic b "
