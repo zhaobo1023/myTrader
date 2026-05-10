@@ -158,6 +158,44 @@ class EightSectionGenerator:
         elif "空头排列" in tech:
             lines.append("判断: 均线空头排列，中期趋势向下")
 
+        # Support and resistance levels from Bollinger Bands and MA
+        ma_levels = []
+
+        m = re.search(r"下轨=([\d.]+)", tech)
+        if m:
+            ma_levels.append(("布林带下轨", float(m.group(1))))
+        m = re.search(r"上轨=([\d.]+)", tech)
+        if m:
+            ma_levels.append(("布林带上轨", float(m.group(1))))
+
+        # Parse MA values from format: "MA5/MA10/MA20: 32.12 / 32.38 / 33.27"
+        m = re.search(r"MA5/MA10/MA20:\s*([\d.]+)\s*/\s*([\d.]+)\s*/\s*([\d.]+)", tech)
+        if m:
+            ma_levels.append(("MA20", float(m.group(3))))
+        m = re.search(r"MA60/MA120/MA250:\s*([\d.]+)\s*/\s*([\d.]+)\s*/\s*([\d.]+)", tech)
+        if m:
+            ma_levels.append(("MA60", float(m.group(1))))
+
+        m = re.search(r"收盘价: ([\d.]+)", tech)
+        close = float(m.group(1)) if m else None
+
+        if close and ma_levels:
+            # Classify as support (below close) or resistance (above close)
+            support_levels = [(n, p) for n, p in ma_levels if p <= close]
+            resistance_levels = [(n, p) for n, p in ma_levels if p > close]
+
+            lines.append("\n**支撑与阻力位**:")
+            if support_levels:
+                supports = sorted(support_levels, key=lambda x: x[1], reverse=True)
+                for name, price in supports[:3]:
+                    pct = (price / close - 1) * 100
+                    lines.append(f"- 支撑: {name} ({price:.2f}, {pct:+.1f}%)")
+            if resistance_levels:
+                resistances = sorted(resistance_levels, key=lambda x: x[1])
+                for name, price in resistances[:3]:
+                    pct = (price / close - 1) * 100
+                    lines.append(f"- 阻力: {name} ({price:.2f}, {pct:+.1f}%)")
+
         return "\n".join(lines)
 
     # ==============================================================
@@ -171,8 +209,8 @@ class EightSectionGenerator:
         for key in ["ch1", "ch2", "ch3", "ch4", "ch5_6", "ch7"]:
             content = chapters.get(key, "")
             # Truncate each chapter to ~500 chars for summary
-            if len(content) > 500:
-                content = content[:500] + "..."
+            if len(content) > 1000:
+                content = content[:1000] + "..."
             if content:
                 summary_parts.append(f"### {key}\n{content}")
 

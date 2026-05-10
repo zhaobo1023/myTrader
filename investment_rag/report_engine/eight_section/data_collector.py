@@ -63,6 +63,7 @@ class EightSectionDataCollector:
         from config.db import execute_query as _eq
         self._eq = _eq
         self._env = db_env
+        self._beta_reason = "默认"
 
     def _q(self, sql: str, params: tuple = ()) -> List[Dict]:
         """Execute query and return list of dicts."""
@@ -97,7 +98,7 @@ class EightSectionDataCollector:
             ("announcements",        lambda: self._collect_announcements(bare)),
             ("news",                 lambda: self._collect_news(bare)),
             ("comparable_companies", lambda: self._find_comparables(full, bare)),
-            ("dcf_inputs",           lambda: self._prepare_dcf_inputs(bare)),
+            ("dcf_inputs",           lambda: self._prepare_dcf_inputs(bare, full)),
         ]
 
         for key, fn in collectors:
@@ -128,10 +129,10 @@ class EightSectionDataCollector:
     # ==============================================================
 
     def _collect_company_profile(self, full: str, bare: str, name: str) -> str:
-        # Try trade_stock_info first (has main_business, company_intro)
+        # Try trade_stock_info first (has main_business, company_intro, listed_date)
         info = self._q(
             "SELECT stock_code, stock_name, industry, main_business, business_scope, "
-            "company_intro FROM trade_stock_info WHERE stock_code=%s LIMIT 1",
+            "company_intro, listed_date FROM trade_stock_info WHERE stock_code=%s LIMIT 1",
             (full,),
         )
         # Also get trade_stock_basic for sw_industry classification
@@ -156,13 +157,30 @@ class EightSectionDataCollector:
             f"**行业分类**: {industry}",
         ]
 
+        # Latest market cap and close price
+        val = self._q(
+            "SELECT total_mv, pe_ttm, pb FROM trade_stock_daily_basic "
+            "WHERE stock_code=%s ORDER BY trade_date DESC LIMIT 1",
+            (full,),
+        )
+        if val:
+            v = val[0]
+            if _sf(v.get("total_mv")):
+                lines.append(f"**最新市值**: {_num(v['total_mv'])}亿元")
+            if _sf(v.get("pe_ttm")):
+                lines.append(f"**PE(TTM)**: {_num(v['pe_ttm'])}")
+
+        # Listed date
+        listed = i.get("listed_date")
+        if listed:
+            lines.append(f"**上市时间**: {listed}")
+
         main_biz = i.get("main_business")
         if main_biz:
             lines.append(f"**主营业务**: {main_biz}")
 
         intro = i.get("company_intro")
         if intro:
-            # Truncate very long intros
             if len(intro) > 300:
                 intro = intro[:300] + "..."
             lines.append(f"**公司简介**: {intro}")
@@ -725,8 +743,91 @@ class EightSectionDataCollector:
     # 11. DCF Inputs (Ch4) - pre-computed parameters
     # ==============================================================
 
-    def _prepare_dcf_inputs(self, bare: str) -> str:
-        # Current market cap
+    # Industry -> Beta mapping for A-share DCF
+    _BETA_INDUSTRY_MAP = {
+        # Cyclical / commodities
+        "有色金属": 1.1, "采掘": 1.1, "钢铁": 1.1, "化工": 1.1,
+        "建筑材料": 1.1, "交通运输": 1.0,
+        # Technology / growth
+        "电子": 1.3, "计算机": 1.3, "通信": 1.3, "传媒": 1.3,
+        "国防军工": 1.2, "电气设备": 1.2,
+        # Defensive / stable
+        "食品饮料": 0.9, "医药生物": 1.0, "公用事业": 0.9,
+        "银行": 0.8, "非银金融": 1.1, "房地产": 1.2,
+        # Consumer
+        "家用电器": 0.9, "休闲服务": 1.0, "商业贸易": 1.0,
+        "纺织服装": 1.0, "汽车": 1.1,
+        # Manufacturing
+        "机械设备": 1.1, "综合": 1.1, "农林牧渔": 1.0,
+        "轻工制造": 1.0, "建筑装饰": 1.0,
+    }
+
+    def _calculate_beta(self, bare: str, full: str = "") -> float:
+        """Calculate dynamic Beta based on industry classification."""
+        self._beta_reason = "默认"
+
+        # Resolve full code if needed
+        if not full:
+            full = self._resolve_full_code(bare)
+
+        # Get industry from trade_stock_basic
+        info = self._q(
+            "SELECT sw_level1, sw_level2 FROM trade_stock_basic WHERE stock_code=%s LIMIT 1",
+            (full,),
+        )
+        if not info:
+            self._beta_reason = "行业未知，使用默认值"
+            return 1.1
+
+        sw1 = info[0].get("sw_level1", "") or ""
+        sw2 = info[0].get("sw_level2", "") or ""
+
+        # Lookup Beta from industry map
+        beta = self._BETA_INDUSTRY_MAP.get(sw1)
+        if beta is not None:
+            self._beta_reason = f"{sw1}行业默认"
+            return beta
+
+        # Try sw_level2 as fallback
+        beta = self._BETA_INDUSTRY_MAP.get(sw2)
+        if beta is not None:
+            self._beta_reason = f"{sw2}行业默认"
+            return beta
+
+        self._beta_reason = f"{sw1}行业未匹配，使用默认值"
+        return 1.1
+
+    def _calculate_base_fcf(self, bare: str, annual: list) -> Optional[float]:
+        """Calculate base FCF from actual cashflow data: OCF - capex."""
+        # Get latest annual cashflow
+        cf_row = self._q(
+            "SELECT operating_cashflow, investing_cashflow "
+            "FROM financial_cashflow WHERE stock_code=%s "
+            "AND report_date LIKE '%%12-31' ORDER BY report_date DESC LIMIT 1",
+            (bare,),
+        )
+
+        if cf_row:
+            ocf = _sf(cf_row[0]["operating_cashflow"])
+            icf = _sf(cf_row[0]["investing_cashflow"])
+            if ocf is not None and icf is not None:
+                # FCF = Operating Cash Flow - Capital Expenditure
+                # investing_cashflow is typically negative for capex
+                capex = abs(icf) if icf < 0 else 0
+                fcf = ocf - capex
+                if fcf > 0:
+                    return fcf
+
+        # Fallback: if cashflow data unavailable, estimate from net profit
+        if annual:
+            np_val = _sf(annual[0]["net_profit"])
+            if np_val and np_val > 0:
+                return np_val * 0.7
+
+        return None
+
+    def _prepare_dcf_inputs(self, bare: str, full: str = "") -> str:
+        # Current market cap + close price
         mv_row = self._q(
             "SELECT total_mv FROM trade_stock_daily_basic "
             "WHERE stock_code LIKE %s ORDER BY trade_date DESC LIMIT 1",
@@ -747,15 +848,16 @@ class EightSectionDataCollector:
         if mv:
             lines.append(f"**当前市值**: {_num(mv)}亿元")
 
-        # A-share DCF parameters
+        # A-share DCF parameters with dynamic Beta
         rf = 1.7  # China 10Y bond yield
-        beta = 1.3  # Assumed for tech/growth stock
+        beta = self._calculate_beta(bare, full)
         erp = 6.0  # Equity risk premium
         wacc = rf + beta * erp
 
+        beta_reason = self._beta_reason
         lines.append(f"\n**DCF核心参数**:")
         lines.append(f"- 无风险利率(Rf): {rf}%")
-        lines.append(f"- Beta: {beta} (判断: 科创板/成长股默认)")
+        lines.append(f"- Beta: {beta} ({beta_reason})")
         lines.append(f"- 股权风险溢价(ERP): {erp}%")
         lines.append(f"- WACC: {wacc:.1f}% = {rf}% + {beta} x {erp}%")
 
@@ -782,18 +884,10 @@ class EightSectionDataCollector:
                 lines.append(f"- Bull: {bull_growth:.0f}%")
 
         # Sensitivity matrix - output actual valuation range
-        # Use latest FCF as base for terminal value estimation
         lines.append(f"\n### 敏感性分析表（WACC vs 永续增长率）\n")
 
-        # Estimate base FCF from financial data
-        base_fcf = None
-        if annual:
-            latest_annual = annual[0]
-            np_val = _sf(latest_annual["net_profit"])
-            if np_val and np_val > 0 and mv:
-                # Rough FCF estimate: use OCF from cashflow if available
-                # Fallback: assume FCF ~ 70% of net profit for mature companies
-                base_fcf = np_val * 0.7
+        # Calculate base FCF from actual cashflow data
+        base_fcf = self._calculate_base_fcf(bare, annual)
 
         if base_fcf and mv:
             # Project FCF 5 years forward using base_growth, then terminal value
@@ -820,7 +914,7 @@ class EightSectionDataCollector:
                     row_vals.append(f"{total_val:.0f}")
                 lines.append(f"| {w_pct:.1f}% | {' | '.join(row_vals)} |")
 
-            lines.append(f"\n注: 表中数值为合理市值(亿元)估算，基于FCF=净利x0.7和{growth_rate*100:.0f}%五年增速假设")
+            lines.append(f"\n注: 表中数值为合理市值(亿元)估算，基于FCF={_yuan(base_fcf)}和{growth_rate*100:.0f}%五年增速假设")
             if mv:
                 lines.append(f"当前市值: {_num(mv)}亿元")
         else:
