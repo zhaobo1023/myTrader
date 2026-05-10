@@ -25,13 +25,13 @@ class EightSectionGenerator:
     """Eight-section report generator with mixed rendering strategy."""
 
     def __init__(self):
-        from investment_rag.embeddings.embed_model import LLMClient
-        self._llm = LLMClient()
+        from api.services.llm_client_factory import get_llm_client_for_scene
+        self._llm_factory = get_llm_client_for_scene('report')
 
     def _call_llm(self, prompt: str, max_tokens: int = 2000) -> str:
         """Call LLM with temperature=0.3 for stability."""
         try:
-            return self._llm.generate(
+            return self._llm_factory._sync_call(
                 prompt=prompt,
                 system_prompt=SYSTEM_PROMPT,
                 temperature=0.3,
