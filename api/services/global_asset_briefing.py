@@ -22,7 +22,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 from config.db import execute_query, execute_update
-from api.services.llm_client_factory import get_llm_client
+from api.services.llm_client_factory import get_llm_client_for_scene
 
 logger = logging.getLogger('myTrader.global_briefing')
 
@@ -900,7 +900,7 @@ async def generate_briefing(session: str = 'morning') -> dict:
         prompt += '\n'.join(declaration_lines)
 
     # Call LLM
-    llm = get_llm_client()
+    llm = get_llm_client_for_scene('daily_report')
     content = await llm.call(
         prompt=prompt,
         system_prompt=system_prompt,

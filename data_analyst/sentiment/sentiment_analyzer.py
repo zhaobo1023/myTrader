@@ -14,8 +14,7 @@ import json
 from typing import List, Dict, Any, Optional
 
 import requests
-from dashscope import Generation
-
+from api.services.llm_client_factory import get_llm_client_for_scene
 from data_analyst.sentiment.schemas import NewsItem, SentimentResult
 
 logger = logging.getLogger(__name__)
@@ -26,7 +25,9 @@ class SentimentAnalyzer:
 
     def __init__(self, model: str = "qwen3.6-plus"):
         self.model = model
-        self.local_service_url = os.getenv("LOCAL_MODEL_SERVICE_URL", "")
+        self._llm = get_llm_client_for_scene('sentiment')
+        from config.settings import LOCAL_MODEL_SERVICE_URL
+        self.local_service_url = LOCAL_MODEL_SERVICE_URL
 
     def build_prompt(self, news: NewsItem) -> str:
         """
@@ -132,19 +133,12 @@ class SentimentAnalyzer:
             prompt = self.build_prompt(news)
             
             # 调用 LLM
-            response = Generation.call(
-                model=self.model,
+            content = self._llm.call_sync(
                 prompt=prompt,
-                result_format='message',
+                system_prompt='',
+                temperature=0.5,
             )
-            
-            if response.status_code != 200:
-                logger.error(f"LLM API error: {response.code} - {response.message}")
-                parsed = self._get_default_result()
-            else:
-                # 解析响应
-                content = response.output.choices[0].message.content
-                parsed = self.parse_response(content)
+            parsed = self.parse_response(content)
             
             # 构建结果
             result = SentimentResult(

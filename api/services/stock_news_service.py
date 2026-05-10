@@ -295,7 +295,7 @@ async def analyze_stock_news(stock_code: str, stock_name: str = '') -> dict:
     Run LLM analysis on recent news for a stock. Caches result in DB.
     Returns the analysis dict.
     """
-    from api.services.llm_client_factory import get_llm_client
+    from api.services.llm_client_factory import get_llm_client_for_scene
 
     ensure_tables()
     today_str = date.today().strftime('%Y-%m-%d')
@@ -358,7 +358,7 @@ async def analyze_stock_news(stock_code: str, stock_name: str = '') -> dict:
 
     # Call LLM
     try:
-        llm = get_llm_client()
+        llm = get_llm_client_for_scene('daily_report')
         resp = await llm.call(prompt=prompt, temperature=0.3, max_tokens=1500)
         # Strip markdown code fences if any
         resp = resp.strip()

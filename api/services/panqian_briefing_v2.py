@@ -19,17 +19,13 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 from config.db import execute_query, execute_update
-from api.services.llm_client_factory import get_llm_client
+from api.services.llm_client_factory import get_llm_client_for_scene
 
 logger = logging.getLogger('myTrader.panqian_v2')
 
 # 社媒来源公众号名称（内部变量，不输出到报告）
 _SOCIAL_FEED_NAME = '盘前早咖'
-DEFAULT_EXPORT_DIR = os.getenv(
-    'ARTICLE_EXPORT_DIR',
-    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__)))), 'output', 'article_export'),
-)
+from config.settings import ARTICLE_EXPORT_DIR as DEFAULT_EXPORT_DIR
 
 # ---------------------------------------------------------------------------
 # Stage A prompt -- 结构化提取
@@ -411,7 +407,7 @@ def _format_ann_data(name_code_map: dict, ann_data: dict) -> str:
 
 async def _extract_items(article_content: str) -> list:
     """LLM 从原文提取结构化条目。"""
-    llm = get_llm_client()
+    llm = get_llm_client_for_scene('daily_report')
     prompt = _STAGE_A_USER.format(article_content=article_content[:6000])
     raw = await llm.call(
         prompt=prompt,
@@ -460,7 +456,7 @@ async def _generate_v2_content(items: list, name_code_map: dict,
                                 target_date: date) -> str:
     """LLM 综合所有数据生成完整晨报。"""
     date_str = target_date.strftime('%Y-%m-%d')
-    llm = get_llm_client()
+    llm = get_llm_client_for_scene('daily_report')
 
     items_text = _summarize_items(items)  # 紧凑格式，节省 token
     tech_text = _format_tech_data(name_code_map, tech_data)

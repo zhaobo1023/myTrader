@@ -78,11 +78,7 @@ def classify_push_category(feed_name: str, article_type: str = '') -> str:
 
 
 # Default path for exported articles
-# Docker container maps ./output -> /app/output, server uses /root/app/output
-DEFAULT_EXPORT_DIR = os.getenv(
-    'ARTICLE_EXPORT_DIR',
-    '/app/output/article_export' if os.path.exists('/app/output') else '/root/app/output/article_export',
-)
+from config.settings import ARTICLE_EXPORT_DIR as DEFAULT_EXPORT_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -148,10 +144,10 @@ _STAGE_A_SYSTEM = """你是一位资深投资研究员, 负责快速评估文章
 
 async def _stage_a_classify(content: str, title: str, source: str) -> dict:
     """Stage A: quick classification and grading."""
-    from api.services.llm_client_factory import get_llm_client, llm_call_with_retry
+    from api.services.llm_client_factory import get_llm_client_for_scene, llm_call_with_retry
 
     prompt = '来源: {}\n标题: {}\n\n{}'.format(source, title, content)
-    factory = get_llm_client()
+    factory = get_llm_client_for_scene('daily_report')
 
     raw = await llm_call_with_retry(
         factory.call,
@@ -198,10 +194,10 @@ _STAGE_B_SYSTEM = """你是一位资深投资研究员, 负责从文章中提炼
 
 async def _stage_b_deep_extract(content: str, title: str, source: str) -> dict:
     """Stage B: deep extraction for A/B grade articles."""
-    from api.services.llm_client_factory import get_llm_client, llm_call_with_retry
+    from api.services.llm_client_factory import get_llm_client_for_scene, llm_call_with_retry
 
     prompt = '来源: {}\n标题: {}\n\n{}'.format(source, title, content)
-    factory = get_llm_client()
+    factory = get_llm_client_for_scene('daily_report')
 
     raw = await llm_call_with_retry(
         factory.call,
@@ -675,13 +671,13 @@ async def _generate_single_category_report(
     rows: list,
 ) -> dict:
     """Generate and publish a single category report to Feishu."""
-    from api.services.llm_client_factory import get_llm_client
+    from api.services.llm_client_factory import get_llm_client_for_scene
     from api.services.feishu_doc_publisher import publish_briefing, _send_card
 
     cfg = _CATEGORY_REPORT_CONFIG[category]
     prompt = _build_digest_prompt(target_date, rows)
 
-    factory = get_llm_client()
+    factory = get_llm_client_for_scene('daily_report')
     content = await factory.call(
         prompt=prompt,
         system_prompt=cfg['system_prompt'],
@@ -727,7 +723,7 @@ async def _generate_combined_report(
     grouped: dict[str, list],
 ) -> dict:
     """Generate a single combined report from all categories, publish to Feishu."""
-    from api.services.llm_client_factory import get_llm_client
+    from api.services.llm_client_factory import get_llm_client_for_scene
     from api.services.feishu_doc_publisher import publish_briefing, _send_card
 
     # Build unified prompt with category labels
@@ -751,7 +747,7 @@ async def _generate_combined_report(
     weekend = _is_weekend(target_date)
     system_prompt = _REPORT_SYSTEM_WEEKEND if weekend else _REPORT_SYSTEM_COMBINED
 
-    factory = get_llm_client()
+    factory = get_llm_client_for_scene('daily_report')
     content = await factory.call(
         prompt=prompt,
         system_prompt=system_prompt,

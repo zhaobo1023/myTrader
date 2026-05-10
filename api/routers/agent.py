@@ -48,7 +48,7 @@ def _get_orchestrator(db: AsyncSession, redis: aioredis.Redis):
     import api.services.agent.builtin_tools  # noqa: F401
 
     store = ConversationStore(db, redis)
-    llm_client = AgentLLMClient()
+    llm_client = AgentLLMClient(scene='agent_chat')
     registry = get_registry()
 
     return AgentOrchestrator(

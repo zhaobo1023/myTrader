@@ -979,6 +979,8 @@ SCENE_LABELS = {
     'skill': 'LLM \u6280\u80fd',
     'report': '\u7814\u62a5\u751f\u6210',
     'daily_report': '\u6bcf\u65e5\u65e5\u62a5',
+    'sentiment': '\u8206\u60c5\u5206\u6790',
+    'financial_extraction': '\u8d22\u52a1\u6570\u636e\u63d0\u53d6',
 }
 
 

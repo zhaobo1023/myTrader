@@ -190,8 +190,8 @@ class KeyMetricsExtractor:
 
     def _get_llm(self):
         if self._llm is None:
-            from investment_rag.embeddings.embed_model import LLMClient
-            self._llm = LLMClient()
+            from api.services.llm_client_factory import get_llm_client_for_scene
+            self._llm = get_llm_client_for_scene('financial_extraction')
         return self._llm
 
     @property
@@ -254,7 +254,7 @@ class KeyMetricsExtractor:
         # Step 2: Build prompt and call LLM
         prompt = _build_prompt(self._metrics, excerpt)
         llm = self._get_llm()
-        response = llm.generate(
+        response = llm.call_sync(
             prompt=prompt,
             system_prompt="你是财务报表数据提取专家，只返回JSON，不做分析。",
             temperature=0.1,

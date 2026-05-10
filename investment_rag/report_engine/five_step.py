@@ -11,7 +11,7 @@ import logging
 from datetime import date
 from typing import Dict, Optional
 
-from investment_rag.embeddings.embed_model import LLMClient
+from api.services.llm_client_factory import get_llm_client_for_scene
 from investment_rag.report_engine.data_tools import ReportDataTools
 from investment_rag.report_engine.industry_config import (
     IndustryAnalysisConfig,
@@ -55,7 +55,7 @@ class FiveStepAnalyzer:
 
     def __init__(self, db_env: str = "online"):
         self._tools = ReportDataTools(db_env=db_env)
-        self._llm = LLMClient()
+        self._llm = get_llm_client_for_scene('report')
         self._db_env = db_env
 
     # ----------------------------------------------------------
@@ -153,7 +153,7 @@ class FiveStepAnalyzer:
         )
         system_prompt = ANALYST_SYSTEM_PROMPT.format(today=today)
         try:
-            return self._llm.generate(
+            return self._llm.call_sync(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 temperature=0.3,
@@ -256,7 +256,7 @@ class FiveStepAnalyzer:
             full_analysis=analysis_for_summary,
         )
         try:
-            return self._llm.generate(
+            return self._llm.call_sync(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 temperature=0.3,
@@ -380,7 +380,7 @@ class FiveStepAnalyzer:
         # 8. LLM 生成（v2.0：差异化 max_tokens）
         max_tokens = _STEP_MAX_TOKENS.get(step_config.step_id, 1500)
         try:
-            return self._llm.generate(
+            return self._llm.call_sync(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 temperature=0.5,

@@ -66,6 +66,18 @@ SUPPORTED_ALIASES: dict[str, dict] = {
 
 _DEFAULT_ALIAS = 'qwen'
 
+# Fallback scene -> alias mapping (used when DB config is missing).
+# New scenes should be added here so they work even before DB seeding.
+_FALLBACK_SCENE_MAP: dict[str, str] = {
+    'agent_chat': 'qwen',
+    'rag_query': 'qwen',
+    'skill': 'qwen',
+    'report': 'qwen',
+    'daily_report': 'qwen',
+    'sentiment': 'qwen',
+    'financial_extraction': 'qwen',
+}
+
 
 # ---------------------------------------------------------------------------
 # Factory class
@@ -122,17 +134,18 @@ class LLMClientFactory:
         system_prompt: str = '',
         temperature: float = 0.7,
         max_tokens: int = 2048,
+        timeout: Optional[float] = None,
     ) -> str:
         """Synchronous LLM call (public API for non-async callers)."""
-        return self._sync_call(prompt, system_prompt, temperature, max_tokens)
+        return self._sync_call(prompt, system_prompt, temperature, max_tokens, timeout)
 
-    def _sync_call(
+    def chat_stream_sync(
         self,
-        prompt: str,
-        system_prompt: str,
-        temperature: float,
-        max_tokens: int,
-    ) -> str:
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+    ):
+        """Synchronous streaming chat completion. Returns OpenAI Stream object."""
         import httpx
         from openai import OpenAI
 
@@ -144,6 +157,35 @@ class LLMClientFactory:
             api_key=key,
             base_url=self.base_url,
             http_client=httpx.Client(timeout=_LLM_HTTP_TIMEOUT),
+            max_retries=0,
+        )
+        return client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+
+    def _sync_call(
+        self,
+        prompt: str,
+        system_prompt: str,
+        temperature: float,
+        max_tokens: int,
+        timeout: Optional[float] = None,
+    ) -> str:
+        import httpx
+        from openai import OpenAI
+
+        key = self.api_key
+        if not key:
+            raise ValueError(f'API key env var {self._api_key_env!r} is not set')
+
+        client = OpenAI(
+            api_key=key,
+            base_url=self.base_url,
+            http_client=httpx.Client(timeout=timeout or _LLM_HTTP_TIMEOUT),
             # Disable SDK-level retries: the SDK retries on timeout by default,
             # which multiplies wall time (90s timeout * 3 attempts = 270s+).
             # llm_call_with_retry() handles retry logic at the application level.
@@ -215,8 +257,10 @@ def get_llm_client_for_scene(scene: str) -> LLMClientFactory:
     _ensure_scene_cache()
     cfg = _scene_config_cache.get(scene)
     if cfg is None:
-        logger.debug('[llm_factory] no DB config for scene %r, using default', scene)
-        return get_llm_client()
+        fallback_alias = _FALLBACK_SCENE_MAP.get(scene, _DEFAULT_ALIAS)
+        logger.debug('[llm_factory] no DB config for scene %r, using fallback alias %r',
+                     scene, fallback_alias)
+        return LLMClientFactory(fallback_alias)
 
     factory = LLMClientFactory.__new__(LLMClientFactory)
     factory.alias = cfg['alias']

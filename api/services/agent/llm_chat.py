@@ -8,27 +8,37 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import AsyncIterator
 
-logger = logging.getLogger('myTrader.agent.llm')
+from config.settings import AGENT_LLM_TIMEOUT as _LLM_TIMEOUT
 
-_LLM_TIMEOUT = float(os.getenv('AGENT_LLM_TIMEOUT', '90'))
+logger = logging.getLogger('myTrader.agent.llm')
 
 
 class AgentLLMClient:
     """Streaming LLM client for agent function calling."""
 
-    def __init__(self, model_alias: str = "qwen"):
-        from api.services.llm_client_factory import SUPPORTED_ALIASES, _DEFAULT_ALIAS
-        cfg = SUPPORTED_ALIASES.get(model_alias, SUPPORTED_ALIASES[_DEFAULT_ALIAS])
-        self.model = cfg['model']
-        self.base_url = cfg['base_url']
-        self._api_key_env = cfg['api_key_env']
+    def __init__(self, model_alias: str = "qwen", scene: str | None = None):
+        if scene:
+            # Scene-based: from DB config via factory
+            from api.services.llm_client_factory import get_llm_client_for_scene
+            factory = get_llm_client_for_scene(scene)
+            self.model = factory.model
+            self.base_url = factory.base_url
+            self._api_key_env = factory._api_key_env
+        else:
+            # Legacy alias-based
+            from api.services.llm_client_factory import SUPPORTED_ALIASES
+            from api.services.llm_client_factory import _DEFAULT_ALIAS
+            cfg = SUPPORTED_ALIASES.get(model_alias, SUPPORTED_ALIASES[_DEFAULT_ALIAS])
+            self.model = cfg['model']
+            self.base_url = cfg['base_url']
+            self._api_key_env = cfg['api_key_env']
 
     @property
     def api_key(self) -> str:
-        return os.getenv(self._api_key_env, '')
+        from api.services.llm_client_factory import _API_KEY_MAP
+        return _API_KEY_MAP.get(self._api_key_env, '')
 
     async def chat_stream(
         self,

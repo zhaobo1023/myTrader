@@ -18,7 +18,7 @@ import logging
 import re
 
 from config.db import execute_query
-from api.services.llm_client_factory import get_llm_client, llm_call_with_retry
+from api.services.llm_client_factory import get_llm_client_for_scene, llm_call_with_retry
 from api.services.theme_llm_prompts import (
     CONCEPT_MAPPING_SYSTEM, CONCEPT_MAPPING_USER,
     STOCK_FILTER_SYSTEM, STOCK_FILTER_USER,
@@ -130,7 +130,7 @@ class ThemeCreateSkill:
         inner = AKShareConceptFetcher()
         self._fetcher = CachedAKShareFetcher(inner=inner, redis=redis) if redis else inner
         self._validator = StockCodeValidator()
-        self._llm_factory = get_llm_client(model_alias)
+        self._llm_factory = get_llm_client_for_scene('skill')
 
     async def stream(self, theme_name: str, description: str = '', max_candidates: int = 40):
         """Async generator: yields SSE event dicts."""

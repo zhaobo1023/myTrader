@@ -86,3 +86,14 @@ DOUBAO_API_KEY = os.getenv('DOUBAO_API_KEY', _env.get('DOUBAO_API_KEY', ''))
 LLM_MODEL_ALIAS = os.getenv('LLM_MODEL_ALIAS', _env.get('LLM_MODEL_ALIAS', 'qwen'))
 LLM_HTTP_TIMEOUT = float(os.getenv('LLM_HTTP_TIMEOUT', _env.get('LLM_HTTP_TIMEOUT', '90')))
 AGENT_LLM_TIMEOUT = float(os.getenv('AGENT_LLM_TIMEOUT', _env.get('AGENT_LLM_TIMEOUT', '90')))
+
+
+# ============================================================
+# Paths
+# ============================================================
+ARTICLE_EXPORT_DIR = os.getenv(
+    'ARTICLE_EXPORT_DIR',
+    '/app/output/article_export' if os.path.exists('/app/output')
+    else os.path.join(str(Path(__file__).parent.parent), 'output', 'article_export'),
+)
+LOCAL_MODEL_SERVICE_URL = os.getenv('LOCAL_MODEL_SERVICE_URL', '')

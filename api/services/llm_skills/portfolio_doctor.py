@@ -13,7 +13,7 @@ from typing import Optional
 
 from api.services.llm_skills.base import LLMSkillBase, SkillMeta
 from api.services.llm_skills.registry import register
-from api.services.llm_client_factory import get_llm_client, llm_call_with_retry
+from api.services.llm_client_factory import get_llm_client_for_scene, llm_call_with_retry
 from config.db import execute_query
 
 logger = logging.getLogger('myTrader.portfolio_doctor')
@@ -119,7 +119,7 @@ class PortfolioDoctorSkill(LLMSkillBase):
         )
 
     def __init__(self, model_alias: str | None = None):
-        self._llm_factory = get_llm_client(model_alias)
+        self._llm_factory = get_llm_client_for_scene('skill')
 
     async def stream(self, user_id: int, **kwargs):
         try:

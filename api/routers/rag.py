@@ -95,7 +95,7 @@ async def rag_query(
 
             # 7. Generate answer with LLM streaming
             try:
-                from openai import OpenAI
+                from api.services.llm_client_factory import get_llm_client_for_scene
 
                 context_text = '\n\n'.join([
                     f"[{s['source']}]: {h['text']}" for s, h in zip(sources, hits[:req.top_k])
@@ -111,14 +111,9 @@ Question: {req.query}
 
 Answer:"""
 
-                client = OpenAI(
-                    api_key=None,  # Will use env variable
-                    base_url='https://dashscope.aliyuncs.com/compatible-mode/v1',
-                )
-                stream = client.chat.completions.create(
-                    model='qwen3.6-plus',
+                llm = get_llm_client_for_scene('rag_query')
+                stream = llm.chat_stream_sync(
                     messages=[{'role': 'user', 'content': prompt}],
-                    stream=True,
                 )
 
                 full_answer = ''

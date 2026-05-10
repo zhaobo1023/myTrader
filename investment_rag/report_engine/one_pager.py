@@ -12,7 +12,7 @@ import logging
 from datetime import date
 from typing import Dict, Optional, Callable
 
-from investment_rag.embeddings.embed_model import LLMClient
+from api.services.llm_client_factory import get_llm_client_for_scene
 from investment_rag.report_engine.one_pager_data import OnePagerDataCollector
 from investment_rag.report_engine.prompts import (
     ONE_PAGER_SYSTEM_PROMPT,
@@ -29,7 +29,7 @@ class OnePagerAnalyzer:
 
     def __init__(self, db_env: str = "online"):
         self._data_collector = OnePagerDataCollector(db_env=db_env)
-        self._llm = LLMClient()
+        self._llm = get_llm_client_for_scene('report')
         self._db_env = db_env
 
         # RAG retriever (lazy init, may not be available)
@@ -96,7 +96,7 @@ class OnePagerAnalyzer:
             )
 
             try:
-                content = self._llm.generate(
+                content = self._llm.call_sync(
                     prompt=prompt,
                     system_prompt=system_prompt,
                     temperature=0.4,
