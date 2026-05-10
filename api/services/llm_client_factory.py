@@ -4,18 +4,31 @@ LLM client factory: multi-model alias routing + retry wrapper.
 Usage:
     factory = get_llm_client()                    # reads LLM_MODEL_ALIAS env var
     factory = get_llm_client('deepseek')          # explicit alias
+    factory = get_llm_client_for_scene('agent_chat')  # scene-based from DB
     text = await llm_call_with_retry(factory.call, prompt='...', validate_json=True)
 """
 import asyncio
 import json
 import logging
-import os
 from typing import Optional
 
-# HTTP timeout for LLM calls in seconds. Override with LLM_HTTP_TIMEOUT env var.
-_LLM_HTTP_TIMEOUT = float(os.getenv('LLM_HTTP_TIMEOUT', '90'))
+from config.settings import LLM_HTTP_TIMEOUT as _LLM_HTTP_TIMEOUT
+from config.settings import LLM_MODEL_ALIAS as _LLM_MODEL_ALIAS_DEFAULT
+from config.settings import RAG_API_KEY, DEEPSEEK_API_KEY, DOUBAO_API_KEY
+
+# Map api_key_env name -> actual value from settings
+_API_KEY_MAP = {
+    'RAG_API_KEY': RAG_API_KEY,
+    'DEEPSEEK_API_KEY': DEEPSEEK_API_KEY,
+    'DOUBAO_API_KEY': DOUBAO_API_KEY,
+}
 
 logger = logging.getLogger('myTrader.llm_factory')
+
+# In-memory cache for DB config: scene -> config dict
+# Invalidated when admin updates config via API.
+_scene_config_cache: dict[str, dict] = {}
+_scene_cache_loaded: bool = False
 
 # ---------------------------------------------------------------------------
 # Model catalogue
@@ -33,6 +46,11 @@ SUPPORTED_ALIASES: dict[str, dict] = {
         'api_key_env': 'RAG_API_KEY',
     },
     'deepseek': {
+        'model': 'deepseek-chat',
+        'base_url': 'https://api.deepseek.com/v1',
+        'api_key_env': 'DEEPSEEK_API_KEY',
+    },
+    'deepseek-v4-pro': {
         'model': 'deepseek-chat',
         'base_url': 'https://api.deepseek.com/v1',
         'api_key_env': 'DEEPSEEK_API_KEY',
@@ -68,7 +86,7 @@ class LLMClientFactory:
 
     @property
     def api_key(self) -> str:
-        return os.getenv(self._api_key_env, '')
+        return _API_KEY_MAP.get(self._api_key_env, '')
 
     async def call(
         self,
@@ -130,9 +148,83 @@ class LLMClientFactory:
 
 
 def get_llm_client(alias: Optional[str] = None) -> LLMClientFactory:
-    """Return a factory for the given alias (or LLM_MODEL_ALIAS env var)."""
-    resolved = alias or os.getenv('LLM_MODEL_ALIAS', _DEFAULT_ALIAS)
+    """Return a factory for the given alias (or LLM_MODEL_ALIAS setting)."""
+    resolved = alias or _LLM_MODEL_ALIAS_DEFAULT or _DEFAULT_ALIAS
     return LLMClientFactory(resolved)
+
+
+# ---------------------------------------------------------------------------
+# Scene-based config from DB
+# ---------------------------------------------------------------------------
+
+def _load_scene_config_from_db() -> dict[str, dict]:
+    """Load all scene configs from llm_model_config table. Returns scene -> config dict."""
+    try:
+        from config.db import execute_query
+        rows = execute_query(
+            "SELECT scene, alias, model, base_url, api_key_env, enabled "
+            "FROM llm_model_config WHERE enabled = 1",
+        )
+        if not rows:
+            return {}
+        result = {}
+        for row in rows:
+            scene = row['scene']
+            result[scene] = {
+                'alias': row['alias'],
+                'model': row['model'],
+                'base_url': row['base_url'],
+                'api_key_env': row['api_key_env'],
+            }
+        return result
+    except Exception as e:
+        logger.warning('[llm_factory] failed to load scene config from DB: %s', e)
+        return {}
+
+
+def _ensure_scene_cache():
+    """Populate the in-memory cache if not yet loaded."""
+    global _scene_cache_loaded, _scene_config_cache
+    if not _scene_cache_loaded:
+        _scene_config_cache = _load_scene_config_from_db()
+        _scene_cache_loaded = True
+
+
+def get_llm_client_for_scene(scene: str) -> LLMClientFactory:
+    """Return a factory configured for a specific usage scene.
+
+    Looks up the scene in the DB config table first; falls back to
+    the default alias if no DB config is found.
+    """
+    _ensure_scene_cache()
+    cfg = _scene_config_cache.get(scene)
+    if cfg is None:
+        logger.debug('[llm_factory] no DB config for scene %r, using default', scene)
+        return get_llm_client()
+
+    factory = LLMClientFactory.__new__(LLMClientFactory)
+    factory.alias = cfg['alias']
+    factory.model = cfg['model']
+    factory.base_url = cfg['base_url']
+    factory._api_key_env = cfg['api_key_env']
+    return factory
+
+
+def invalidate_scene_cache():
+    """Invalidate the in-memory scene config cache.
+
+    Called by the admin API after updating LLM config.
+    """
+    global _scene_cache_loaded, _scene_config_cache
+    _scene_cache_loaded = False
+    _scene_config_cache = {}
+    logger.info('[llm_factory] scene config cache invalidated')
+
+
+def get_all_scene_configs() -> dict[str, dict]:
+    """Return current scene configs (from cache or DB). For admin API."""
+    _ensure_scene_cache()
+    return dict(_scene_config_cache)
 
 
 # ---------------------------------------------------------------------------

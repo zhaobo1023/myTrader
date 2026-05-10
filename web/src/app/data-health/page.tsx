@@ -729,17 +729,162 @@ function SchedulerTab() {
 }
 
 // ============================================================
+// Tab 4: LLM Model Config
+// ============================================================
+
+interface LLMConfigItem {
+  id: number;
+  scene: string;
+  scene_label: string;
+  alias: string;
+  model: string;
+  base_url: string;
+  api_key_env: string;
+  is_default: boolean;
+  enabled: boolean;
+  updated_at: string;
+}
+
+interface AvailableModel {
+  alias: string;
+  model: string;
+  base_url: string;
+  api_key_env: string;
+  label: string;
+}
+
+function LLMConfigTab() {
+  const { data, isLoading, error, refetch, isFetching } = useQuery<{
+    configs: LLMConfigItem[];
+    available_models: AvailableModel[];
+  }>({
+    queryKey: ['llm-config'],
+    queryFn: async () => {
+      const res = await apiClient.get('/api/admin/llm-config');
+      return res.data;
+    },
+    staleTime: 30 * 1000,
+  });
+
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saveMsg, setSaveMsg] = useState<Record<string, string>>({});
+
+  const handleSwitch = async (scene: string, alias: string) => {
+    if (saving) return;
+    setSaving(scene);
+    setSaveMsg((prev) => ({ ...prev, [scene]: '\u4fdd\u5b58\u4e2d...' }));
+    try {
+      await apiClient.put(`/api/admin/llm-config/${scene}`, {
+        scene,
+        alias,
+        model: '',
+        base_url: '',
+      });
+      setSaveMsg((prev) => ({ ...prev, [scene]: '\u5df2\u4fdd\u5b58' }));
+      setTimeout(() => {
+        setSaveMsg((prev) => { const n = { ...prev }; delete n[scene]; return n; });
+        refetch();
+      }, 1500);
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '\u4fdd\u5b58\u5931\u8d25';
+      setSaveMsg((prev) => ({ ...prev, [scene]: msg }));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-xs text-gray-400">
+          {data?.configs?.length
+            ? `\u5171 ${data.configs.length} \u4e2a\u573a\u666f\uff0c\u6700\u8fd1\u66f4\u65b0: ${data.configs[0]?.updated_at || '-'}`
+            : ''}
+        </p>
+        <button
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="text-xs px-2.5 py-1 rounded border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+        >
+          {isFetching ? '\u5237\u65b0\u4e2d...' : '\u5237\u65b0'}
+        </button>
+      </div>
+
+      {isLoading && <div className="text-sm text-gray-400 py-8 text-center">\u52a0\u8f7d\u4e2d...</div>}
+      {error && <div className="text-sm text-red-500 py-4 text-center">\u52a0\u8f7d\u5931\u8d25</div>}
+
+      {data && (
+        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-gray-50 text-gray-400 border-b border-gray-100">
+                <th className="text-left px-3 py-2 font-medium">\u4f7f\u7528\u573a\u666f</th>
+                <th className="text-left px-3 py-2 font-medium">\u5f53\u524d\u6a21\u578b</th>
+                <th className="text-center px-3 py-2 font-medium w-48">\u5207\u6362\u6a21\u578b</th>
+                <th className="text-right px-3 py-2 font-medium w-24">\u72b6\u6001</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {data.configs.map((cfg) => {
+                const msg = saveMsg[cfg.scene];
+                const isSaving = saving === cfg.scene;
+                return (
+                  <tr key={cfg.scene} className="hover:bg-gray-50/50">
+                    <td className="px-3 py-2">
+                      <div className="font-medium text-gray-700">{cfg.scene_label}</div>
+                      <div className="text-gray-300 font-mono">{cfg.scene}</div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="text-gray-700">{cfg.alias}</div>
+                      <div className="text-gray-400 font-mono text-xs">{cfg.model}</div>
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <select
+                        value={cfg.alias}
+                        onChange={(e) => handleSwitch(cfg.scene, e.target.value)}
+                        disabled={isSaving}
+                        className="text-xs px-2 py-1 rounded border border-gray-200 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-300 disabled:opacity-50"
+                      >
+                        {data.available_models.map((m) => (
+                          <option key={m.alias} value={m.alias}>
+                            {m.label}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {msg ? (
+                        <span className={`text-xs ${msg === '\u5df2\u4fdd\u5b58' ? 'text-green-600' : msg === '\u4fdd\u5b58\u4e2d...' ? 'text-gray-400' : 'text-red-500'}`}>
+                          {msg}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-green-600">\u5df2\u6fc0\u6d3b</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
 // Main Page
 // ============================================================
 
 export default function DataHealthPage() {
-  const [tab, setTab] = useState<'completeness' | 'task-runs' | 'scheduler' | 'wechat'>('completeness');
+  const [tab, setTab] = useState<'completeness' | 'task-runs' | 'scheduler' | 'wechat' | 'llm-config'>('completeness');
 
   const tabItems: { key: typeof tab; label: string }[] = [
-    { key: 'completeness', label: '数据完备度' },
-    { key: 'task-runs',    label: '任务运行状态' },
-    { key: 'scheduler',   label: '调度计划' },
-    { key: 'wechat',      label: '公众号订阅' },
+    { key: 'completeness', label: '\u6570\u636e\u5b8c\u5907\u5ea6' },
+    { key: 'task-runs',    label: '\u4efb\u52a1\u8fd0\u884c\u72b6\u6001' },
+    { key: 'scheduler',   label: '\u8c03\u5ea6\u8ba1\u5212' },
+    { key: 'llm-config',  label: '\u6a21\u578b\u914d\u7f6e' },
+    { key: 'wechat',      label: '\u516c\u4f17\u53f7\u8ba2\u9605' },
   ];
 
   return (
@@ -772,6 +917,7 @@ export default function DataHealthPage() {
         {tab === 'completeness' && <DataCompletenessTab />}
         {tab === 'task-runs' && <TaskRunStatusTab />}
         {tab === 'scheduler' && <SchedulerTab />}
+        {tab === 'llm-config' && <LLMConfigTab />}
         {tab === 'wechat' && <WechatSubscriptionsPanel />}
       </div>
       </AppShell>

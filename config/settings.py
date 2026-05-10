@@ -75,3 +75,14 @@ MAX_POSITION_PCT = float(_env.get('MAX_POSITION_PCT', '0.3'))  # 单只股票最
 MAX_SINGLE_LOSS_PCT = float(_env.get('MAX_SINGLE_LOSS_PCT', '0.05'))  # 单笔最大亏损
 DEFAULT_STOP_LOSS_PCT = float(_env.get('DEFAULT_STOP_LOSS_PCT', '0.08'))  # 默认止损比例
 DEFAULT_TAKE_PROFIT_PCT = float(_env.get('DEFAULT_TAKE_PROFIT_PCT', '0.15'))  # 默认止盈比例
+
+
+# ============================================================
+# LLM 配置
+# ============================================================
+RAG_API_KEY = os.getenv('RAG_API_KEY', _env.get('RAG_API_KEY', ''))
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY', _env.get('DEEPSEEK_API_KEY', ''))
+DOUBAO_API_KEY = os.getenv('DOUBAO_API_KEY', _env.get('DOUBAO_API_KEY', ''))
+LLM_MODEL_ALIAS = os.getenv('LLM_MODEL_ALIAS', _env.get('LLM_MODEL_ALIAS', 'qwen'))
+LLM_HTTP_TIMEOUT = float(os.getenv('LLM_HTTP_TIMEOUT', _env.get('LLM_HTTP_TIMEOUT', '90')))
+AGENT_LLM_TIMEOUT = float(os.getenv('AGENT_LLM_TIMEOUT', _env.get('AGENT_LLM_TIMEOUT', '90')))

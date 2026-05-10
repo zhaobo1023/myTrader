@@ -853,12 +853,12 @@ async def trigger_task(
         raise HTTPException(status_code=400, detail='task_id is required')
 
     def _run():
-        import os
+        from config.settings import CURRENT_ENV
         from scheduler.loader import load_tasks
         from scheduler.executor import execute_task
         from scheduler.state import ensure_table
 
-        env = os.getenv('DB_ENV', 'local')
+        env = CURRENT_ENV
 
         tasks = load_tasks()
         task = next((t for t in tasks if t['id'] == task_id), None)
@@ -908,10 +908,10 @@ async def run_watchdog(
     import asyncio
 
     def _check():
-        import os
+        from config.settings import CURRENT_ENV
         from scheduler.state import ensure_table
         from scheduler.watchdog import check_missed_runs
-        env = os.getenv('DB_ENV', 'local')
+        env = CURRENT_ENV
         ensure_table(env=env)
         missed = check_missed_runs(env=env, dry_run=False)
         return [
@@ -928,3 +928,143 @@ async def run_watchdog(
     loop = asyncio.get_running_loop()
     missed = await loop.run_in_executor(None, _check)
     return {'missed_count': len(missed), 'missed': missed}
+
+
+# ============================================================
+# LLM Model Config
+# ============================================================
+
+from pydantic import BaseModel as PydanticBaseModel
+from typing import Optional as Opt
+
+
+class LLMConfigUpdate(PydanticBaseModel):
+    scene: str
+    alias: str
+    model: str
+    base_url: str
+    api_key_env: Opt[str] = None
+
+
+# All available model aliases for the frontend dropdown
+AVAILABLE_MODELS = [
+    {
+        'alias': 'qwen',
+        'model': 'qwen3.6-plus',
+        'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        'api_key_env': 'RAG_API_KEY',
+        'label': 'Qwen 3.6 Plus (DashScope)',
+    },
+    {
+        'alias': 'deepseek',
+        'model': 'deepseek-chat',
+        'base_url': 'https://api.deepseek.com/v1',
+        'api_key_env': 'DEEPSEEK_API_KEY',
+        'label': 'DeepSeek Chat',
+    },
+    {
+        'alias': 'deepseek-v4-pro',
+        'model': 'deepseek-chat',
+        'base_url': 'https://api.deepseek.com/v1',
+        'api_key_env': 'DEEPSEEK_API_KEY',
+        'label': 'DeepSeek V4 Pro',
+    },
+    {
+        'alias': 'doubao',
+        'model': 'doubao-pro-128k',
+        'base_url': 'https://ark.cn-beijing.volces.com/api/v3',
+        'api_key_env': 'DOUBAO_API_KEY',
+        'label': 'Doubao Pro 128K',
+    },
+]
+
+SCENE_LABELS = {
+    'agent_chat': 'AI Agent \u5bf9\u8bdd',
+    'rag_query': 'RAG \u7814\u7a76\u67e5\u8be2',
+    'skill': 'LLM \u6280\u80fd',
+    'report': '\u7814\u62a5\u751f\u6210',
+    'daily_report': '\u6bcf\u65e5\u65e5\u62a5',
+}
+
+
+@router.get('/llm-config')
+async def get_llm_config(
+    current_user: User = Depends(require_admin),
+):
+    """Get current LLM model config for all scenes."""
+    try:
+        from config.db import execute_query
+        rows = execute_query(
+            "SELECT id, scene, alias, model, base_url, api_key_env, is_default, enabled, "
+            "DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i') as updated_at "
+            "FROM llm_model_config ORDER BY scene"
+        )
+        configs = []
+        for row in rows:
+            configs.append({
+                'id': row['id'],
+                'scene': row['scene'],
+                'scene_label': SCENE_LABELS.get(row['scene'], row['scene']),
+                'alias': row['alias'],
+                'model': row['model'],
+                'base_url': row['base_url'],
+                'api_key_env': row['api_key_env'],
+                'is_default': bool(row['is_default']),
+                'enabled': bool(row['enabled']),
+                'updated_at': row.get('updated_at', ''),
+            })
+        return {'configs': configs, 'available_models': AVAILABLE_MODELS}
+    except Exception as e:
+        logger.error('[admin] get_llm_config failed: %s', e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put('/llm-config/{scene}')
+async def update_llm_config(
+    scene: str,
+    body: LLMConfigUpdate,
+    current_user: User = Depends(require_admin),
+):
+    """Update the LLM model config for a specific scene."""
+    try:
+        from config.db import execute_query
+
+        # Find matching available model to get all fields
+        matched = None
+        for m in AVAILABLE_MODELS:
+            if m['alias'] == body.alias:
+                matched = m
+                break
+
+        if not matched:
+            raise HTTPException(status_code=400, detail=f'Unknown model alias: {body.alias}')
+
+        # Check if scene exists
+        existing = execute_query(
+            "SELECT id FROM llm_model_config WHERE scene = %s",
+            (scene,),
+        )
+        if not existing:
+            raise HTTPException(status_code=404, detail=f'Scene not found: {scene}')
+
+        # Update the config
+        from config.db import execute_update
+        execute_update(
+            "UPDATE llm_model_config SET alias=%s, model=%s, base_url=%s, "
+            "api_key_env=%s, updated_at=NOW() WHERE scene=%s",
+            (matched['alias'], matched['model'], matched['base_url'],
+             matched['api_key_env'], scene),
+        )
+
+        # Invalidate the in-memory cache so next call picks up the new config
+        from api.services.llm_client_factory import invalidate_scene_cache
+        invalidate_scene_cache()
+
+        logger.info('[admin] LLM config updated: scene=%s -> alias=%s, model=%s',
+                     scene, matched['alias'], matched['model'])
+        return {'status': 'ok', 'scene': scene, 'alias': matched['alias']}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error('[admin] update_llm_config failed: %s', e)
+        raise HTTPException(status_code=500, detail=str(e))
