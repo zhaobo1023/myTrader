@@ -6,7 +6,7 @@ Stores per-scene LLM model settings that can be switched at runtime.
 """
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text
+from sqlalchemy import Column, Integer, String, DateTime, Boolean
 
 from api.dependencies import Base
 

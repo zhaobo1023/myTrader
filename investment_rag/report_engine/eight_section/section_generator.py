@@ -31,7 +31,7 @@ class EightSectionGenerator:
     def _call_llm(self, prompt: str, max_tokens: int = 2000) -> str:
         """Call LLM with temperature=0.3 for stability."""
         try:
-            return self._llm_factory._sync_call(
+            return self._llm_factory.call_sync(
                 prompt=prompt,
                 system_prompt=SYSTEM_PROMPT,
                 temperature=0.3,

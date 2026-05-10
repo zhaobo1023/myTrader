@@ -5,6 +5,7 @@ Admin router - user management
 import logging
 
 from fastapi import APIRouter, HTTPException, Depends, Query
+from pydantic import BaseModel as PydanticBaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -934,16 +935,10 @@ async def run_watchdog(
 # LLM Model Config
 # ============================================================
 
-from pydantic import BaseModel as PydanticBaseModel
-from typing import Optional as Opt
-
 
 class LLMConfigUpdate(PydanticBaseModel):
     scene: str
     alias: str
-    model: str
-    base_url: str
-    api_key_env: Opt[str] = None
 
 
 # All available model aliases for the frontend dropdown
@@ -1027,6 +1022,10 @@ async def update_llm_config(
 ):
     """Update the LLM model config for a specific scene."""
     try:
+        # Validate scene against whitelist
+        if scene not in SCENE_LABELS:
+            raise HTTPException(status_code=400, detail=f'Unknown scene: {scene}')
+
         from config.db import execute_query
 
         # Find matching available model to get all fields
@@ -1047,9 +1046,9 @@ async def update_llm_config(
         if not existing:
             raise HTTPException(status_code=404, detail=f'Scene not found: {scene}')
 
-        # Update the config
-        from config.db import execute_update
-        execute_update(
+        # Update the config (dual-write to keep local/online in sync)
+        from config.db import execute_dual_update
+        execute_dual_update(
             "UPDATE llm_model_config SET alias=%s, model=%s, base_url=%s, "
             "api_key_env=%s, updated_at=NOW() WHERE scene=%s",
             (matched['alias'], matched['model'], matched['base_url'],
@@ -1060,8 +1059,9 @@ async def update_llm_config(
         from api.services.llm_client_factory import invalidate_scene_cache
         invalidate_scene_cache()
 
-        logger.info('[admin] LLM config updated: scene=%s -> alias=%s, model=%s',
-                     scene, matched['alias'], matched['model'])
+        logger.info(
+            '[admin] LLM config updated: scene=%s -> alias=%s, model=%s',
+            scene, matched['alias'], matched['model'])
         return {'status': 'ok', 'scene': scene, 'alias': matched['alias']}
     except HTTPException:
         raise

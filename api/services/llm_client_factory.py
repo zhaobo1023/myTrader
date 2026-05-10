@@ -14,7 +14,9 @@ from typing import Optional
 
 from config.settings import LLM_HTTP_TIMEOUT as _LLM_HTTP_TIMEOUT
 from config.settings import LLM_MODEL_ALIAS as _LLM_MODEL_ALIAS_DEFAULT
-from config.settings import RAG_API_KEY, DEEPSEEK_API_KEY, DOUBAO_API_KEY
+from config.settings import RAG_API_KEY
+from config.settings import DEEPSEEK_API_KEY
+from config.settings import DOUBAO_API_KEY
 
 # Map api_key_env name -> actual value from settings
 _API_KEY_MAP = {
@@ -86,7 +88,11 @@ class LLMClientFactory:
 
     @property
     def api_key(self) -> str:
-        return _API_KEY_MAP.get(self._api_key_env, '')
+        key = _API_KEY_MAP.get(self._api_key_env, '')
+        if not key:
+            logger.warning('[LLMClientFactory] no API key found for env var %r '
+                           '(not in _API_KEY_MAP or value is empty)', self._api_key_env)
+        return key
 
     async def call(
         self,
@@ -100,7 +106,7 @@ class LLMClientFactory:
         Wraps the synchronous LLMClient.generate() in a thread executor so
         FastAPI async handlers are not blocked.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             self._sync_call,
@@ -109,6 +115,16 @@ class LLMClientFactory:
             temperature,
             max_tokens,
         )
+
+    def call_sync(
+        self,
+        prompt: str,
+        system_prompt: str = '',
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+    ) -> str:
+        """Synchronous LLM call (public API for non-async callers)."""
+        return self._sync_call(prompt, system_prompt, temperature, max_tokens)
 
     def _sync_call(
         self,
