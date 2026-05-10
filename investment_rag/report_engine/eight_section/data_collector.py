@@ -6,6 +6,7 @@ EightSectionDataCollector - 八章节全面分析数据收集层
 所有数值计算在此完成，LLM 只做文字解读。
 
 数据来源表：
+- trade_stock_info         公司简介(主营业务/公司介绍)
 - trade_stock_basic        公司基本信息(申万行业)
 - financial_income         利润表(营收/净利/ROE/毛利率)
 - financial_balance        资产负债表
@@ -13,11 +14,11 @@ EightSectionDataCollector - 八章节全面分析数据收集层
 - trade_stock_daily_basic  估值(PE/PB/PS/市值)
 - trade_stock_daily        K线行情
 - trade_stock_basic_factor 基础因子(动量/换手/波动率)
-- trade_technical_indicator 技术指标(MA/MACD/RSI/KDJ) (可能不可用)
+- trade_technical_indicator 技术指标(MA/MACD/RSI/KDJ)
 - research_announcements   公司公告
+- stock_news               公司新闻
 """
 import logging
-import re
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -127,25 +128,45 @@ class EightSectionDataCollector:
     # ==============================================================
 
     def _collect_company_profile(self, full: str, bare: str, name: str) -> str:
-        # Use trade_stock_basic (available in wucai_trade DB)
-        rows = self._q(
-            "SELECT stock_code, stock_name, industry, sw_level1, sw_level2, is_st "
+        # Try trade_stock_info first (has main_business, company_intro)
+        info = self._q(
+            "SELECT stock_code, stock_name, industry, main_business, business_scope, "
+            "company_intro FROM trade_stock_info WHERE stock_code=%s LIMIT 1",
+            (full,),
+        )
+        # Also get trade_stock_basic for sw_industry classification
+        basic = self._q(
+            "SELECT stock_code, stock_name, sw_level1, sw_level2, is_st "
             "FROM trade_stock_basic WHERE stock_code=%s LIMIT 1",
             (full,),
         )
-        if not rows:
+
+        if not basic and not info:
             return f"公司: {name}({full}), 行业: (未知)"
 
-        r = rows[0]
-        industry = r.get("sw_level1") or r.get("industry") or "(未知)"
-        st_tag = " [ST]" if r.get("is_st") else ""
+        b = basic[0] if basic else {}
+        i = info[0] if info else {}
+        stock_name = b.get("stock_name") or i.get("stock_name") or name
+        industry = b.get("sw_level2") or b.get("sw_level1") or i.get("industry") or "(未知)"
+        st_tag = " [ST]" if b.get("is_st") else ""
+
         lines = [
-            f"**公司名称**: {r.get('stock_name', name)}{st_tag}",
-            f"**股票代码**: {r.get('stock_code', full)}",
+            f"**公司名称**: {stock_name}{st_tag}",
+            f"**股票代码**: {full}",
             f"**行业分类**: {industry}",
         ]
-        if r.get("sw_level2"):
-            lines.append(f"**申万二级行业**: {r['sw_level2']}")
+
+        main_biz = i.get("main_business")
+        if main_biz:
+            lines.append(f"**主营业务**: {main_biz}")
+
+        intro = i.get("company_intro")
+        if intro:
+            # Truncate very long intros
+            if len(intro) > 300:
+                intro = intro[:300] + "..."
+            lines.append(f"**公司简介**: {intro}")
+
         return "\n".join(lines)
 
     # ==============================================================
@@ -478,17 +499,18 @@ class EightSectionDataCollector:
     # ==============================================================
 
     def _collect_news(self, bare: str, limit: int = 5) -> str:
+        # stock_news uses full code format (e.g. 688012.SH)
         rows = self._q(
-            "SELECT title, pub_date FROM stock_news "
-            "WHERE stock_code IN (%s, %s) ORDER BY id DESC LIMIT %s",
-            (bare, bare + ".SH", limit),
+            "SELECT title, publish_time FROM stock_news "
+            "WHERE stock_code IN (%s, %s, %s) ORDER BY id DESC LIMIT %s",
+            (bare + ".SH", bare + ".SZ", bare, limit),
         )
         if not rows:
             return "[暂无新闻数据]"
 
         lines = ["### 最新新闻\n"]
         for r in rows:
-            lines.append(f"- {r.get('pub_date', '')}: {r.get('title', '(无标题)')}")
+            lines.append(f"- {r.get('publish_time', '')}: {r.get('title', '(无标题)')}")
         return "\n".join(lines)
 
     # ==============================================================
@@ -496,28 +518,47 @@ class EightSectionDataCollector:
     # ==============================================================
 
     def _find_comparables(self, full: str, bare: str) -> str:
-        # Get industry of target stock from trade_stock_basic
+        # Get industry of target stock - prefer sw_level2 for more specific matching
         info = self._q(
-            "SELECT industry, sw_level1 FROM trade_stock_basic WHERE stock_code=%s LIMIT 1",
+            "SELECT industry, sw_level1, sw_level2 FROM trade_stock_basic WHERE stock_code=%s LIMIT 1",
             (full,),
         )
         if not info:
             return "[无法确定行业，跳过可比公司分析]"
 
-        industry = info[0].get("sw_level1") or info[0].get("industry")
+        # Use sw_level2 for precise industry matching, fallback to sw_level1
+        industry = info[0].get("sw_level2") or info[0].get("sw_level1") or info[0].get("industry")
+        industry_col = "sw_level2" if info[0].get("sw_level2") else "sw_level1"
         if not industry:
             return "[无法确定行业，跳过可比公司分析]"
 
-        # Find peers in same industry, get top 5 by market cap
+        # Find peers in same sub-industry, get top 5 by market cap (exclude target)
         peers = self._q(
             "SELECT b.stock_code, b.stock_name "
             "FROM trade_stock_basic b "
             "JOIN trade_stock_daily_basic d ON b.stock_code COLLATE utf8mb4_unicode_ci = d.stock_code "
-            "WHERE (b.sw_level1 = %s OR b.industry = %s) AND b.stock_code != %s "
+            f"WHERE b.{industry_col} = %s AND b.stock_code != %s "
             "AND d.trade_date = (SELECT MAX(trade_date) FROM trade_stock_daily_basic) "
             "ORDER BY d.total_mv DESC LIMIT 5",
-            (industry, industry, full),
+            (industry, full),
         )
+
+        # If too few peers found at sw_level2, try sw_level1
+        if len(peers) < 3 and industry_col == "sw_level2":
+            sw1 = info[0].get("sw_level1")
+            if sw1:
+                peers_sw1 = self._q(
+                    "SELECT b.stock_code, b.stock_name "
+                    "FROM trade_stock_basic b "
+                    "JOIN trade_stock_daily_basic d ON b.stock_code COLLATE utf8mb4_unicode_ci = d.stock_code "
+                    "WHERE b.sw_level1 = %s AND b.stock_code != %s "
+                    "AND d.trade_date = (SELECT MAX(trade_date) FROM trade_stock_daily_basic) "
+                    "ORDER BY d.total_mv DESC LIMIT 5",
+                    (sw1, full),
+                )
+                if len(peers_sw1) > len(peers):
+                    peers = peers_sw1
+                    industry = sw1
 
         if not peers:
             return f"[同行业({industry})无可比公司数据]"
@@ -529,7 +570,8 @@ class EightSectionDataCollector:
         )
         target_date = str(date_row[0]["max_date"]) if date_row else None
 
-        lines = [f"### 可比公司分析（同行业: {industry}）\n"]
+        industry_label = info[0].get("sw_level2") or industry
+        lines = [f"### 可比公司分析（同行业: {industry_label}）\n"]
         lines.append(f"**估值对比日**: {target_date}\n")
 
         # Build comparison table: valuation
@@ -684,6 +726,9 @@ class EightSectionDataCollector:
         lines.append(f"- WACC: {wacc:.1f}% = {rf}% + {beta} x {erp}%")
 
         # Revenue growth for scenario building
+        base_growth = 20.0  # default assumption
+        rev_new = None
+        rev_old = None
         if len(annual) >= 2:
             rev_new = _sf(annual[0]["revenue"])
             rev_old = _sf(annual[-1]["revenue"])
@@ -702,21 +747,60 @@ class EightSectionDataCollector:
                 lines.append(f"- Base: {base_growth:.0f}%")
                 lines.append(f"- Bull: {bull_growth:.0f}%")
 
-        # Sensitivity matrix
+        # Sensitivity matrix - output actual valuation range
+        # Use latest FCF as base for terminal value estimation
         lines.append(f"\n### 敏感性分析表（WACC vs 永续增长率）\n")
-        lines.append("| WACC \\ g | 1.0% | 1.5% | 2.0% | 2.5% | 3.0% |")
-        lines.append("|----------|------|------|------|------|------|")
-        for w in [8.5, 9.0, 9.5, 10.0, 10.5]:
-            row_vals = []
-            for g in [1.0, 1.5, 2.0, 2.5, 3.0]:
-                # Simplified terminal value factor: TV = 1 / (WACC - g)
-                # This is the perpetuity factor, not actual valuation
-                factor = 1 / (w - g) * 100
-                row_vals.append(f"{factor:.0f}")
-            lines.append(f"| {w:.1f}% | {' | '.join(row_vals)} |")
 
-        lines.append(f"\n注: 表中数值为永续价值乘数因子(=1/(WACC-g)x100)，实际估值需乘以终端FCF")
-        lines.append(f"当前市值{f' ({_num(mv)}亿)' if mv else ''}在估值区间的位置需结合FCF预测判断")
+        # Estimate base FCF from financial data
+        base_fcf = None
+        if annual:
+            latest_annual = annual[0]
+            np_val = _sf(latest_annual["net_profit"])
+            if np_val and np_val > 0 and mv:
+                # Rough FCF estimate: use OCF from cashflow if available
+                # Fallback: assume FCF ~ 70% of net profit for mature companies
+                base_fcf = np_val * 0.7
+
+        if base_fcf and mv:
+            # Project FCF 5 years forward using base_growth, then terminal value
+            lines.append("| WACC \\ g | 1.0% | 1.5% | 2.0% | 2.5% | 3.0% |")
+            lines.append("|----------|------|------|------|------|------|")
+            growth_rate = base_growth / 100
+            for w_pct in [8.5, 9.0, 9.5, 10.0, 10.5]:
+                w = w_pct / 100
+                row_vals = []
+                for g_pct in [1.0, 1.5, 2.0, 2.5, 3.0]:
+                    g = g_pct / 100
+                    # 5-year projected FCF
+                    projected_fcf = base_fcf * ((1 + growth_rate) ** 5)
+                    # Terminal value = FCF_5 * (1+g) / (WACC - g)
+                    tv = projected_fcf * (1 + g) / (w - g)
+                    # PV of terminal value
+                    pv_tv = tv / ((1 + w) ** 5)
+                    # PV of 5-year FCFs (simplified: annuity with growth)
+                    pv_fcf = sum(
+                        base_fcf * ((1 + growth_rate) ** i) / ((1 + w) ** i)
+                        for i in range(1, 6)
+                    )
+                    total_val = pv_fcf + pv_tv
+                    row_vals.append(f"{total_val:.0f}")
+                lines.append(f"| {w_pct:.1f}% | {' | '.join(row_vals)} |")
+
+            lines.append(f"\n注: 表中数值为合理市值(亿元)估算，基于FCF=净利x0.7和{growth_rate*100:.0f}%五年增速假设")
+            if mv:
+                lines.append(f"当前市值: {_num(mv)}亿元")
+        else:
+            # Fallback: show terminal value multipliers
+            lines.append("| WACC \\ g | 1.0% | 1.5% | 2.0% | 2.5% | 3.0% |")
+            lines.append("|----------|------|------|------|------|------|")
+            for w_pct in [8.5, 9.0, 9.5, 10.0, 10.5]:
+                row_vals = []
+                for g_pct in [1.0, 1.5, 2.0, 2.5, 3.0]:
+                    factor = 1 / (w_pct - g_pct)
+                    row_vals.append(f"{factor:.1f}x")
+                lines.append(f"| {w_pct:.1f}% | {' | '.join(row_vals)} |")
+            lines.append(f"\n注: 表中数值为永续价值乘数(=1/(WACC-g))，需乘以终端FCF得到实际估值")
+            lines.append(f"当前市值{f' ({_num(mv)}亿)' if mv else ''}在估值区间的位置需结合FCF预测判断")
 
         # Profitability context
         if annual:
