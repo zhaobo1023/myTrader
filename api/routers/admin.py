@@ -996,7 +996,7 @@ async def get_llm_config(
         from config.db import execute_query
         rows = execute_query(
             "SELECT id, scene, alias, model, base_url, api_key_env, is_default, enabled, "
-            "DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i') as updated_at "
+            "DATE_FORMAT(updated_at, '%%Y-%%m-%%d %%H:%%i') as updated_at "
             "FROM llm_model_config ORDER BY scene"
         )
         configs = []
