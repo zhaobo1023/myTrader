@@ -24,7 +24,7 @@ PRESET_STRATEGIES = [
         'key': 'momentum_reversal',
         'name': '动量反转策略',
         'description': '基于RPS动量+价格底部反转的两阶段选股，覆盖全A股5000+只，每日盘后运行',
-        'params_desc': 'RPS阈值: 95 / 反转分位: 35% / 大盘过滤: MA50/MA120',
+        'params_desc': 'RPS来源: trade_stock_rps(全市场) / 动量: 评分制(>=4/7) / 反转分位: 40% / 成交额门槛: 2000万',
         'warnings': [],
     },
     {
@@ -65,6 +65,24 @@ PRESET_STRATEGIES = [
                 'type': 'info',
                 'title': '[INFO] 流动性风险',
                 'body': '微盘股日均成交额小，实际滑点高于回测假设（0.1%），建议成交额<500万的个股分批轻仓，避免冲击成本过高',
+            },
+        ],
+    },
+    {
+        'key': 'g_score',
+        'name': 'G-Score异象策略',
+        'description': 'Mohanram(2005) 8指标打分法，在高估值(PB>70%分位)股票中筛选基本面优秀的标的',
+        'params_desc': 'Top 30 / G-Score>=5(8分制) / PB>70%分位 / 行业上限20% / 季频调仓',
+        'warnings': [
+            {
+                'type': 'info',
+                'title': '[INFO] 理论背景',
+                'body': 'G-Score是增长异象的核心工具。高估值股票中，高G-Score(>=6)的股票显著跑赢低G-Score(<=1)的股票，说明基本面分析能有效区分高估值中的好公司与坏公司',
+            },
+            {
+                'type': 'warning',
+                'title': '[WARN] 数据近似',
+                'body': '销售费用使用营收-成本-利润近似，资本性支出使用投资现金流绝对值近似，R&D数据仅覆盖硬科技行业。因子精度有限，建议结合其他策略交叉验证',
             },
         ],
     },

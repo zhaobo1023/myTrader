@@ -3,8 +3,11 @@
 Celery tasks for preset strategies (momentum_reversal, microcap_pure_mv, hardtech)
 """
 import logging
+import math
 import traceback
 from datetime import date
+
+import numpy as np
 
 from api.tasks.celery_app import celery_app
 
@@ -43,6 +46,8 @@ def run_preset_strategy(self, run_id: int, strategy_key: str, env: str = 'online
             result = _run_microcap_pure_mv(run_id, env)
         elif strategy_key == 'hardtech':
             result = _run_hardtech_tech(run_id, env)
+        elif strategy_key == 'g_score':
+            result = _run_g_score(run_id, env)
         else:
             raise ValueError(f'Unknown strategy key: {strategy_key}')
 
@@ -96,7 +101,7 @@ def _run_momentum_reversal(run_id: int, env: str) -> dict:
     result_df = screener.run_screener(output_csv=False)
 
     # Build signals list and add occurrence count
-    signal_cols = ['stock_code', 'stock_name', 'signal_type', 'rps', 'close', 'ma20', 'ma250', 'volume_ratio']
+    signal_cols = ['stock_code', 'stock_name', 'signal_type', 'signal_grade', 'rps', 'close', 'ma20', 'ma250', 'volume_ratio']
     signals = []
     if result_df is not None and len(result_df) > 0:
         # Get recent 5-day occurrence counts for all signal stocks
@@ -405,3 +410,102 @@ def _safe_float(v):
         return f
     except (TypeError, ValueError):
         return None
+
+
+def _run_g_score(run_id: int, env: str) -> dict:
+    """Execute G-Score screening and persist results."""
+    import os
+    import sys
+
+    ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+
+    from config.db import execute_update, execute_query as db_query
+    from decimal import Decimal
+    import json
+
+    # Get run_date from database record
+    run_date_rows = db_query(
+        "SELECT run_date FROM trade_preset_strategy_run WHERE id = %s",
+        (run_id,),
+        env=env,
+    )
+    if not run_date_rows or not run_date_rows[0].get('run_date'):
+        raise ValueError(f'No run_date found for run_id {run_id}')
+    trade_date = str(run_date_rows[0]['run_date'])
+    logger.info('[CELERY] g_score run %d: using trade_date %s', run_id, trade_date)
+
+    from strategist.g_score.screener import screen_g_score_stocks
+    result_df = screen_g_score_stocks(trade_date=trade_date, env=env)
+
+    if result_df.empty:
+        logger.warning('[CELERY] g_score: empty result for %s', trade_date)
+        execute_update(
+            """
+            UPDATE trade_preset_strategy_run
+            SET status = 'done', signal_count = 0, momentum_count = 0, reversal_count = 0,
+                market_status = '', market_message = %s, signals_json = '[]', finished_at = NOW()
+            WHERE id = %s
+            """,
+            (f'no g_score data for {trade_date}', run_id),
+            env=env,
+        )
+        return {'signal_count': 0}
+
+    # Build signals list
+    signals = []
+    signal_cols = ['stock_code', 'stock_name', 'industry', 'g_score',
+                   'pb', 'pe_ttm', 'total_mv',
+                   's_roa', 's_cfoa', 's_accrual', 's_rd',
+                   's_sga', 's_capex', 's_roa_var', 's_rev_var']
+
+    for _, row in result_df.iterrows():
+        record = {}
+        for col in signal_cols:
+            if col in row.index:
+                val = row[col]
+                if isinstance(val, (float, Decimal)):
+                    record[col] = _safe_float(val)
+                elif isinstance(val, (int, np.integer)):
+                    record[col] = int(val)
+                elif val is None or (isinstance(val, float) and math.isnan(val)):
+                    record[col] = None
+                else:
+                    record[col] = str(val) if not isinstance(val, str) else val
+            else:
+                record[col] = None
+        signals.append(record)
+
+    signals_json = json.dumps(signals, ensure_ascii=False)
+    signal_count = len(signals)
+
+    # momentum_count = high G-Score (>=6), reversal_count = medium G-Score (4-5)
+    high_g_count = int(result_df.attrs.get('high_g_score_count', 0))
+    med_g_count = int(result_df.attrs.get('medium_g_score_count', 0))
+
+    execute_update(
+        """
+        UPDATE trade_preset_strategy_run
+        SET status = 'done',
+            signal_count = %s,
+            momentum_count = %s,
+            reversal_count = %s,
+            market_status = '',
+            market_message = %s,
+            signals_json = %s,
+            finished_at = NOW()
+        WHERE id = %s
+        """,
+        (signal_count, high_g_count, med_g_count,
+         f'trade_date={trade_date}', signals_json, run_id),
+        env=env,
+    )
+    logger.info('[CELERY] g_score run %s completed: %s stocks for %s',
+                run_id, signal_count, trade_date)
+
+    return {
+        'signal_count': signal_count,
+        'momentum_count': high_g_count,
+        'reversal_count': med_g_count,
+    }
