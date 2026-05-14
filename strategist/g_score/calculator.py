@@ -321,7 +321,7 @@ def compute_g_score_indicators(df):
 
     # 8. Revenue growth variance (YoY quarterly, past 12 quarters)
     df['rev_yoy'] = df.groupby('stock_code')['revenue'].transform(
-        lambda x: x.pct_change(4) * 100
+        lambda x: x.pct_change(4, fill_method=None) * 100
     )
     df['rev_yoy'] = df['rev_yoy'].replace([np.inf, -np.inf], np.nan)
     df['rev_growth_var'] = df.groupby('stock_code')['rev_yoy'].transform(

@@ -88,10 +88,11 @@ def screen_g_score_stocks(trade_date=None, top_n=TOP_N, min_g_score=MIN_G_SCORE,
         DataFrame with columns: stock_code, stock_name, industry, g_score,
         pb, pe_ttm, total_mv, plus individual score columns
     """
-    # Determine trade date
+    # Determine trade date: use trade_stock_daily_basic (not trade_stock_daily)
+    # because we need PB data which comes from daily_basic
     if trade_date is None:
         rows = execute_query(
-            "SELECT MAX(trade_date) AS max_date FROM trade_stock_daily",
+            "SELECT MAX(trade_date) AS max_date FROM trade_stock_daily_basic",
             env=env,
         )
         if not rows or not rows[0].get('max_date'):
@@ -99,14 +100,39 @@ def screen_g_score_stocks(trade_date=None, top_n=TOP_N, min_g_score=MIN_G_SCORE,
             return pd.DataFrame()
         trade_date = str(rows[0]['max_date'])
 
-    logger.info(f"[G-SCORE] Screening for {trade_date}, top_n={top_n}, "
-                f"min_g_score={min_g_score}, pb_percentile={pb_percentile}")
-
     # Load PB data for valuation classification
     pb_df = load_pb_data(trade_date, env=env)
-    if pb_df.empty:
-        logger.error(f"[G-SCORE] No PB data for {trade_date}")
+
+    # Fallback: if PB data too sparse (< 100 stocks), try previous trading days
+    if len(pb_df) < 100:
+        logger.warning(f"[G-SCORE] Only {len(pb_df)} stocks with PB data for {trade_date}, "
+                       "falling back to recent dates with sufficient data")
+        fallback_rows = execute_query(
+            """
+            SELECT trade_date, COUNT(*) as cnt
+            FROM trade_stock_daily_basic
+            WHERE pb IS NOT NULL AND pb > 0
+            GROUP BY trade_date
+            HAVING cnt >= 1000
+            ORDER BY trade_date DESC
+            LIMIT 5
+            """,
+            env=env,
+        )
+        for fb in (fallback_rows or []):
+            fb_date = str(fb['trade_date'])
+            pb_df = load_pb_data(fb_date, env=env)
+            if len(pb_df) >= 1000:
+                logger.info(f"[G-SCORE] Fallback to {fb_date}: {len(pb_df)} stocks with PB data")
+                trade_date = fb_date
+                break
+
+    if pb_df.empty or len(pb_df) < 100:
+        logger.error(f"[G-SCORE] Insufficient PB data (got {len(pb_df)} stocks)")
         return pd.DataFrame()
+
+    logger.info(f"[G-SCORE] Screening for {trade_date}, top_n={top_n}, "
+                f"min_g_score={min_g_score}, pb_percentile={pb_percentile}")
 
     logger.info(f"[G-SCORE] PB data: {len(pb_df)} stocks")
 
