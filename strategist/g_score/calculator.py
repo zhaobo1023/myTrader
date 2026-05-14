@@ -370,15 +370,15 @@ def score_indicators(df, industry_map):
     else:
         df['s_roa'] = 0
 
-    # Score 2: CFOA
+    # Score 2: CFOA (annual data only, NaN -> 0.5 neutral)
     if 'cfoa' in df.columns and 'cfoa' in industry_medians:
         df['s_cfoa'] = np.where(
             df['cfoa'].notna(),
             (df['cfoa'] > industry_medians['cfoa']).astype(int),
-            0
+            0.5
         )
     else:
-        df['s_cfoa'] = 0
+        df['s_cfoa'] = 0.5
 
     # Score 3: Accrual (negative = better, independent of industry)
     df['s_accrual'] = np.where(
@@ -388,14 +388,16 @@ def score_indicators(df, industry_map):
     )
 
     # Score 4: R&D ratio
+    # When rd_ratio is NaN (no R&D data for this industry), give 0.5 (neutral)
+    # so that R&D only differentiates stocks with actual data, not penalize others
     if 'rd_ratio' in df.columns and 'rd_ratio' in industry_medians:
         df['s_rd'] = np.where(
             df['rd_ratio'].notna(),
             (df['rd_ratio'] > industry_medians['rd_ratio']).astype(int),
-            0
+            0.5
         )
     else:
-        df['s_rd'] = 0
+        df['s_rd'] = 0.5
 
     # Score 5: SGA ratio
     if 'sga_ratio' in df.columns and 'sga_ratio' in industry_medians:
@@ -407,15 +409,15 @@ def score_indicators(df, industry_map):
     else:
         df['s_sga'] = 0
 
-    # Score 6: Capex ratio
+    # Score 6: Capex ratio (annual data only, NaN -> 0.5 neutral)
     if 'capex_ratio' in df.columns and 'capex_ratio' in industry_medians:
         df['s_capex'] = np.where(
             df['capex_ratio'].notna(),
             (df['capex_ratio'] > industry_medians['capex_ratio']).astype(int),
-            0
+            0.5
         )
     else:
-        df['s_capex'] = 0
+        df['s_capex'] = 0.5
 
     # Score 7: ROA variance (lower = better -> below median = 1)
     if 'roa_var' in df.columns and 'roa_var' in industry_medians:

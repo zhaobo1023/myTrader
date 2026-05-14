@@ -635,7 +635,7 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                                           </td>
                                           <td style={{ padding: '5px 10px', fontFamily: 'var(--font-geist-mono)', fontSize: '10px', color: 'var(--text-secondary)', letterSpacing: '1px' }}>
                                             {[sig.s_roa, sig.s_cfoa, sig.s_accrual, sig.s_rd, sig.s_sga, sig.s_capex, sig.s_roa_var, sig.s_rev_var]
-                                              .map((v) => v === 1 ? '1' : v === 0 ? '0' : '?')
+                                              .map((v) => v === 1 ? '1' : v === 0 ? '0' : v === 0.5 ? '-' : '?')
                                               .join('')}
                                           </td>
                                           <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(sig.pb, 1)}</td>
