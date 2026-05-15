@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Daily scheduled tasks for preset strategies (动量反转 + 微盘股 + 硬科技)
+Daily scheduled tasks for preset strategies (动量反转 + 微盘股 + 硬科技 + 预期差)
 
 每日收盘后自动执行策略筛选。硬科技策略仅周五执行。
 
@@ -24,7 +24,10 @@ def run_preset_strategies_daily(self):
     直接在 Worker 进程内同步运行，不通过 apply_async 二次投递。
     """
     from config.db import execute_query, execute_update
-    from api.tasks.preset_strategies import _run_momentum_reversal, _run_microcap_pure_mv, _run_hardtech_tech
+    from api.tasks.preset_strategies import (
+        _run_momentum_reversal, _run_microcap_pure_mv,
+        _run_hardtech_tech, _run_expectation_gap,
+    )
 
     logger.info('=' * 60)
     logger.info('[SCHEDULE] Starting daily preset strategies execution')
@@ -51,7 +54,8 @@ def run_preset_strategies_daily(self):
         trade_dt = datetime.strptime(trade_date_str, '%Y-%m-%d')
         if trade_dt.weekday() == 4:
             strategies['hardtech'] = _run_hardtech_tech
-            logger.info('[SCHEDULE] Friday detected, adding hardtech strategy')
+            strategies['expectation_gap'] = _run_expectation_gap
+            logger.info('[SCHEDULE] Friday detected, adding hardtech + expectation_gap strategies')
     except (ValueError, TypeError):
         pass
     results = {}

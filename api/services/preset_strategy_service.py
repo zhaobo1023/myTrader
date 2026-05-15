@@ -86,6 +86,24 @@ PRESET_STRATEGIES = [
             },
         ],
     },
+    {
+        'key': 'expectation_gap',
+        'name': '预期差策略',
+        'description': 'Piotroski & So(2017) F-Score + PB 分位，识别被高估和被低估的股票。低PB+高F-Score=被低估，高PB+低F-Score=被高估',
+        'params_desc': 'Top 30(每组) / F-Score 9分制 / 低PB<30%分位 / 高PB>70%分位 / 行业上限20% / 周频调仓',
+        'warnings': [
+            {
+                'type': 'info',
+                'title': '[INFO] 理论背景',
+                'body': 'Piotroski(2000) F-Score 使用9项基本面指标评估公司财务健康度。Piotroski & So(2017) 发现市场对价值型股票的基本面改善反应不足（被低估），对成长型股票的基本面恶化反应不足（被高估），利用这种预期差可获取超额收益',
+            },
+            {
+                'type': 'info',
+                'title': '[INFO] 数据说明',
+                'body': 'F-Score依赖财务报表数据（净利润/现金流/毛利率/资产周转率等），更新频率为季度。部分指标使用近似值：ROA用ROE代理、杠杆率用总负债/总资产近似。策略适合中长期持有，不适用于短期交易',
+            },
+        ],
+    },
 ]
 
 

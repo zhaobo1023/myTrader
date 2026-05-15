@@ -48,6 +48,8 @@ def run_preset_strategy(self, run_id: int, strategy_key: str, env: str = 'online
             result = _run_hardtech_tech(run_id, env)
         elif strategy_key == 'g_score':
             result = _run_g_score(run_id, env)
+        elif strategy_key == 'expectation_gap':
+            result = _run_expectation_gap(run_id, env)
         else:
             raise ValueError(f'Unknown strategy key: {strategy_key}')
 
@@ -508,4 +510,89 @@ def _run_g_score(run_id: int, env: str) -> dict:
         'signal_count': signal_count,
         'momentum_count': high_g_count,
         'reversal_count': med_g_count,
+    }
+
+
+def _run_expectation_gap(run_id: int, env: str) -> dict:
+    """Execute expectation gap screening and persist results."""
+    import os
+    import sys
+
+    ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+
+    from config.db import execute_update, execute_query as db_query
+    from decimal import Decimal
+    import json
+
+    # Get run_date from database record
+    run_date_rows = db_query(
+        "SELECT run_date FROM trade_preset_strategy_run WHERE id = %s",
+        (run_id,),
+        env=env,
+    )
+    if not run_date_rows or not run_date_rows[0].get('run_date'):
+        raise ValueError(f'No run_date found for run_id {run_id}')
+    trade_date = str(run_date_rows[0]['run_date'])
+    logger.info('[CELERY] expectation_gap run %d: using trade_date %s', run_id, trade_date)
+
+    from strategist.expectation_gap.screener import screen_expectation_gap
+    undervalued_df, overvalued_df = screen_expectation_gap(trade_date=trade_date, env=env)
+
+    # Build signals list (combine both groups)
+    signal_cols = ['stock_code', 'stock_name', 'industry', 'f_score', 'signal_type',
+                   'pb', 'pe_ttm', 'total_mv',
+                   's_roa', 's_cfoa', 's_accrual', 's_d_roa',
+                   's_d_leverage', 's_d_liquidity', 's_equity_offer',
+                   's_d_gm', 's_d_turnover']
+
+    signals = []
+    for df in [undervalued_df, overvalued_df]:
+        for _, row in df.iterrows():
+            record = {}
+            for col in signal_cols:
+                if col in row.index:
+                    val = row[col]
+                    if isinstance(val, (int, np.integer)):
+                        record[col] = int(val)
+                    elif isinstance(val, (float, Decimal, np.floating)):
+                        record[col] = _safe_float(val)
+                    elif val is None or (isinstance(val, float) and math.isnan(val)):
+                        record[col] = None
+                    else:
+                        record[col] = str(val) if not isinstance(val, str) else val
+                else:
+                    record[col] = None
+            signals.append(record)
+
+    signals_json = json.dumps(signals, ensure_ascii=False)
+    signal_count = len(signals)
+    undervalued_count = len(undervalued_df)
+    overvalued_count = len(overvalued_df)
+
+    execute_update(
+        """
+        UPDATE trade_preset_strategy_run
+        SET status = 'done',
+            signal_count = %s,
+            momentum_count = %s,
+            reversal_count = %s,
+            market_status = '',
+            market_message = %s,
+            signals_json = %s,
+            finished_at = NOW()
+        WHERE id = %s
+        """,
+        (signal_count, undervalued_count, overvalued_count,
+         f'trade_date={trade_date}', signals_json, run_id),
+        env=env,
+    )
+    logger.info('[CELERY] expectation_gap run %s completed: %s undervalued + %s overvalued for %s',
+                run_id, undervalued_count, overvalued_count, trade_date)
+
+    return {
+        'signal_count': signal_count,
+        'momentum_count': undervalued_count,
+        'reversal_count': overvalued_count,
     }
