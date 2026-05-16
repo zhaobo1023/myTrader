@@ -5,8 +5,6 @@ import apiClient from '@/lib/api-client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import QuickAddMenu from '@/components/stock/QuickAddMenu';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -149,11 +147,147 @@ function fmt(v: number | null | undefined, digits = 2): string {
   return v.toFixed(digits);
 }
 
+// Strategy category for grouping
+const STRATEGY_CATEGORY: Record<string, { label: string; color: string }> = {
+  momentum_reversal: { label: '技术面', color: '#7170ff' },
+  hardtech: { label: '基本面', color: '#27a644' },
+  microcap_pure_mv: { label: '小盘', color: '#f5a623' },
+  g_score: { label: '基本面', color: '#27a644' },
+  expectation_gap: { label: '基本面', color: '#27a644' },
+};
+
+// Frequency label
+const STRATEGY_FREQ: Record<string, string> = {
+  momentum_reversal: '每日',
+  hardtech: '每周五',
+  microcap_pure_mv: '每日',
+  g_score: '季频',
+  expectation_gap: '周频',
+};
+
 // ---------------------------------------------------------------------------
-// Strategy Card Component
+// Button style helper
 // ---------------------------------------------------------------------------
 
-function StrategyCard({ card }: { card: PresetStrategyCard }) {
+function btnStyle(variant: 'accent' | 'gray' | 'green' | 'orange' | 'red'): React.CSSProperties {
+  const base: React.CSSProperties = {
+    padding: '7px 16px',
+    fontSize: '12px',
+    fontWeight: 510,
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    transition: 'opacity 0.12s',
+  };
+  if (variant === 'accent')  return { ...base, background: 'var(--accent-bg)', color: '#fff' };
+  if (variant === 'green')   return { ...base, background: 'rgba(39,166,68,0.15)', color: '#27a644', cursor: 'not-allowed', opacity: 0.8 };
+  if (variant === 'orange')  return { ...base, background: 'rgba(210,161,28,0.18)', color: '#c79a14' };
+  if (variant === 'red')     return { ...base, background: 'rgba(229,83,75,0.12)', color: '#e5534b', cursor: 'not-allowed', opacity: 0.8 };
+  return { ...base, background: 'var(--bg-card-hover)', color: 'var(--text-muted)', cursor: 'not-allowed', opacity: 0.7 };
+}
+
+// ---------------------------------------------------------------------------
+// Strategy Summary Card (grid item)
+// ---------------------------------------------------------------------------
+
+function StrategyCardSummary({
+  card,
+  isActive,
+  onClick,
+}: {
+  card: PresetStrategyCard;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const todayRun = card.today_run;
+  const status = todayRun?.status;
+  const isRunning = status === 'pending' || status === 'running';
+  const signalCount = todayRun?.status === 'done' ? todayRun.signal_count : null;
+  const cat = STRATEGY_CATEGORY[card.meta.key] ?? { label: '其他', color: 'var(--text-muted)' };
+  const freq = STRATEGY_FREQ[card.meta.key] ?? '--';
+
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        background: isActive ? 'var(--bg-card-hover)' : 'var(--bg-card)',
+        border: isActive ? '1.5px solid var(--accent)' : '1px solid var(--border-subtle)',
+        borderRadius: '10px',
+        padding: '16px 18px',
+        cursor: 'pointer',
+        transition: 'all 0.15s ease',
+        position: 'relative',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+      }}
+      onMouseEnter={(e) => {
+        if (!isActive) (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border)';
+      }}
+      onMouseLeave={(e) => {
+        if (!isActive) (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border-subtle)';
+      }}
+    >
+      {/* Top row: category tag + status */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{
+          fontSize: '10px',
+          fontWeight: 510,
+          padding: '1px 7px',
+          borderRadius: '3px',
+          background: `${cat.color}18`,
+          color: cat.color,
+          letterSpacing: '0.3px',
+        }}>
+          {cat.label}
+        </span>
+        {status && (
+          <span style={statusBadge(status)}>
+            {isRunning && <span style={{ display: 'inline-block', animation: 'spin 1s linear infinite', marginRight: '3px' }}>&#9696;</span>}
+            {STATUS_LABEL[status] ?? status}
+          </span>
+        )}
+      </div>
+
+      {/* Strategy name */}
+      <div style={{ fontSize: '15px', fontWeight: 590, color: 'var(--text-primary)', lineHeight: '1.3' }}>
+        {card.meta.name}
+      </div>
+
+      {/* Description - truncated to 2 lines */}
+      <div style={{
+        fontSize: '12px',
+        color: 'var(--text-secondary)',
+        lineHeight: '1.5',
+        display: '-webkit-box',
+        WebkitLineClamp: 2,
+        WebkitBoxOrient: 'vertical',
+        overflow: 'hidden',
+      }}>
+        {card.meta.description}
+      </div>
+
+      {/* Bottom row: frequency + signal count */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto' }}>
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+          {freq}
+        </span>
+        {signalCount != null && (
+          <span style={{ fontSize: '11px', color: 'var(--text-primary)', fontWeight: 510 }}>
+            {signalCount} 只
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Strategy Detail Panel (expanded view)
+// ---------------------------------------------------------------------------
+
+function StrategyDetailPanel({ card, onClose }: { card: PresetStrategyCard; onClose: () => void }) {
   const queryClient = useQueryClient();
   const [expandedRunId, setExpandedRunId] = useState<number | null>(null);
   const [runDetail, setRunDetail] = useState<PresetRunDetail | null>(null);
@@ -260,10 +394,21 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
     return null;
   }
 
+  // Determine colspan for expanded detail row
+  const runTableColCount = card.meta.key === 'microcap_pure_mv' ? 5
+    : card.meta.key === 'hardtech' || card.meta.key === 'g_score' || card.meta.key === 'expectation_gap' ? 6
+    : 7;
+
   return (
-    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '10px', marginBottom: '20px', overflow: 'hidden' }}>
-      {/* Card Header */}
-      <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
+    <div style={{
+      background: 'var(--bg-card)',
+      border: '1px solid var(--accent)',
+      borderRadius: '10px',
+      marginBottom: '20px',
+      overflow: 'hidden',
+    }}>
+      {/* Header with close button */}
+      <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div style={{ flex: '1 1 200px', minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
@@ -281,8 +426,22 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
               参数：{card.meta.params_desc}
             </p>
           </div>
-          <div style={{ flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
             {renderTriggerButton()}
+            <button
+              onClick={onClose}
+              style={{
+                fontSize: '12px',
+                color: 'var(--text-muted)',
+                background: 'none',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: '6px',
+                padding: '6px 12px',
+                cursor: 'pointer',
+              }}
+            >
+              收起
+            </button>
           </div>
         </div>
 
@@ -496,7 +655,7 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
                   {/* Expanded signals detail */}
                   {expandedRunId === run.id && (
                     <tr key={`detail-${run.id}`}>
-                      <td colSpan={card.meta.key === 'microcap_pure_mv' ? 5 : card.meta.key === 'hardtech' ? 6 : card.meta.key === 'g_score' ? 6 : card.meta.key === 'expectation_gap' ? 6 : 7} style={{ padding: '0', borderBottom: '1px solid var(--border-subtle)' }}>
+                      <td colSpan={runTableColCount} style={{ padding: '0', borderBottom: '1px solid var(--border-subtle)' }}>
                         <div style={{ padding: '12px 20px', background: 'var(--bg-elevated)' }}>
                           {loadingDetail && (
                             <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '10px 0' }}>加载中...</div>
@@ -859,31 +1018,13 @@ function StrategyCard({ card }: { card: PresetStrategyCard }) {
   );
 }
 
-// Button style helper
-function btnStyle(variant: 'accent' | 'gray' | 'green' | 'orange' | 'red'): React.CSSProperties {
-  const base: React.CSSProperties = {
-    padding: '7px 16px',
-    fontSize: '12px',
-    fontWeight: 510,
-    border: 'none',
-    borderRadius: '6px',
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-    transition: 'opacity 0.12s',
-  };
-  if (variant === 'accent')  return { ...base, background: 'var(--accent-bg)', color: '#fff' };
-  if (variant === 'green')   return { ...base, background: 'rgba(39,166,68,0.15)', color: '#27a644', cursor: 'not-allowed', opacity: 0.8 };
-  if (variant === 'orange')  return { ...base, background: 'rgba(210,161,28,0.18)', color: '#c79a14' };
-  if (variant === 'red')     return { ...base, background: 'rgba(229,83,75,0.12)', color: '#e5534b', cursor: 'not-allowed', opacity: 0.8 };
-  return { ...base, background: 'var(--bg-card-hover)', color: 'var(--text-muted)', cursor: 'not-allowed', opacity: 0.7 };
-}
-
 // ---------------------------------------------------------------------------
 // StrategyContent (exported)
 // ---------------------------------------------------------------------------
 
 export default function StrategyContent() {
   const queryClient = useQueryClient();
+  const [activeKey, setActiveKey] = useState<string | null>(null);
 
   const { data: cards, isLoading, error } = useQuery<PresetStrategyCard[]>({
     queryKey: ['preset-strategies'],
@@ -904,7 +1045,7 @@ export default function StrategyContent() {
         @keyframes spin { to { transform: rotate(360deg); } }
       `}</style>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
         <h2 style={{ fontSize: '16px', fontWeight: 590, color: 'var(--text-primary)', letterSpacing: '-0.3px', margin: 0 }}>
           预设策略
         </h2>
@@ -928,9 +1069,39 @@ export default function StrategyContent() {
         </div>
       )}
 
-      {cards && cards.map((card) => (
-        <StrategyCard key={card.meta.key} card={card} />
-      ))}
+      {cards && (
+        <>
+          {/* Card grid */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+            gap: '14px',
+            marginBottom: '20px',
+          }}>
+            {cards.map((card) => (
+              <StrategyCardSummary
+                key={card.meta.key}
+                card={card}
+                isActive={activeKey === card.meta.key}
+                onClick={() => setActiveKey(activeKey === card.meta.key ? null : card.meta.key)}
+              />
+            ))}
+          </div>
+
+          {/* Expanded detail panel */}
+          {activeKey && (() => {
+            const activeCard = cards.find((c) => c.meta.key === activeKey);
+            if (!activeCard) return null;
+            return (
+              <StrategyDetailPanel
+                key={activeKey}
+                card={activeCard}
+                onClose={() => setActiveKey(null)}
+              />
+            );
+          })()}
+        </>
+      )}
     </>
   );
 }
