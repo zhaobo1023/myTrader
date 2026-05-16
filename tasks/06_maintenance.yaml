@@ -69,3 +69,19 @@ tasks:
     env:
       prod:
         enabled: false
+
+  - id: fetch_all_rd_expense
+    name: "Fetch rd_expense and selling_expense for all A-shares (East Money)"
+    module: scheduler.adapters
+    func: run_fetch_all_rd_expense
+    tags: [maintenance, factor, weekly]
+    schedule: weekly
+    depends_on: []
+    params: {}
+    timeout_seconds: 14400
+    retry:
+      max_attempts: 2
+      delay_seconds: 600
+    env:
+      prod:
+        enabled: true

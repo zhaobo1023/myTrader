@@ -445,11 +445,24 @@ def run_factor_calculation(dry_run: bool = False, env: str = 'online'):
         return
 
     from scheduler.readiness import get_latest_trade_date, expected_trade_date
+    from datetime import datetime, timedelta, timezone as _tz
     latest = get_latest_trade_date(env=env)
     expected = expected_trade_date()
-    if latest != expected:
-        logger.error("[SKIP] run_factor_calculation: data not ready (latest=%s, expected=%s). "
-                     "Skipping to avoid computing on stale data.", latest, expected)
+    if latest:
+        latest_dt = datetime.strptime(latest, "%Y-%m-%d").date()
+        expected_dt = datetime.strptime(expected, "%Y-%m-%d").date()
+        # Allow if latest >= expected (data is fresh or ahead)
+        # Also allow if latest is within 1 calendar day of expected
+        # to handle holidays where expected falls on a non-trading day
+        if latest_dt >= expected_dt or (expected_dt - latest_dt).days <= 1:
+            logger.info("[OK] run_factor_calculation: data ready (latest=%s, expected=%s)", latest, expected)
+        else:
+            logger.error("[SKIP] run_factor_calculation: data too stale (latest=%s, expected=%s, gap=%dd). "
+                         "Skipping to avoid computing on stale data.", latest, expected,
+                         (expected_dt - latest_dt).days)
+            return
+    else:
+        logger.error("[SKIP] run_factor_calculation: no trade data found")
         return
 
     from scheduler.task_logger import TaskLogger
@@ -877,3 +890,92 @@ def fetch_financial_statements_incremental(dry_run: bool = False, env: str = 'on
 
         total_rows = sum(stats.values())
         logger.info("[OK] Fetched %d stocks, %d total rows", len(stats), total_rows)
+
+
+# ---------------------------------------------------------------------------
+# All-A-share R&D expense fetch adapter
+# ---------------------------------------------------------------------------
+
+def run_fetch_all_rd_expense(dry_run: bool = False, env: str = 'online'):
+    """Fetch rd_expense and selling_expense for all A-shares from East Money.
+
+    Skips stocks that already have rd_expense data. Run weekly.
+    """
+    if dry_run:
+        logger.info("[DRY-RUN] run_fetch_all_rd_expense: would fetch rd_expense for all A-shares")
+        return
+
+    from scheduler.task_logger import TaskLogger
+    import importlib.util
+    import os
+
+    script_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'scripts', 'fetch_all_rd_expense.py'
+    )
+
+    with TaskLogger('fetch_all_rd_expense', 'factor', env=env):
+        spec = importlib.util.spec_from_file_location('fetch_all_rd_expense', script_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        from config.db import execute_query
+        rows = execute_query(
+            'SELECT COUNT(DISTINCT stock_code) as cnt FROM financial_income_detail WHERE rd_expense IS NOT NULL',
+            env=env,
+        )
+        before = rows[0]['cnt'] if rows else 0
+        logger.info("rd_expense coverage before: %d stocks", before)
+
+        codes = mod.get_all_stock_codes(skip_existing=True)
+        if not codes:
+            logger.info("[OK] All A-share stocks already have rd_expense data")
+            return 0
+
+        logger.info("Fetching rd/selling expense for %d stocks...", len(codes))
+
+        total = len(codes)
+        pending = []
+        total_saved = 0
+        total_rd = 0
+        errors = 0
+
+        from config.db import get_connection
+
+        for i, code in enumerate(codes):
+            rows = mod.fetch_one(code)
+            if rows:
+                rd_count = sum(1 for r in rows if r[7] is not None)
+                total_rd += rd_count
+                pending.extend(rows)
+            else:
+                errors += 1
+
+            # Save batch with fresh connection
+            if (i + 1) % 10 == 0 or i == total - 1:
+                if pending:
+                    try:
+                        conn = get_connection(env=env)
+                        try:
+                            cursor = conn.cursor()
+                            cursor.executemany(mod.UPSERT_SQL, pending)
+                            conn.commit()
+                            cursor.close()
+                            total_saved += len(pending)
+                            pending = []
+                        finally:
+                            conn.close()
+                    except Exception as e:
+                        logger.error("DB error at batch %d: %s", i + 1, e)
+                        pending = []
+
+            if (i + 1) % 100 == 0:
+                logger.info("  Progress: %d/%d stocks, %d rows saved, %d with rd_expense",
+                            i + 1, total, total_saved, total_rd)
+
+            import time
+            time.sleep(0.3)
+
+        logger.info("[OK] Done: %d rows saved, %d with rd_expense, %d errors",
+                    total_saved, total_rd, errors)
+        return total_saved
