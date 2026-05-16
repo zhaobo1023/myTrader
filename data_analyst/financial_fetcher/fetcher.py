@@ -69,13 +69,20 @@ def _to_secucode(stock_code: str) -> str:
 
 
 def fetch_income(stock_code: str, stock_name: str) -> List[dict]:
-    """profit statement from akshare (east money)"""
-    records = []
+    """profit statement from akshare (east money).
+
+    Returns a tuple (income_records, income_detail_records).
+    - income_records: for financial_income table (summary fields)
+    - income_detail_records: for financial_income_detail table (expense breakdown)
+    For backward compatibility, call unpacks the tuple in run_fetch.
+    """
+    income_records = []
+    detail_records = []
     em_code = _to_em_symbol(stock_code)
     try:
         df = ak.stock_profit_sheet_by_report_em(symbol=em_code)
         if df is None or df.empty:
-            return records
+            return income_records, detail_records
 
         for _, row in df.iterrows():
             raw = str(row.get("REPORT_DATE", ""))[:10]
@@ -93,7 +100,7 @@ def fetch_income(stock_code: str, stock_name: str) -> List[dict]:
             if revenue_raw and operate_cost_raw and revenue_raw > 0:
                 gross_margin = round((revenue_raw - operate_cost_raw) / revenue_raw * 100, 2)
 
-            records.append({
+            income_records.append({
                 "stock_code": stock_code,
                 "stock_name": stock_name,
                 "report_date": report_date,
@@ -105,9 +112,34 @@ def fetch_income(stock_code: str, stock_name: str) -> List[dict]:
                 "roe": None,
                 "gross_margin": gross_margin,
             })
+
+            # Detail record with expense breakdown
+            rd_raw = safe_float(row.get("RESEARCH_EXPENSE"))
+            sell_raw = safe_float(row.get("SALE_EXPENSE"))
+            admin_raw = safe_float(row.get("MANAGE_EXPENSE"))
+            finance_raw = safe_float(row.get("FINANCE_EXPENSE"))
+
+            rd_ratio = None
+            if rd_raw and revenue_raw and revenue_raw > 0:
+                rd_ratio = round(rd_raw / revenue_raw * 100, 4)
+
+            detail_records.append({
+                "stock_code": stock_code,
+                "stock_name": stock_name,
+                "report_date": report_date,
+                "operating_revenue": round(revenue_raw / 1e8, 4) if revenue_raw else None,
+                "operating_cost": round(operate_cost_raw / 1e8, 4) if operate_cost_raw else None,
+                "selling_expense": round(sell_raw / 1e8, 4) if sell_raw else None,
+                "admin_expense": round(admin_raw / 1e8, 4) if admin_raw else None,
+                "finance_expense": round(finance_raw / 1e8, 4) if finance_raw else None,
+                "rd_expense": round(rd_raw / 1e8, 4) if rd_raw else None,
+                "net_profit": round(net_profit_raw / 1e8, 4) if net_profit_raw else None,
+                "rd_expense_ratio": rd_ratio,
+                "source": "eastmoney",
+            })
     except Exception as e:
         logger.error(f"[{stock_code}] income fetch failed: {e}")
-    return records
+    return income_records, detail_records
 
 
 def fetch_balance(stock_code: str, stock_name: str) -> List[dict]:
@@ -385,9 +417,8 @@ def run_fetch(config: FinancialFetcherConfig, stock_codes: Dict[str, str] = None
         logger.info(f"===== {name} ({code}) =====")
         total = 0
 
-        income = fetch_income(code, name)
-        logger.info(f"  income: {len(income)} rows")
-        time.sleep(config.request_interval)
+        income, income_detail = fetch_income(code, name)
+        logger.info(f"  income: {len(income)} rows, detail: {len(income_detail)} rows")
 
         balance = fetch_balance(code, name)
         time.sleep(config.request_interval)
@@ -406,6 +437,12 @@ def run_fetch(config: FinancialFetcherConfig, stock_codes: Dict[str, str] = None
         if income:
             storage.upsert("financial_income", income)
             total += len(income)
+        time.sleep(config.request_interval)
+
+        # save income detail (rd_expense, selling_expense, etc.)
+        if income_detail:
+            storage.upsert("financial_income_detail", income_detail)
+            total += len(income_detail)
         time.sleep(config.request_interval)
 
         div = fetch_dividend(code, name)

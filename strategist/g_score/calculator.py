@@ -25,15 +25,13 @@ Each indicator (except accrual) is scored 1 if above industry median,
 G-Score = sum of all 8 binary scores (0-8).
 
 Data sources:
-  - trade_stock_financial: net_profit, revenue, total_assets, operating_cashflow
-  - trade_stock_hardtech_factor: rd_expense
-  - financial_cashflow: investing_cashflow (proxy for capex)
+  - trade_stock_financial: net_profit, revenue, total_assets
+  - financial_income_detail: rd_expense, selling_expense (all A-share, from EM API)
+  - financial_cashflow: operating_cashflow, investing_cashflow (proxy for capex)
   - trade_stock_basic: sw_level1 (industry classification)
 
 Approximations for missing data:
-  - selling_expense: use (revenue - operating_cost - net_profit) as proxy
   - capex: use abs(investing_cashflow) as proxy
-  - R&D: use trade_stock_hardtech_factor where available, else 0 (scores 0)
 """
 
 import logging
@@ -63,7 +61,7 @@ def load_financial_data(stock_codes, env='online'):
     Data sources and units:
       - trade_stock_financial: net_profit/revenue/total_assets in YUAN (convert to yi)
       - financial_cashflow: operating/investing cashflow in YI yuan (stock_code without suffix)
-      - trade_stock_hardtech_factor: rd_expense in YUAN (convert to yi)
+      - financial_income_detail: rd_expense/selling_expense in YUAN (convert to yi)
 
     Returns:
         DataFrame with columns: stock_code, report_date, net_profit, revenue,
@@ -139,35 +137,39 @@ def load_financial_data(stock_codes, env='online'):
         df['operating_cashflow'] = np.nan
         df['investing_cashflow'] = np.nan
 
-    # Load R&D expense from trade_stock_hardtech_factor
+    # Load R&D and selling expense from financial_income_detail
+    # stock_code in financial_income_detail is bare (no suffix), units are YUAN
     sql_rd = f"""
-        SELECT stock_code, report_date_used AS report_date,
-               rd_expense
-        FROM trade_stock_hardtech_factor
-        WHERE stock_code IN ({placeholders})
-          AND rd_expense IS NOT NULL
-        ORDER BY stock_code, report_date_used ASC
+        SELECT stock_code, report_date,
+               rd_expense, selling_expense
+        FROM financial_income_detail
+        WHERE stock_code IN ({ph2})
+          AND (rd_expense IS NOT NULL OR selling_expense IS NOT NULL)
+        ORDER BY stock_code, report_date ASC
     """
-    rd_rows = execute_query(sql_rd, list(stock_codes), env=env)
+    rd_rows = execute_query(sql_rd, stripped_codes, env=env)
     if rd_rows:
         df_rd = pd.DataFrame(rd_rows)
         df_rd['report_date'] = pd.to_datetime(df_rd['report_date'])
-        df_rd['rd_expense'] = pd.to_numeric(df_rd['rd_expense'], errors='coerce')
-        # rd_expense is in YUAN, convert to yi
-        df_rd['rd_expense'] = df_rd['rd_expense'] / 1e8
+        for col in ['rd_expense', 'selling_expense']:
+            df_rd[col] = pd.to_numeric(df_rd[col], errors='coerce')
+            # Convert yuan to yi
+            df_rd[col] = df_rd[col] / 1e8
+        df_rd = df_rd.rename(columns={'stock_code': 'code_stripped'})
         # merge_asof requires globally sorted on='report_date'
         df_rd = df_rd.sort_values('report_date')
         df = df.sort_values('report_date')
         merged = pd.merge_asof(
-            df.drop(columns=['rd_expense'], errors='ignore'),
-            df_rd[['stock_code', 'report_date', 'rd_expense']],
+            df.drop(columns=['rd_expense', 'selling_expense'], errors='ignore'),
+            df_rd[['code_stripped', 'report_date', 'rd_expense', 'selling_expense']],
             on='report_date',
-            by='stock_code',
+            by='code_stripped',
             direction='backward'
         )
         df = merged
     else:
         df['rd_expense'] = np.nan
+        df['selling_expense'] = np.nan
 
     # Drop helper column
     df = df.drop(columns=['code_stripped'], errors='ignore')
@@ -269,28 +271,27 @@ def compute_g_score_indicators(df):
     )
 
     # 5. SGA (selling expense) / avg_total_assets
-    # Approximation: use (revenue - operating_cost - net_profit) as selling_expense
-    # Since operating_cost is not directly available, use a simpler proxy:
-    # SGA ratio ~ (1 - gross_margin/100) * revenue - net_profit  (rough admin+selling cost)
-    # Even simpler: use gross_margin to estimate SGA as (revenue * (1 - gross_margin/100) - net_profit) / revenue
-    # Most robust approximation: SGA ≈ revenue * (1 - net_profit_margin/100) - finance/other costs
-    # Since we don't have detailed expense breakdown, use (revenue * (1 - gross_margin_pct/100) - net_profit)
-    # which = COGS + SGA... not clean.
-    # Best available: just use revenue / total_assets as a scale proxy for SGA intensity
-    # Actually, the simplest reasonable proxy:
-    #   operating_cost_ratio = (revenue - gross_margin*revenue/100) / total_assets
-    # Let's use: sga_proxy = revenue * (1 - gross_margin/100) - net_profit
-    # Normalized by total assets
-    df['sga_proxy'] = np.where(
+    # Use real selling_expense from financial_income_detail where available.
+    # Fall back to approximation using gross_margin where not available.
+    if 'selling_expense' not in df.columns:
+        df['selling_expense'] = np.nan
+    df['ttm_sga'] = df.groupby('stock_code')['selling_expense'].transform(
+        lambda x: x.rolling(4, min_periods=4).sum()
+    )
+    # Approximation fallback: (revenue * (1 - gross_margin/100) - net_profit)
+    sga_approx = np.where(
         df['revenue'].notna() & df['gross_margin'].notna() & df['net_profit'].notna(),
-        df['revenue'] * (1 - df['gross_margin'] / 100) - df['net_profit'],
+        (df['revenue'] * (1 - df['gross_margin'] / 100) - df['net_profit']).clip(lower=0),
         np.nan
     )
-    # Cap at 0 (negative SGA doesn't make sense)
-    df['sga_proxy'] = df['sga_proxy'].clip(lower=0)
+    df['ttm_sga'] = np.where(
+        df['ttm_sga'].notna(),
+        df['ttm_sga'],
+        sga_approx
+    )
     df['sga_ratio'] = np.where(
         (df['avg_total_assets'].notna() & (df['avg_total_assets'] != 0)),
-        df['sga_proxy'] / df['avg_total_assets'],
+        df['ttm_sga'] / df['avg_total_assets'],
         np.nan
     )
 
