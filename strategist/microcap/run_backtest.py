@@ -74,7 +74,7 @@ def main():
     parser.add_argument('--end', type=str, default='2025-12-31',
                        help='回测结束日期 (YYYY-MM-DD)')
     parser.add_argument('--factor', type=str, default='peg',
-                       choices=['peg', 'pe', 'roe', 'ebit_ratio', 'peg_ebit_mv', 'pure_mv', 'pure_mv_mom'],
+                       choices=['peg', 'pe', 'roe', 'ebit_ratio', 'peg_ebit_mv', 'pure_mv', 'pure_mv_mom', 'low_turnover'],
                        help='因子类型')
     parser.add_argument('--top-n', type=int, default=15,
                        help='每期选股数量')

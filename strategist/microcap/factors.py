@@ -473,6 +473,62 @@ def calc_roe(trade_date: str, stock_codes: List[str]) -> pd.DataFrame:
     return df[['stock_code', 'roe']]
 
 
+def calc_low_turnover(trade_date: str, stock_codes: List[str],
+                      turnover_window: int = 20) -> pd.DataFrame:
+    """
+    低换手率因子：选取指定日期前 N 个交易日平均换手率最低的股票。
+
+    因子值 = avg_turnover_rate（越小 = 低换手率 = 排名越前）。
+    数据来源：trade_stock_daily.turnover_rate（trade_stock_daily_basic 的 turnover_rate 为空）。
+
+    Args:
+        trade_date: 交易日期
+        stock_codes: 候选股票列表
+        turnover_window: 换手率均值回看天数（默认 20 个交易日）
+
+    Returns:
+        DataFrame，列 [stock_code, low_turnover]（值越小 = 换手率越低 = 排名越前）
+    """
+    if not stock_codes:
+        return pd.DataFrame(columns=['stock_code', 'low_turnover'])
+
+    from datetime import datetime, timedelta
+
+    conn = get_connection()
+    try:
+        # 回看 turnover_window * 2 自然日（覆盖足够的交易日）
+        dt = datetime.strptime(trade_date, '%Y-%m-%d')
+        start_str = (dt - timedelta(days=turnover_window * 2)).strftime('%Y-%m-%d')
+
+        BATCH = 200
+        chunks = []
+        for batch_start in range(0, len(stock_codes), BATCH):
+            batch = stock_codes[batch_start: batch_start + BATCH]
+            ph = ','.join(['%s'] * len(batch))
+            sql = f"""
+                SELECT stock_code, AVG(turnover_rate) AS avg_turnover
+                FROM trade_stock_daily
+                WHERE stock_code IN ({ph})
+                  AND trade_date BETWEEN %s AND %s
+                  AND turnover_rate > 0
+                GROUP BY stock_code
+                HAVING COUNT(*) >= %s
+            """
+            chunk = pd.read_sql(sql, conn, params=batch + [start_str, trade_date, turnover_window // 2])
+            if not chunk.empty:
+                chunks.append(chunk)
+        df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+    finally:
+        conn.close()
+
+    if df.empty:
+        return pd.DataFrame(columns=['stock_code', 'low_turnover'])
+
+    # 因子值 = 平均换手率（越小越好 = 低换手率优先）
+    df['low_turnover'] = df['avg_turnover'].astype(float)
+    return df[['stock_code', 'low_turnover']]
+
+
 def calc_ebit_ratio(trade_date: str, stock_codes: List[str]) -> pd.DataFrame:
     """
     计算 EBIT/MV 因子（越大越好）。

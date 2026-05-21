@@ -301,5 +301,11 @@ celery_app.conf.beat_schedule = {
         'task': 'sync_ai_wechat_articles',
         'schedule': crontab(minute=30),
     },
+
+    # 02:00 周六 - 财务报表增量采集 (income + balance + cashflow + dividend)
+    'fetch-financial-statements': {
+        'task': 'fetch_financial_statements_batch',
+        'schedule': crontab(hour=2, minute=0, day_of_week=6),
+    },
 }
 celery_app.conf.timezone = 'Asia/Shanghai'

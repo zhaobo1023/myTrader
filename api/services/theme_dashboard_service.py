@@ -152,7 +152,6 @@ def fetch_us_stock_snapshots_from_db(tickers: list) -> dict:
                 "FROM trade_us_daily WHERE stock_code = %s "
                 "ORDER BY trade_date DESC LIMIT 130",
                 (ticker,),
-                env='online',
             ))
             if not rows:
                 continue
@@ -181,42 +180,6 @@ def fetch_us_stock_snapshots_from_db(tickers: list) -> dict:
             }
         except Exception as e:
             logger.warning('[DASHBOARD] US stock DB fetch failed for %s: %s', ticker, e)
-
-    return results
-
-                close_col = 'Close' if 'Close' in df.columns else 'close'
-                closes = df[close_col].dropna()
-                if closes.empty:
-                    continue
-
-                latest = float(closes.iloc[-1])
-                ret_5d = None
-                ret_20d = None
-                if len(closes) >= 6:
-                    ret_5d = round((latest - float(closes.iloc[-6])) / float(closes.iloc[-6]) * 100, 1)
-                if len(closes) >= 21:
-                    ret_20d = round((latest - float(closes.iloc[0])) / float(closes.iloc[0]) * 100, 1)
-
-                history = []
-                for idx, row in df.iterrows():
-                    c = row.get(close_col)
-                    if c is not None and not pd.isna(c):
-                        history.append({
-                            'date': idx.strftime('%Y-%m-%d'),
-                            'close': round(float(c), 2),
-                        })
-
-                results[ticker] = {
-                    'price': round(latest, 2),
-                    'return_5d': ret_5d,
-                    'return_20d': ret_20d,
-                    'history': history,
-                }
-            except Exception as e:
-                logger.warning('[DASHBOARD] yfinance parse failed for %s: %s', ticker, e)
-
-    except Exception as e:
-        logger.error('[DASHBOARD] yfinance download failed: %s', e)
 
     return results
 

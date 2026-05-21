@@ -22,10 +22,10 @@ import numpy as np
 from config.db import get_connection
 from .config import MicrocapConfig
 from .universe import get_daily_universe
-from .factors import calc_peg, calc_pe, calc_roe, calc_ebit_ratio, calc_peg_ebit_mv, calc_pure_mv, calc_pure_mv_mom
+from .factors import calc_peg, calc_pe, calc_roe, calc_ebit_ratio, calc_peg_ebit_mv, calc_pure_mv, calc_pure_mv_mom, calc_low_turnover
 from .factors_cached import (init_cache, calc_peg_cached, calc_pe_cached,
                               calc_pure_mv_cached, calc_pure_mv_mom_cached,
-                              get_universe_cached)
+                              calc_low_turnover_cached, get_universe_cached)
 from .benchmark import load_benchmark, calc_benchmark_metrics, DEFAULT_BENCHMARK
 
 logger = logging.getLogger(__name__)
@@ -466,8 +466,8 @@ class MicrocapBacktest:
                 return []
 
             # 因子计算分发
-            if self._use_cached and self.config.factor in ['peg', 'pe', 'pure_mv', 'pure_mv_mom']:
-                # 使用缓存版本（支持 peg/pe/pure_mv/pure_mv_mom）
+            if self._use_cached and self.config.factor in ['peg', 'pe', 'pure_mv', 'pure_mv_mom', 'low_turnover']:
+                # 使用缓存版本（支持 peg/pe/pure_mv/pure_mv_mom/low_turnover）
                 factor_funcs = {
                     'peg':         calc_peg_cached,
                     'pe':          calc_pe_cached,
@@ -477,6 +477,7 @@ class MicrocapBacktest:
                         lookback=self.config.momentum_lookback,
                         weight=self.config.momentum_weight,
                     ),
+                    'low_turnover': calc_low_turnover_cached,
                 }
             else:
                 # 使用原版（支持所有因子）
@@ -492,6 +493,7 @@ class MicrocapBacktest:
                         lookback=self.config.momentum_lookback,
                         weight=self.config.momentum_weight,
                     ),
+                    'low_turnover': calc_low_turnover,
                 }
             if self.config.factor not in factor_funcs:
                 logger.warning(f"Unsupported factor: {self.config.factor}")

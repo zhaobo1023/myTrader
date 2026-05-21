@@ -20,6 +20,7 @@ from api.tasks import scheduler_tasks
 from api.tasks import briefing_tasks
 from api.tasks import data_pipeline_tasks
 from api.tasks import macro_fetch
+from api.tasks import financial_fetch
 
 __all__ = [
     'preset_strategies',
@@ -37,4 +38,5 @@ __all__ = [
     'briefing_tasks',
     'data_pipeline_tasks',
     'macro_fetch',
+    'financial_fetch',
 ]

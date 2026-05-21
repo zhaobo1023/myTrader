@@ -91,3 +91,23 @@ tasks:
       max_attempts: 1
       delay_seconds: 0
     timeout_seconds: 300
+
+  - id: fetch_financial_incremental
+    name: "Fetch financial statements incremental (income + balance)"
+    module: scheduler.adapters
+    func: fetch_financial_statements_incremental
+    tags: [weekly, data_supplement, financial]
+    schedule: "21:00"
+    depends_on: []
+    params:
+      envs: "online"
+    env:
+      local:
+        enabled: false
+      prod:
+        enabled: true
+    retry:
+      max_attempts: 1
+      delay_seconds: 300
+    timeout_seconds: 14400   # 5000 stocks * ~1s / 5 workers ~ 17min; allow 4h for full run
+    alert_on_failure: true

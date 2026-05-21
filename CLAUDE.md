@@ -128,6 +128,11 @@ DB_ENV=online python scripts/yfinance_sync.py --days 30
 - MA 滚动指标：`min_periods` 设为 `window`，不要设 `1`（避免前期数据失真）
 - 250 交易日 ≈ 365 自然日，不要混淆
 
+## Remote Server Work
+
+- SSH 执行复杂命令时，优先将脚本写到本地文件再 `scp` 上传执行，避免 heredoc 嵌套引号问题。
+- 通过 SSH 隧道或远程连接查询数据库时，优先使用 Python（`pymysql`/`sqlalchemy`）而非在 shell 命令中嵌入原始 SQL，避免转义问题。
+
 ## 工作规范
 
 ### 协作风格
@@ -146,11 +151,10 @@ DB_ENV=online python scripts/yfinance_sync.py --days 30
 4. **黄灯自主决策**：可逆操作（内部重构、UI 调整等）自行决策，在进展中记录决策理由
 
 ### Code Review
-- 每次做 diff review 前必须重新运行 `git diff`，禁止使用缓存或上次的 diff 结果。
-- 二次 review 时，明确对比上次结论，指出哪些问题已修复、哪些仍存在、哪些是新增。
+- 每次做 diff review 前必须重新运行 `git diff`（对准确的 branch/ref），禁止使用缓存或上次的 diff 结果。
+- 二次 review 时，必须重新运行 diff，不假设上次结果仍然有效；明确对比上次结论，指出哪些问题已修复、哪些仍存在、哪些是新增。
 
 ### 远程服务器操作
-- SSH 执行复杂命令时，优先将脚本写到本地文件再 `scp` 上传执行，避免 heredoc 嵌套引号问题。
 - 重新发送失败任务（如 Celery 任务）前，必须先确认新 worker 已启动完毕。
 
 ### 搜索与调试

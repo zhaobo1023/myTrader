@@ -57,11 +57,11 @@ class FactorDataCache:
                 cur = be + _td(days=1)
 
         try:
-            # 1. 加载日线基础数据 (PE_TTM + total_mv)，按季度分批，每批独立连接
+            # 1. 加载日线基础数据 (PE_TTM + total_mv + turnover_rate)，按季度分批，每批独立连接
             basic_chunks = []
             for bs, bes in iter_quarters(start_date):
                 sql = """
-                    SELECT stock_code, trade_date, pe_ttm, total_mv
+                    SELECT stock_code, trade_date, pe_ttm, total_mv, turnover_rate
                     FROM trade_stock_daily_basic
                     WHERE trade_date BETWEEN %s AND %s
                 """
@@ -88,12 +88,12 @@ class FactorDataCache:
             self.df_financial = self._query_with_new_conn(sql_financial, [start_year])
             logger.info(f"加载财务数据: {len(self.df_financial)} 行")
 
-            # 3. 加载日线价格数据（含 amount 用于流动性过滤），按季度分批，每批独立连接
+            # 3. 加载日线价格数据（含 amount 和 turnover_rate），按季度分批，每批独立连接
             chunks = []
             for bs, bes in iter_quarters(start_date):
                 sql = """
                     SELECT stock_code, trade_date, open_price, close_price,
-                           high_price, low_price, amount
+                           high_price, low_price, amount, turnover_rate
                     FROM trade_stock_daily
                     WHERE trade_date BETWEEN %s AND %s
                 """
@@ -319,6 +319,53 @@ def calc_peg_ebit_mv_cached(trade_date: str, stock_codes: List[str]) -> pd.DataF
 def calc_ebit_ratio_cached(trade_date: str, stock_codes: List[str]) -> pd.DataFrame:
     """计算 EBIT 比率因子（缓存版）- 占位实现"""
     return pd.DataFrame(columns=['stock_code', 'ebit_ratio'])
+
+
+def calc_low_turnover_cached(trade_date: str, stock_codes: List[str],
+                              turnover_window: int = 20) -> pd.DataFrame:
+    """
+    低换手率因子（缓存版）：过去 N 个交易日平均换手率，越低排名越前。
+
+    使用 df_daily 中的 turnover_rate 字段（来自 trade_stock_daily）。
+    """
+    if not _cache.is_loaded:
+        raise RuntimeError("数据缓存未初始化，请先调用 init_cache()")
+
+    if not stock_codes:
+        return pd.DataFrame(columns=['stock_code', 'low_turnover'])
+
+    # 确定回看窗口
+    all_dates = sorted(_cache.df_daily['trade_date'].unique())
+    try:
+        date_idx = all_dates.index(trade_date)
+    except ValueError:
+        return pd.DataFrame(columns=['stock_code', 'low_turnover'])
+
+    start_idx = max(0, date_idx - turnover_window)
+    window_dates = set(all_dates[start_idx: date_idx + 1])
+
+    df = _cache.df_daily[
+        (_cache.df_daily['trade_date'].isin(window_dates)) &
+        (_cache.df_daily['stock_code'].isin(stock_codes)) &
+        (_cache.df_daily['turnover_rate'].notna()) &
+        (_cache.df_daily['turnover_rate'] > 0)
+    ][['stock_code', 'turnover_rate']].copy()
+
+    if df.empty:
+        return pd.DataFrame(columns=['stock_code', 'low_turnover'])
+
+    # 按股票分组求均值，要求至少有 turnover_window//2 个交易日数据
+    grouped = df.groupby('stock_code').agg(
+        avg_turnover=('turnover_rate', 'mean'),
+        cnt=('turnover_rate', 'count')
+    ).reset_index()
+    grouped = grouped[grouped['cnt'] >= turnover_window // 2]
+
+    if grouped.empty:
+        return pd.DataFrame(columns=['stock_code', 'low_turnover'])
+
+    grouped['low_turnover'] = grouped['avg_turnover'].astype(float)
+    return grouped[['stock_code', 'low_turnover']]
 
 
 def get_universe_cached(trade_date: str,

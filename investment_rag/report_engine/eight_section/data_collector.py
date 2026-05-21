@@ -823,12 +823,16 @@ class EightSectionDataCollector:
                 else:
                     # Heavy capex: capex > OCF, likely expansionary investment
                     # Use sustainable FCF = OCF * 0.5 (assume ~half capex is maintenance)
-                    sustainable_fcf = ocf * 0.5
-                    return (
-                        sustainable_fcf,
-                        f"OCF({ocf:.1f}亿) < 资本支出({capex:.1f}亿)，属于重资本开支企业，"
-                        f"假设约50%为维持性capex，可持续FCF = OCF x 0.5 = {sustainable_fcf:.1f}亿"
-                    )
+                    if ocf <= 0:
+                        # Negative OCF: cannot estimate sustainable FCF
+                        pass
+                    else:
+                        sustainable_fcf = ocf * 0.5
+                        return (
+                            sustainable_fcf,
+                            f"OCF({ocf:.1f}亿) < 资本支出({capex:.1f}亿)，属于重资本开支企业，"
+                            f"假设约50%为维持性capex，可持续FCF = OCF x 0.5 = {sustainable_fcf:.1f}亿"
+                        )
 
         # Fallback: if cashflow data unavailable, estimate from net profit
         if annual:
