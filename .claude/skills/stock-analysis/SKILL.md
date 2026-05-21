@@ -85,7 +85,7 @@ ssh aliyun-ecs "mysql -u mytrader_user -p'lGgS^uruPhv%AK0ZifeC' trade -e \"SQL\"
 5. **最新估值** — `trade_stock_daily_basic` 最近 5 个交易日
 6. **近期行情** — `trade_stock_daily` 最近 20 个交易日
 7. **技术因子** — `trade_stock_basic_factor` 最近 5 个交易日
-8. **公司公告** — `research_announcements` 最近 10 条（如 code 不带后缀则用 6 位纯数字）
+8. **公司公告** — `research_announcements` 最近 10 条。代码格式策略：优先用带后缀格式（`600584.SH`）查询；若返回 0 行，再改用纯 6 位数字（`600584`）重试一次
 9. **最新新闻** — `stock_news` 最近 5 条
 
 ### Step 3: 数据完备性检查
