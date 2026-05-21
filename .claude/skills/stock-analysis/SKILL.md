@@ -56,10 +56,17 @@ ssh aliyun-ecs "mysql -u mytrader_user -p'lGgS^uruPhv%AK0ZifeC' trade -e \"SQL\"
 
 ### 注意事项
 
-- `trade_stock_financial` 中的金额单位是**元**（原始值），需除以 1e8 转换为亿元
-- `financial_income` / `financial_balance` / `financial_cashflow` 中的金额单位已经是**亿元**
-- `trade_stock_daily_basic.total_mv` 单位是**万元**，需除以 10000 转换为亿元
-- 股票代码格式：`600584.SH`（带后缀），`financial_income` 等表中可能不带后缀（`600584`），查询时两种都试
+**单位换算速查表（生成报告时统一换算为亿元）：**
+
+| 数据表 | 字段 | 原始单位 | 换算方式 | 报告中单位 |
+|---|---|---|---|---|
+| `trade_stock_financial` | 营收/净利等金额 | 元 | ÷ 1e8 | 亿元 |
+| `financial_income` | 所有金额 | 亿元 | 无需换算 | 亿元 |
+| `financial_balance` | 所有金额 | 亿元 | 无需换算 | 亿元 |
+| `financial_cashflow` | 所有金额 | 亿元 | 无需换算 | 亿元 |
+| `trade_stock_daily_basic` | `total_mv`（总市值） | 万元 | ÷ 10000 | 亿元 |
+
+**股票代码格式**：标准格式为 `600584.SH`（带后缀）。`financial_income` 等财务表中可能不带后缀（`600584`），查询时两种都试。
 
 ## 工作流程 — 单股模式
 
