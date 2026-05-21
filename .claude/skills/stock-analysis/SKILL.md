@@ -130,10 +130,15 @@ ssh aliyun-ecs "mysql -u mytrader_user -p'lGgS^uruPhv%AK0ZifeC' trade -e \"SQL\"
 - 关键发现：估值高低、盈利效率对比
 
 #### 第四章：DCF 估值框架
-- A 股调整参数：无风险利率（中国 10Y 国债 ~1.7%）、Beta（沪深300）、ERP（5-7%）、WACC
-- 三情景估值（Bear/Base/Bull）
-- 敏感性分析表（WACC vs 终端增速）
-- 当前市值在估值区间中的位置
+- **参数基准**：
+  - 无风险利率：中国 10Y 国债收益率（约 1.7%，若有更新数据以实际为准）
+  - Beta：使用 `trade_stock_basic_factor` 中的 beta 字段（相对沪深300）；若数据缺失，参考行业均值并注明
+  - ERP（股权风险溢价）：Bear 情景取 7%，Base 取 6%，Bull 取 5%
+  - WACC：由无风险利率 + Beta × ERP 估算（纯股权简化版），如有负债结构数据则加权
+  - 终端增速：Bear 取 2%，Base 取 3%，Bull 取 4%（不超过名义 GDP 增速上限）
+- 三情景估值（Bear/Base/Bull），列出每情景的关键假设和估算市值
+- 敏感性分析表（WACC vs 终端增速），WACC 范围 ±1%，终端增速范围 ±1%
+- 当前市值在估值区间中的位置（高估/合理/低估判断）
 
 #### 第五章：竞争格局
 - 行业全球/全国排名
