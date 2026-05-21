@@ -1,0 +1,12 @@
+iteration	pass_rate	keep	layer	change_summary	git_commit
+0 (baseline)	1.00	-	-	initial state	4e1ba21
+1	1.00	KEEP	L1	扩充 description 触发词（口语化询问）	87d96fe
+2	1.00	KEEP	L2	明确批量模式跳过股票后的执行逻辑	3633b7c
+3	1.00	KEEP	L2	数据单位换算注意事项重构为速查表格	7d14bd9
+4	1.00	KEEP	L2	扩充 Step 4 可比公司查找逻辑（行业来源/筛选标准/缺失标注）	3574bdf
+5	1.00	KEEP	L2	消除批量模式数据完备性检查与单股询问逻辑的规则冲突	092495a
+6	1.00	KEEP	L2	补全 DCF 估值框架参数说明（Beta/ERP三情景/终端增速/WACC公式）	38e4bd9
+7	1.00	KEEP	L2	明确六章节与八章节映射关系（表格+合并去向说明）	b5ecff5
+8	1.00	KEEP	L2	公告查询代码格式边界策略（优先带后缀，0行重试纯数字）	7b2d6cc
+9	1.00	KEEP	L2	Phase 3 分档评级量化门槛（三维相对分位+定档规则）	4629a6a
+10	1.00	KEEP	L2	报告写入路径冲突处理规则（已存在直接覆盖，标注提示）	009afee
