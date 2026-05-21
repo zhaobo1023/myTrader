@@ -1,0 +1,12 @@
+{
+  "iteration": 1,
+  "change_summary": "扩充 YAML description 触发词，增加口语化询问场景（XX怎么样/值得买吗/基本面如何等）",
+  "layer": "L1",
+  "gate_result": "KEEP",
+  "dev_pass_rate": 1.00,
+  "baseline_pass_rate": 1.00,
+  "delta": 0.00,
+  "failed_cases": [],
+  "successful_patterns": ["L1-A 触发词扩充：在 description 中加入更多用户实际会说的口语词"],
+  "next_iter_suggestion": "继续 L2 正文改进：攻克批量模式跳过逻辑歧义（evolve_plan 中严重程度最高的问题）"
+}

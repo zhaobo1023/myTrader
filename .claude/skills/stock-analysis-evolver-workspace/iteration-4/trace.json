@@ -1,0 +1,12 @@
+{
+  "iteration": 4,
+  "change_summary": "扩充 Step 4 可比公司查找逻辑，增加 5 个明确子步骤：行业来源字段、筛选标准、数据拉取、时间基准、缺失标注规则",
+  "layer": "L2",
+  "gate_result": "KEEP",
+  "dev_pass_rate": 1.00,
+  "baseline_pass_rate": 1.00,
+  "delta": 0.00,
+  "failed_cases": [],
+  "successful_patterns": ["L2-A 步骤明确化：将模糊的'根据行业查找'扩展为5步有操作性的指引"],
+  "next_iter_suggestion": "第5轮：攻克题材批量模式 Phase 2 的数据完备性检查歧义（与单股模式重复引用但未说明行为差异）"
+}

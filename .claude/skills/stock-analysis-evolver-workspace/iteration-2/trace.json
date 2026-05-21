@@ -1,0 +1,12 @@
+{
+  "iteration": 2,
+  "change_summary": "在题材批量模式 Phase 0 中增加跳过处理规则：用户选跳过时 N 更新、进度重算、总览不含跳过项",
+  "layer": "L2",
+  "gate_result": "KEEP",
+  "dev_pass_rate": 1.00,
+  "baseline_pass_rate": 1.00,
+  "delta": 0.00,
+  "failed_cases": [],
+  "successful_patterns": ["L2-A 步骤明确化：将模糊的错误处理分支改为明确的执行规则"],
+  "next_iter_suggestion": "攻克数据单位换算规则分散问题（evolve_plan 中严重程度第二高），可在 Step 2 附近加一个统一的单位换算速查表"
+}
