@@ -167,6 +167,7 @@ ssh aliyun-ecs "mysql -u mytrader_user -p'lGgS^uruPhv%AK0ZifeC' trade -e \"SQL\"
 - 文件名格式：`{公司名}-全面分析-{YYYYMMDD}.md`
 - 使用 Markdown 格式
 - 表格对齐，数字保留合理精度
+- **文件已存在时**：直接覆盖（同日重跑视为更新），不询问用户。写入后在 Step 7 汇报时注明"（已覆盖旧文件）"
 
 ### Step 7: 向用户汇报
 
@@ -243,6 +244,7 @@ WHERE ts_code IN ('600584.SH','688981.SH',...)
 
 #### 写入个股文件
 - 路径：`~/Documents/notes/Finance/{题材名}/{公司名}-分析-{YYYYMMDD}.md`
+- 文件已存在时直接覆盖，不中断流程
 - 完成后向用户报告：`[{i}/{N}] 完成：{公司名} → {文件路径}`
 
 ### Phase 3: 生成题材总览报告
