@@ -1,6 +1,6 @@
 ---
 name: stock-analysis
-description: A股个股全面分析 / 题材批量分析。基于 myTrader 系统数据（ECS MySQL）和 Claude Financial Services 插件框架，生成结构化分析报告。触发条件：用户说"分析一下XX公司"、"做个全面分析"、"帮我研究XX"、"XX投资分析"、"分析XX题材"、"批量分析这批股票"，或输入 /stock-analysis、/sector-analysis。
+description: A股个股全面分析 / 题材批量分析。基于 myTrader 系统数据（ECS MySQL）和 Claude Financial Services 插件框架，生成结构化分析报告。触发条件：用户说"分析一下XX公司"、"做个全面分析"、"帮我研究XX"、"XX投资分析"、"分析XX题材"、"批量分析这批股票"、"XX怎么样"、"看看XX"、"XX值得买吗"、"XX能投资吗"、"帮我看看这只股票"、"XX基本面如何"，或输入 /stock-analysis、/sector-analysis。
 ---
 
 # A 股分析（单股 / 题材批量）
