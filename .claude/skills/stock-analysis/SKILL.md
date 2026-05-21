@@ -105,9 +105,12 @@ ssh aliyun-ecs "mysql -u mytrader_user -p'lGgS^uruPhv%AK0ZifeC' trade -e \"SQL\"
 ### Step 4: 查找可比公司
 
 根据公司所在行业，查找 2-5 家同行业可比公司：
-- 拉取可比公司的 `trade_stock_daily_basic`（最新日估值）和 `trade_stock_financial`（最新年报）
-- 确保对比数据使用**同一交易日**的估值数据
-- 如果某家可比公司数据缺失，补齐或标注
+
+1. **确定行业**：查询 `trade_stock_info` 的 `industry` 字段获取当前公司的行业分类
+2. **筛选可比公司**：用 `WHERE industry = '<行业>' AND ts_code != '<当前代码>'` 查同行业股票，按市值从大到小选取 2-5 家（优先选规模相近、业务相似的公司）
+3. **拉取数据**：并行拉取可比公司的 `trade_stock_daily_basic`（最新日估值）和 `trade_stock_financial`（最新年报）
+4. **同一时间基准**：确保所有可比公司估值数据使用**同一交易日**，避免横向对比失真
+5. **数据缺失处理**：若某家可比公司某项数据缺失，在对比表格对应单元格标注 `N/A`，不跳过该公司（保留行），不影响整行其他数据的展示
 
 ### Step 5: 生成分析报告（八章节）
 
