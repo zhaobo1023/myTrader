@@ -33,8 +33,15 @@ description: A股个股全面分析 / 题材批量分析。基于 myTrader 系�
 所有数据从 ECS MySQL 获取。连接方式：
 
 ```bash
-ssh aliyun-ecs "mysql -u mytrader_user -p'lGgS^uruPhv%AK0ZifeC' trade -e \"SQL\""
+ssh aliyun-ecs "mysql -u mytrader_user -p'${MYTRADER_DB_PASS}' trade -e \"SQL\""
 ```
+
+> **注意**：数据库密码通过环境变量 `$MYTRADER_DB_PASS` 传入，避免明文出现在日志或对话历史中。
+> 使用前请在本地 shell 配置文件（如 `~/.zshrc`）中添加：
+> ```bash
+> export MYTRADER_DB_PASS='你的实际密码'
+> ```
+> 然后执行 `source ~/.zshrc` 使其生效。若环境变量未设置，SSH 连接会因密码为空而失败，此时请检查环境变量配置。
 
 ### 核心数据表
 
