@@ -5,20 +5,41 @@
 - `/task all` — 连续执行所有 TODO 任务，直到队列空或遇到需确认的任务
 - `/task archive` — 月末归档所有 DONE 条目
 
-## 任务队列位置
-$HOME/Documents/notes/Daily/task/tasks_myTrader.md
+## 任务队列位置（可配置）
+
+skill 启动时按以下优先级确定任务文件路径：
+
+1. **读取项目 CLAUDE.md 中的 `TASK_FILE` 声明**（推荐方式）：
+   在项目 CLAUDE.md 的"任务调度"或"工作规范"部分加一行：
+   ```
+   TASK_FILE=$HOME/Documents/notes/Daily/task/tasks_flow.md
+   ```
+   skill 会 Grep 当前项目的 CLAUDE.md，提取 `TASK_FILE=` 后面的值作为任务文件路径。
+
+2. **Fallback**：若未配置，默认使用：
+   ```
+   $HOME/Documents/notes/Daily/task/tasks_myTrader.md
+   ```
+
+**归档路径**同样动态化：从 TASK_FILE 文件名（去掉 tasks_ 前缀和 .md 后缀）推导项目名。例如：
+- `tasks_flow.md` → 归档到 `tasks_archive/flow-YYYY-MM.md`
+- `tasks_myTrader.md` → 归档到 `tasks_archive/myTrader-YYYY-MM.md`
 
 ---
 
 ## 单次执行流程（/task）
 
+### 步骤 0 - 确定任务文件
+
+Grep 当前项目 CLAUDE.md，提取 `TASK_FILE=` 配置值。若找不到，使用 fallback 路径。在整个执行过程中使用该路径，后续步骤中的"任务文件"均指此处确定的路径。
+
 ### 步骤 1 - 取任务
 
-读取 tasks_myTrader.md，取优先级最高的 [TODO]（P1 > P2 > P3，同级按顺序）。
+读取任务文件，取优先级最高的 [TODO]（P1 > P2 > P3，同级按顺序）。
 
 无 [TODO] 时输出：
 ```
-[QUEUE EMPTY] 队列为空，请在 tasks_myTrader.md 添加任务。
+[QUEUE EMPTY] 队列为空，请在 <任务文件路径> 添加任务。
 ```
 
 ### 步骤 2 - 标记并告知
@@ -87,7 +108,9 @@ commit：<hash>
 
 ## 月末归档（/task archive）
 
-1. 读取 tasks_myTrader.md 中所有 [DONE] 条目
-2. 追加写入 `$HOME/Documents/notes/Daily/task/tasks_archive/myTrader-YYYY-MM.md`
-3. 从 tasks_myTrader.md 删除这些条目
-4. 输出：`归档 N 条 → tasks_archive/myTrader-YYYY-MM.md，队列剩余 M 条 TODO`
+1. 按"步骤 0"确定任务文件路径，从文件名推导项目名（去掉 `tasks_` 前缀和 `.md` 后缀）
+2. 读取任务文件中所有 [DONE] 条目
+3. 若 `tasks_archive/` 目录不存在，自动创建（`mkdir -p`）
+4. 追加写入 `$HOME/Documents/notes/Daily/task/tasks_archive/<项目名>-YYYY-MM.md`
+5. 从任务文件删除这些条目
+6. 输出：`归档 N 条 → tasks_archive/<项目名>-YYYY-MM.md，队列剩余 M 条 TODO`
