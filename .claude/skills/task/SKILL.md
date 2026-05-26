@@ -31,7 +31,17 @@ skill 启动时按以下优先级确定任务文件路径：
 
 ### 步骤 0 - 确定任务文件
 
-Grep 当前项目 CLAUDE.md，提取 `TASK_FILE=` 配置值。若找不到，使用 fallback 路径。在整个执行过程中使用该路径，后续步骤中的"任务文件"均指此处确定的路径。
+Grep 当前项目 CLAUDE.md，提取 `TASK_FILE=` 配置值。
+
+- **找到配置**：使用该路径，静默继续。
+- **未找到配置**：使用 fallback 路径，并输出提示：
+  ```
+  [WARN] 当前项目未配置 TASK_FILE，使用默认路径：$HOME/Documents/notes/Daily/task/tasks_myTrader.md
+  如需使用其他任务文件，请在项目 CLAUDE.md 中添加一行：
+    TASK_FILE=$HOME/Documents/notes/Daily/task/tasks_<项目名>.md
+  ```
+
+在整个执行过程中使用该路径，后续步骤中的"任务文件"均指此处确定的路径。
 
 **文件存在性检查**：路径确定后，尝试读取该文件。若文件不存在，立即输出并终止：
 ```
