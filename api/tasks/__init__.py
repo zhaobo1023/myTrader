@@ -20,6 +20,11 @@ from api.tasks import scheduler_tasks
 from api.tasks import briefing_tasks
 from api.tasks import data_pipeline_tasks
 from api.tasks import macro_fetch
+from api.tasks import financial_fetch
+from api.tasks import stock_news
+from api.tasks import sector_strength_tasks
+from api.tasks import announcement_tasks
+from api.tasks import ai_wechat_sync
 
 __all__ = [
     'preset_strategies',
@@ -37,4 +42,9 @@ __all__ = [
     'briefing_tasks',
     'data_pipeline_tasks',
     'macro_fetch',
+    'financial_fetch',
+    'stock_news',
+    'sector_strength_tasks',
+    'announcement_tasks',
+    'ai_wechat_sync',
 ]
