@@ -112,6 +112,14 @@ DB_ENV=online python scripts/yfinance_sync.py --days 30
 
 ## 代码规范 [CRITICAL]
 
+> **确定性检查已脚本化**：下述 CRITICAL 规则（禁裸 getenv / SQL 占位符 / 枚举 key .value 等）
+> 加 emoji、ruff、前端 tsc/eslint，由 `bash scripts/preflight.sh` 一次跑完、带证据、遇错不中断。
+> 提交/提 MR 前 agent **先跑脚本拿结果**，不必逐条手动核对。默认只查【本次改动】（工作区未提交部分，
+> 因本地直接提交到 main，不用 origin diff）。`--backend`/`--frontend`/`--quiet`/`--all` 见脚本头。
+> pytest 未装时自动软跳过（`pip install -r requirements-dev.txt` 后启用）。
+> 脚本不代劳的语义步骤：diff 每行可追溯 · **涉资金逻辑/migration 复核** · /code-review 拍板 · 部署问询。
+> 设计出处：Kun Chen firstmate「脚本做结构、agent 做语义」。
+
 ### Python 语法
 - import 语句必须独立成行，不能合并
 - 关键字大小写敏感：`None` / `Exception`，不是 `none` / `exception`
@@ -153,6 +161,12 @@ DB_ENV=online python scripts/yfinance_sync.py --days 30
 ### Code Review
 - 每次做 diff review 前必须重新运行 `git diff`（对准确的 branch/ref），禁止使用缓存或上次的 diff 结果。
 - 二次 review 时，必须重新运行 diff，不假设上次结果仍然有效；明确对比上次结论，指出哪些问题已修复、哪些仍存在、哪些是新增。
+- **对抗性审查纪律（学 Kun Chen no-mistakes：不同模型交叉，实测抓 63% 改动的错误）**：
+  合并前必跑 `/code-review`，且**主动切换到「挑刺者」心态**——专门找边缘 case、罕见但会发生的场景、
+  文档与代码不一致。**myTrader 涉资金逻辑，此步不可省**：仓位/下单/风控相关改动必须逐条对
+  「资金安全」维度挑刺（越界买入、重复下单、风控绕过、精度丢失）。
+- **有稳定的第二模型 CLI（codex/gemini/API）后**，把本步升级为双模型交叉审查并脚本化
+  （`scripts/review-adversarial.sh`，接口可插拔）；当前 gemini 个人版已失效，暂用单模型 + 挑刺心态。
 
 ### 远程服务器操作
 - 重新发送失败任务（如 Celery 任务）前，必须先确认新 worker 已启动完毕。
@@ -160,6 +174,39 @@ DB_ENV=online python scripts/yfinance_sync.py --days 30
 ### 搜索与调试
 - 主要语言：Python（后端/策略）、TypeScript（前端）。搜索 bug 时优先在这两类文件中定位。
 - 搜索文件时用 Glob/Grep 而非凭记忆猜文件名，若文件不存在立即换方向，不要反复尝试。
+
+## 任务收尾清单（每个开发任务提交前必过）
+
+编码自测通过不等于任务完成。按序逐条过，不要跳步。
+
+> **确定性步骤已脚本化**：第 1-3 步由 `bash scripts/preflight.sh` 一次跑完、带证据、遇错不中断。
+> agent **先跑脚本拿结果**，不必逐条手动跑。脚本全绿后再做第 4-7 步的**语义判断**（脚本不代劳）。
+> 参数：`--backend`/`--frontend` 分别跑，`--quiet` 省 token，`--all` 查全仓存量（一般不用）。
+> 默认只查【本次改动】（工作区未提交部分，因本地直接提交到 main，不用 origin diff）。
+> 设计出处：Kun Chen firstmate「脚本做结构、agent 做语义」。
+
+1. **测试与收集**：本次改动相关的测试必须绿 + `python -m pytest tests/ --collect-only -q` 无收集错误
+   （当前有 2 个收集 error，见 `docs/tech-debt.md` #5，清偿前以「相关目录绿」为过关线）
+2. **规范检查**：ruff 无新增 error（棘轮式，只查本次改动）；CRITICAL 规则（禁裸 getenv / SQL 占位符 /
+   枚举 key .value）由 `scripts/check_code_rules.py` 覆盖
+3. **emoji 检查**：`python scripts/check_no_emoji.py`（MySQL utf8 不支持 4 字节 emoji）
+4. **diff 自查**：重新 `git diff` 完整过一遍，每行改动可追溯到需求；确认没有偷偷加功能/重构/格式美化
+5. **[myTrader 独有] 数据正确性复核** —— 涉及因子计算、策略信号、仓位/下单/风控的改动必须逐条核：
+   - **前视偏差**：是否用到了当日或未来才能拿到的数据？滚动窗口的 shift 方向对不对？
+   - **min_periods**：MA 类滚动指标 `min_periods` 是否设成了 `window`（不是 1）？
+   - **复权一致性**：同一段计算里前复权/后复权/不复权是否混用？
+   - **停牌与退市**：停牌日是否被当成有效交易日？退市股是否还在票池里？
+   - **精度**：金额/份额计算是否用了 float 导致累积误差？涉资金必须 Decimal 或整数分。
+   - **静默失败**：新增的 `except` 是否会把错误吞成一个「看起来正常」的空结果？
+     （投研系统里静默失败比崩溃更糟——见 `docs/tech-debt.md` #9）
+6. **对抗性 code-review**：跑 `/code-review`，主动切换「挑刺者」心态。
+   **涉资金逻辑此步不可省**：越界买入、重复下单、风控绕过、精度丢失逐条挑。
+   高置信 bug 直接修（修完回跑测试确认绿），可疑/PLAUSIBLE 项分级报给用户等拍板，
+   **禁止自动 `--fix` 把不确定判断落进代码**。
+7. **技术债回顾**（登记表 `docs/tech-debt.md`）：本次改动若触碰了登记项涉及的文件，顺手清偿并把条目
+   移到「已清偿」（附日期）；发现新债务或明知欠债先上线的，**先登记再提交**，不允许「先欠着、口头记得」
+
+> **部署是独立决策**：以上全绿只代表代码可提交。生产部署必须单独明确询问用户，不随改动一起执行。
 
 ## 领域文档
 
@@ -170,3 +217,5 @@ DB_ENV=online python scripts/yfinance_sync.py --days 30
 | [docs/claude/svd_monitor.md](docs/claude/svd_monitor.md) | SVD 市场状态监控：多尺度窗口、突变检测、行业中性化 |
 | [docs/claude/tech_scan.md](docs/claude/tech_scan.md) | 持仓技术面扫描：每日盘后扫描、分级预警、Backlog |
 | [docs/claude/scheduler.md](docs/claude/scheduler.md) | 任务调度器：YAML DAG、数据监控服务、报警通知 |
+| [docs/claude/factor_registry.md](docs/claude/factor_registry.md) | 因子与策略登记表：结构层(generated) + 语义层(manual，赚钱理由/失效触发条件) |
+| [docs/tech-debt.md](docs/tech-debt.md) | 技术债登记：现状+影响+方向+日期，收尾清单第 7 步必过 |
