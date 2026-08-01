@@ -258,7 +258,7 @@ class FearIndexService:
                 us10y_strategy = '宽松预期，资金回流成长股'
 
         result = FearIndexResult(
-            vix=vix,
+            vix=vix_val,
             ovx=_latest('ovx'),
             gvz=_latest('gvz'),
             us10y=us10y,

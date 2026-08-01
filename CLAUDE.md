@@ -219,3 +219,22 @@ DB_ENV=online python scripts/yfinance_sync.py --days 30
 | [docs/claude/scheduler.md](docs/claude/scheduler.md) | 任务调度器：YAML DAG、数据监控服务、报警通知 |
 | [docs/claude/factor_registry.md](docs/claude/factor_registry.md) | 因子与策略登记表：结构层(generated) + 语义层(manual，赚钱理由/失效触发条件) |
 | [docs/tech-debt.md](docs/tech-debt.md) | 技术债登记：现状+影响+方向+日期，收尾清单第 7 步必过 |
+
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+
+Key routing rules:
+- Product ideas/brainstorming → invoke /office-hours
+- Strategy/scope → invoke /plan-ceo-review
+- Architecture → invoke /plan-eng-review
+- Design system/plan review → invoke /design-consultation or /plan-design-review
+- Full review pipeline → invoke /autoplan
+- Bugs/errors → invoke /investigate
+- QA/testing site behavior → invoke /qa or /qa-only
+- Code review/diff check → invoke /review
+- Visual polish → invoke /design-review
+- Ship/deploy/PR → invoke /ship or /land-and-deploy
+- Save progress → invoke /context-save
+- Resume context → invoke /context-restore
+- Author a backlog-ready spec/issue → invoke /spec

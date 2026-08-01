@@ -262,6 +262,16 @@ def get_label(score: float) -> str:
 # 写入数据库
 # ---------------------------------------------------------------------------
 
+def _clean_val(v):
+    """nan/NaT -> None，避免 MySQL 'nan can not be used with MySQL' 报错。"""
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return v
+
+
 def save_daily(trade_date: str, df_val: pd.DataFrame, percentiles: dict) -> int:
     """
     保存一天的行业估值数据。
@@ -301,6 +311,7 @@ def save_daily(trade_date: str, df_val: pd.DataFrame, percentiles: dict) -> int:
             label,
         ))
 
+    rows = [tuple(_clean_val(x) for x in r) for r in rows]
     if rows:
         conn = get_connection(env='online')
         cursor = conn.cursor()
@@ -339,6 +350,7 @@ def run_single_date(trade_date: str) -> dict:
             row.get('pb'), row.get('pb_med'),
             None, None, None, None, None, ''
         ))
+    rows_base = [tuple(_clean_val(x) for x in r) for r in rows_base]
     if rows_base:
         conn = get_connection(env='online')
         cursor = conn.cursor()
@@ -437,6 +449,7 @@ def run_backfill(start_date: str, end_date: str = None) -> dict:
         if (i + 1) % 50 == 0:
             logger.info('PE/PB 计算进度: %d/%d', i + 1, len(trade_dates))
 
+    all_rows = [tuple(_clean_val(x) for x in r) for r in all_rows]
     if all_rows:
         conn = get_connection(env='online')
         cursor = conn.cursor()
