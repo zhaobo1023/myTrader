@@ -13,15 +13,15 @@ Tushare 数据拉取器
 import sys
 import os
 import time
-from datetime import date, timedelta
+from datetime import date
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Dict
+from typing import List, Dict
 
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from config.db import get_connection, execute_query
-from config.settings import settings
+from config.settings import TUSHARE_TOKEN
 
 # 尝试导入 tushare
 try:
@@ -31,8 +31,8 @@ except ImportError:
     HAS_TUSHARE = False
     print("警告: Tushare 未安装，请运行 pip install tushare")
 
-    if not settings.TUSHARE_TOKEN:
-        print("警告: TUSHARE_TOKEN 未配置， Tushare 功能将不可用")
+if not TUSHARE_TOKEN:
+    print("警告: TUSHARE_TOKEN 未配置， Tushare 功能将不可用")
 
 
 # ============================================================
@@ -59,7 +59,7 @@ def get_pro():
     if _pro is not None:
         return _pro
 
-    token = settings.TUSHARE_TOKEN
+    token = TUSHARE_TOKEN
     if not token:
         raise RuntimeError("未配置 TUSHARE_TOKEN")
     ts.set_token(token)
@@ -117,7 +117,7 @@ def fetch_and_save(stock_code: str, start_date: str) -> tuple:
         return stock_code, 0, "Tushare 未安装"
 
     try:
-        pro = get_pro()
+        get_pro()  # 必须调用：内部 ts.set_token() 是副作用，pro 对象本身不用
         time.sleep(REQUEST_DELAY)
         # 获取日线数据
         df = ts.pro_bar(
@@ -140,8 +140,8 @@ def fetch_and_save(stock_code: str, start_date: str) -> tuple:
             records.append((
                 full_code, trade_date,
                 float(row['open']) if row['open'] else None,
-                float(row['high']) if row['high'] else None
-                float(row['low']) if row['low'] else None
+                float(row['high']) if row['high'] else None,
+                float(row['low']) if row['low'] else None,
                 float(row['close']) if row['close'] else None,
                 float(row['vol']) if row['vol'] else None,
                 float(row['amount']) if row['amount'] else None,
@@ -170,7 +170,7 @@ def main():
         print(f"[全量模式] {NUM_WORKERS} 线程并行")
     print("=" * 60)
 
-    if not HAS_TUSHARE or not settings.TUSHARE_TOKEN:
+    if not HAS_TUSHARE or not TUSHARE_TOKEN:
         print("\n错误: Tushare 未安装或 TUSHARE_TOKEN 未配置")
         return
     # 获取股票列表
@@ -178,7 +178,7 @@ def main():
         all_codes = [TEST_STOCK]
         print(f"\n[测试模式] 只采集 {TEST_STOCK}")
     else:
-        print(f"\n获取 A 股股票列表...")
+        print("\n获取 A 股股票列表...")
         all_codes = get_all_stock_codes()
         print(f"  共 {len(all_codes)} 只股票")
     # 获取已有数据的最新日期
@@ -263,7 +263,7 @@ def _print_summary():
     """)
     if summary:
         row = summary[0]
-        print(f"\n数据库 trade_stock_daily 概况:")
+        print("\n数据库 trade_stock_daily 概况:")
         print(f"  {row['stock_cnt']} 只股票, {row['row_cnt']:,} 条记录")
         print(f"  日期范围: {row['min_date']} ~ {row['max_date']}")
     print("=" * 60)

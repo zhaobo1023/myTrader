@@ -7,18 +7,15 @@
   2. 控制台打印（测试用）
 """
 import os
-import json
+import sys
 import requests
-from typing import Optional, Dict, List
+from typing import Dict, List
 from datetime import datetime
 import logging
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from config.settings import settings
-from dotenv import load_dotenv
-
-load_dotenv()
+from config.settings import FEISHU_WEBHOOK_URL
 
 # 配置日志
 logging.basicConfig(
@@ -32,7 +29,7 @@ class AlertService:
     """报警服务"""
 
     def __init__(self):
-        self.webhook_url = os.getenv('FEISHU_WEBHOOK_URL')
+        self.webhook_url = FEISHU_WEBHOOK_URL
         self.enabled = bool(self.webhook_url)
 
         if not self.enabled:
@@ -110,7 +107,7 @@ class AlertService:
             logger.error(f"飞书卡片发送异常: {e}")
             return False
 
-    def send_data_alert(self, title: str, data: Dict, str,
+    def send_data_alert(self, title: str, data: Dict,
                        issues: List[str] = None,
                        warnings: List[str] = None) -> bool:
         """发送数据报警"""
@@ -121,6 +118,7 @@ class AlertService:
                 "text": {
                     "tag": "lark_md",
                     "content": f"**检查时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                }
             }
         ]
 
@@ -141,7 +139,7 @@ class AlertService:
         if issues:
             issues_text = "**问题**\n"
             for issue in issues:
-                issues_text += f"- ❌ {issue}\n"
+                issues_text += f"- [BAD] {issue}\n"
             elements.append({
                 "tag": "div",
                 "text": {
@@ -154,7 +152,7 @@ class AlertService:
         if warnings:
             warnings_text = "**警告**\n"
             for warning in warnings:
-                warnings_text += f"- ⚠️ {warning}\n"
+                warnings_text += f"- [WARN] {warning}\n"
             elements.append({
                 "tag": "div",
                 "text": {
@@ -187,17 +185,15 @@ class AlertService:
                 "text": {
                     "tag": "lark_md",
                     "content": f"**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            }
-        ]
-
-        {
-            "tag": "div",
+                }
+            },
+            {
+                "tag": "div",
                 "text": {
                     "tag": "lark_md",
                     "content": f"**{title}**\n{message}"
                 }
             },
-
             {
                 "tag": "note",
                 "elements": [
@@ -216,7 +212,8 @@ class AlertService:
         """发送因子计算触发通知"""
         if is_ok:
             return self.send_success_alert(
-                "数据检查通过，                f"数据完整性检查通过，即将开始因子计算..."
+                "数据检查通过",
+                "数据完整性检查通过，即将开始因子计算..."
             )
         else:
             return self.send_data_alert(

@@ -16,7 +16,7 @@ from datetime import datetime
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config.db import execute_query, get_connection, get_dual_connections, dual_executemany, dual_execute
+from config.db import execute_query, get_connection, get_dual_connections
 
 
 
@@ -104,6 +104,7 @@ def save_factors(factor_df, calc_date):
     ]
 
     conn = get_connection()
+    cursor = conn.cursor()
 
     # 使用 REPLACE INTO 实现 upsert (存在则更新，不存在则插入)
     sql = f"""
@@ -113,17 +114,25 @@ def save_factors(factor_df, calc_date):
     """
 
     success_count = 0
+    failed_codes = []
     for code, row in factor_df.iterrows():
         try:
             values = [code, calc_date] + [row.get(col, None) for col in factor_cols]
             cursor.execute(sql, values)
             success_count += 1
         except Exception as e:
+            failed_codes.append(code)
             print(f"  保存失败 {code}: {e}")
 
     conn.commit()
     cursor.close()
     conn.close()
+
+    # 静默失败防护：整批写入失败时必须抛出，不能返回 0 让调用方当成正常结果
+    if failed_codes and success_count == 0:
+        raise RuntimeError(
+            f"save_factors 全部写入失败 ({len(failed_codes)} 条), calc_date={calc_date}"
+        )
 
     # Dual-write to secondary (best-effort, skip if not enabled)
     conn2 = None

@@ -10,7 +10,6 @@
 import sys
 import os
 import logging
-from datetime import datetime
 from typing import Callable, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -18,7 +17,6 @@ from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from config.settings import settings
 
 # 配置日志
 logging.basicConfig(
@@ -43,7 +41,7 @@ class SchedulerService:
             logger.error(f"任务执行失败: {event.job_id}, 错误: {event.exception}")
             if self._alert_service:
                 self._alert_service.send_text(
-                    f"❌ 定时任务执行失败\n"
+                    "[BAD] 定时任务执行失败\n"
                     f"任务: {event.job_id}\n"
                     f"错误: {event.exception}"
                 )
@@ -56,7 +54,7 @@ class SchedulerService:
 
             if self._alert_service:
                 self._alert_service.send_success_alert(
-                    f"✅ 任务执行成功",
+                    "[OK] 任务执行成功",
                     f"任务: {event.job_id}"
                 )
 
@@ -210,6 +208,8 @@ def run_svd_monitor():
 
 def init_scheduler():
     """初始化定时任务"""
+    from data_analyst.services.alert_service import AlertService
+
     # 创建服务实例
     alert_service = AlertService()
     scheduler = SchedulerService()
