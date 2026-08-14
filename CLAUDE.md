@@ -151,7 +151,13 @@ DB_ENV=online python scripts/yfinance_sync.py --days 30
 
 ### 异步沟通与任务执行
 
-任务文件位于 `/Users/zhaobo/Documents/notes/Daily/task/tasks_myTrader.md`，执行长任务（涉及 3+ 文件改动或预计 10+ 分钟）时遵守以下规则：
+任务队列文件（`/task` skill 读取此声明确定队列位置，归档自动写入 `tasks_archive/myTrader-YYYY-MM.md`）：
+
+```
+TASK_FILE=$HOME/Documents/notes/Daily/task/tasks_myTrader.md
+```
+
+执行长任务（涉及 3+ 文件改动或预计 10+ 分钟）时遵守以下规则：
 
 1. **定期回读**：每完成一个子步骤，回读任务文件，检查「待决策」区和「追加要求」区是否有新内容
 2. **决策分级**：遇到红灯事项（涉及资金逻辑、数据库 migration、对外接口变更、生产部署）时，将问题写入任务文件的「待决策」区（附上选项和建议），然后跳过该步继续做其他子任务，不要停下来等

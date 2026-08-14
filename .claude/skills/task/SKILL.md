@@ -1,3 +1,8 @@
+---
+name: task
+description: 从任务队列文件里取优先级最高的 TODO 并自主执行到验收通过，然后更新队列状态。队列路径由当前项目 CLAUDE.md 的 TASK_FILE= 声明决定。用户说 /task（做一个就停）、/task all（连续做到队列空）、/task archive（月末归档 DONE），或说「继续做任务」「跑一下队列」时用。
+---
+
 # Task Skill
 
 ## 触发条件
@@ -5,23 +10,20 @@
 - `/task all` — 连续执行所有 TODO 任务，直到队列空或遇到需确认的任务
 - `/task archive` — 月末归档所有 DONE 条目
 
-## 任务队列位置（可配置）
+## 任务队列位置（由项目声明，不在本文件硬编码）
 
-skill 启动时按以下优先级确定任务文件路径：
+skill 启动时从**当前项目**的 CLAUDE.md 读取 `TASK_FILE` 声明：
 
-1. **读取项目 CLAUDE.md 中的 `TASK_FILE` 声明**（推荐方式）：
-   在项目 CLAUDE.md 的"任务调度"或"工作规范"部分加一行：
-   ```
-   TASK_FILE=$HOME/Documents/notes/Daily/task/tasks_flow.md
-   ```
-   skill 会 Grep 当前项目的 CLAUDE.md，提取 `TASK_FILE=` 后面的值作为任务文件路径。
+```
+TASK_FILE=$HOME/Documents/notes/Daily/task/tasks_flow.md
+```
 
-2. **Fallback**：若未配置，默认使用：
-   ```
-   $HOME/Documents/notes/Daily/task/tasks_myTrader.md
-   ```
+skill 会 Grep 当前项目的 CLAUDE.md，提取 `TASK_FILE=` 后面的值作为任务文件路径。
 
-**归档路径**同样动态化：从 TASK_FILE 文件名（去掉 tasks_ 前缀和 .md 后缀）推导项目名。例如：
+**未声明时不要猜路径，直接终止并提示用户配置**（见步骤 0）。这个 skill 在多个项目
+间共享，猜出来的路径会让 A 项目的 /task 去动 B 项目的队列。
+
+**归档路径**从 TASK_FILE 文件名推导（去掉 `tasks_` 前缀和 `.md` 后缀）。例如：
 - `tasks_flow.md` → 归档到 `tasks_archive/flow-YYYY-MM.md`
 - `tasks_myTrader.md` → 归档到 `tasks_archive/myTrader-YYYY-MM.md`
 
@@ -34,10 +36,10 @@ skill 启动时按以下优先级确定任务文件路径：
 Grep 当前项目 CLAUDE.md，提取 `TASK_FILE=` 配置值。
 
 - **找到配置**：使用该路径，静默继续。
-- **未找到配置**：使用 fallback 路径，并输出提示：
+- **未找到配置**：立即输出并终止，不要猜路径、不要用别的项目的队列：
   ```
-  [WARN] 当前项目未配置 TASK_FILE，使用默认路径：$HOME/Documents/notes/Daily/task/tasks_myTrader.md
-  如需使用其他任务文件，请在项目 CLAUDE.md 中添加一行：
+  [ERROR] 当前项目未配置 TASK_FILE，无法确定任务队列。
+  请在本项目 CLAUDE.md 中添加一行：
     TASK_FILE=$HOME/Documents/notes/Daily/task/tasks_<项目名>.md
   ```
 

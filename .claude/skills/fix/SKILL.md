@@ -1,3 +1,8 @@
+---
+name: fix
+description: 用 TDD 流程修 bug——先写能复现的失败测试，确认它失败，再最小化改动让它通过，最后单 bug 单 commit。多个 bug 逐个走完全流程。用户说「帮我修 X」「修一下这个 bug」「这里报错了」「因子算错了」，或列出一批 bug 要求修复，或 /fix 时用。不适用于新功能开发（那走 /task）。
+---
+
 # Bug Fix Skill
 
 ## 触发条件

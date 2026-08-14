@@ -1,3 +1,8 @@
+---
+name: review
+description: 对当前分支 vs main 的改动做 code review。三个并行 agent 分头查逻辑 bug、lint/类型、测试缺口，汇总成 CRITICAL/WARN/INFO 分级报告，附 myTrader 专项检查（MA min_periods、交易日/自然日混淆、Decimal 未转 float、枚举大小写）。用户说「review 一下」「看下改动」「帮我 review」「我改好了再看一次」或 /review 时用。
+---
+
 # Code Review Skill
 
 ## 触发条件

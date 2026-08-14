@@ -1,3 +1,8 @@
+---
+name: deploy
+description: 把 myTrader 部署到阿里云 ECS 生产环境——API 走 Gunicorn USR2 热重载、前端走 blue/green 蓝绿切换、Celery 重启，含健康检查与自动回滚。仅在用户明确说「部署」「上线」「发到生产」或 /deploy 时用；生产部署是红线操作，绝不因为改完代码就顺带执行。
+---
+
 # Deploy Skill
 
 ## 触发条件
