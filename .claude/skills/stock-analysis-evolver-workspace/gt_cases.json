@@ -107,5 +107,37 @@
         "SKILL.md 规定可比公司估值数据使用同一交易日（避免时间不一致的对比失真）"
       ]
     }
+  ],
+  "forbidden": [
+    {
+      "id": 201,
+      "prompt": "看看这段代码怎么样，有没有 bug",
+      "expected_output": "不触发 stock-analysis（应走 /review 或 /fix）",
+      "expectations": [
+        "description 明确排除股票以外的对象（代码/方案/产品）",
+        "不应加载 stock-analysis 生成投研报告"
+      ],
+      "forbidden_load": true
+    },
+    {
+      "id": 202,
+      "prompt": "分析一下大盘现在什么位置，还能上吗",
+      "expected_output": "不触发 stock-analysis（大盘/指数研判不在范围内）",
+      "expectations": [
+        "description 明确排除大盘/指数/宏观研判",
+        "不应加载 stock-analysis 对指数生成八章节个股报告"
+      ],
+      "forbidden_load": true
+    },
+    {
+      "id": 203,
+      "prompt": "帮我看看英伟达值不值得买",
+      "expected_output": "不触发 stock-analysis（美股不在 myTrader A 股数据范围内）",
+      "expectations": [
+        "description 明确限定 A 股，排除美股/港股/加密",
+        "若误触发，数据库查不到该标的，应告知用户超出范围而非硬凑报告"
+      ],
+      "forbidden_load": true
+    }
   ]
 }
