@@ -193,19 +193,24 @@ python .claude/skills/stock-analysis/scripts/fetch_stock_data.py --codes 600584.
 
 ## 已知陷阱
 
-- **`trade_stock_financial` 里没有营收和净利润**，只有比率（ROE、毛利率、EPS 等）。
-  营收/净利在 `financial_income`。从前者取营收会拿不到数，容易误判为"这家公司没财务数据"。
-- **不同表的金额单位不一致**：`financial_*` 已是亿元，`total_mv`/`circ_mv` 是万元。
-  混用会让报告里的数字差 4 个数量级。脚本已统一换算为亿元；
-  手写 SQL 时必须查 `references/db-schema.md` 的换算表。
-- **代码列叫 `stock_code` 不是 `ts_code`**：写成 `ts_code` 会报 Unknown column。
-- **股票代码格式在财务表里不统一**：`research_announcements` 等表可能存纯 6 位数字
-  而非 `600584.SH`。直接用带后缀格式查会**静默返回 0 行**（不是报错），
-  容易被当成"这家公司没有公告"。脚本已内置 0 行时换格式重试。
+- **仓库 DDL 与线上真实表结构不一致**：`config/models.py` 等 DDL 里的
+  `net_profit_margin`、`gross_profit_margin`、`debt_to_asset`、`bvps`、`cfps`、
+  `dv_ttm` 线上都不存在。照 DDL 写 SQL 会报 Unknown column。
+  线上实测字段见 `references/db-schema.md`。
+- **`research_announcements` 的代码列叫 `code` 不是 `stock_code`**，且存裸 6 位。
+  用 `stock_code` 查会报错，用带后缀查会静默返回 0 行（读起来像"这公司没公告"）。
+- **`trade_stock_financial` 的金额单位是元**，其余表（含 `total_mv`）都已是亿元。
+  DDL 注释说 `total_mv` 是万元是错的——实测中兴通讯 `total_mv=1678.06` 对应
+  1678 亿市值。按万元换算会把市值缩小 1 万倍。
+- **不要用全表 `MAX(trade_date)` 当估值基准日**：5495 只股票里只有约 720 只
+  在最新交易日有数据，全表最大日期会让多数股票的市值查成 NULL，
+  也会让可比公司选取偏向"恰好有最新数据"的那批。脚本改用
+  个股自身最新日（单股）/ 全集齐备的最近日（批量）。
 - **同比增速遇负基数会算出无意义的百分比**：上年亏损、本年盈利时，
   按公式算出的增速（如 -250%）方向是反的。必须按
   `references/report-template.md` 的四情形表处理，扭亏/转亏要单独标注。
 - **可比公司估值必须同一交易日**：不同股票取各自"最新"交易日会导致
-  横向对比失真（有的停牌、有的最新数据滞后）。脚本已统一基准日。
+  横向对比失真（有的停牌、有的最新数据滞后）。脚本已统一基准日，
+  报告里要写出这个基准日（脚本返回的 `base_date`），不要只写"最新"。
 - **批量模式不要因为单只股票数据缺失就停下问用户**：用户已明确启动批量任务，
   中途打断会让整批白跑。缺失信息统一到 Phase 4 汇总。
